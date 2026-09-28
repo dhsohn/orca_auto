@@ -26,12 +26,14 @@ pip install -e '.[dev]'
 
 `src/orca_auto`가 단일 소스 루트이며 다음과 같이 계층화되어 있습니다:
 
-- **`cli*.py`, `activity/`**: CLI 명령어 진입점, 출력 포맷팅, 큐 조회 로직
+- **`cli*.py`, `activity/`, `activity_*.py`, `terminal*.py`**: CLI 명령어 진입점, 출력 포맷팅, 큐 조회 로직. systemd 명령도 최상위 모듈입니다: `systemd_plan.py` 위의 `cli_systemd_*.py`
 - **`orca/`**: ORCA 도메인 로직 (입력 파일 파싱, 실행 스냅샷, 출력 로그 분석, 수렴 판정, 결과 보고서(`machine.json`) 생성)
-- **`core/`**: 공용 인프라 (디스크 큐 저장소, 슬롯 예약 및 동시성 제어, 프로세스 감독, systemd 연동)
+- **`core/`**: 공용 인프라 (디스크 큐 저장소, 실행권 슬롯, 프로세스 감독, RAM scratch, 설정, 파일시스템 잠금)
 
 > **임포트 경계 규칙**:
-> 의존성은 반드시 **`orca` → `core`**의 단방향 흐름을 유지해야 합니다. 도메인 및 코어 내부 모듈에서 상위 CLI 모듈을 임포트하는 것은 금지되며, 이는 CI에서 `import-linter`로 검증됩니다.
+> 의존성은 반드시 **`orca` → `core`**의 단방향 흐름을 유지해야 합니다. 도메인 및 코어 내부 모듈에서 상위 CLI 모듈을 임포트하는 것은 금지되며, 이는 `import-linter`(`pyproject.toml`의 `[tool.importlinter]`, `make check`와 CI에서 `scripts/check_imports.py`로 실행)로 검증됩니다.
+
+[ARCHITECTURE](ARCHITECTURE.ko.md) 3장이 소유 지도입니다. 모든 디스크 파일의 단일 기록 모듈과 읽는 곳, 동작별 호출 경로, 불변 조건과 이를 강제하는 테스트, 용어집이 있습니다. 디스크 파일을 쓰거나 동작의 단계를 옮기는 변경 전에 읽습니다.
 
 ---
 
@@ -76,8 +78,9 @@ CI와 릴리스 검사는 클론을 준비하고, `make check`는 개발 의존�
 - **마커**: 모든 테스트에서 `os.fsync`/`os.fdatasync`는 no-op이며 `@pytest.mark.real_fsync`를 붙인 테스트만 예외입니다. `@pytest.mark.slow`는 격리된 인터프리터에 패키지를 스테이징하는 테스트를 표시합니다.
 - **계약 골든**: `tests/contracts`는 모든 공개 디스크 파일, `--json`·일반 텍스트 CLI 출력, argparse 명령 구조, 렌더링된 systemd 유닛, 모든 보고서 종류의 게시 보고서(`golden/reports/` 아래의 `job_report.html`·`si_block.md` 바이트, `machine.json`·`execution_provenance.json` 키 구조), 워커 부모와 자식 프로세스가 보낸 알림 메시지, 두 프로세스에 걸친 영속 쓰기와 알림 발송의 순서(`effect_log.py`, `ORCA_AUTO_TEST_EFFECT_LOG`가 설정된 동안에만 `tests/contracts/sitecustomize`로 자식에서도 기록하며, 자식에서는 모든 발신 채널을 기록용 채널로 바꿈)를 고정합니다. 시나리오는 가짜 ORCA로 실제 워커 자식 프로세스를 실행하고, 정규화한 출력을 `tests/contracts/golden/`과 비교합니다. `ORCA_AUTO_REGEN_GOLDENS=1`이면 비교 대신 골든을 다시 씁니다. 기본값은 꺼져 있습니다.
 - **규칙 고정 표**: `tests/contracts/test_rule_pins_*.py`는 한 소유자로 통합되는 규칙마다 결과를 기록하여, 통합이 바꾼 결과가 표의 차이로 드러나게 합니다. 대상은 큐 세대 식별과 쓰기 fence, 재대기 필드, 프로세스 소유자 생존 판정, `/proc/<pid>/stat` 해석, admission 경로와 한도 결정, 자식 프로세스의 admission 슬롯 결과, 종료 재실행(terminal replay) 대체 판정, `tests/contracts/pins/out_corpus`에 대한 출력 분석 판정입니다. 표는 `tests/contracts/pins/`에 있으며 같은 변수로 다시 생성합니다.
+- **소유 가드**: `tests/core/queue/test_ownership_guards.py`는 패키지 AST를 훑어, 디스크 파일(`queue.json`, `job_state.json`, `admission_slots.json`, `job_locations.json`, `machine.json`과 보고서, PID 파일, 스냅숏 의도)의 기록 함수나 알림 발송에 표에 없는 곳에서 닿으면 실패합니다. 기록 주체를 추가하거나 옮기는 변경은 같은 커밋에서 가드의 소유자 표(새 소유자마다 이유를 적음)와 ARCHITECTURE의 소유 지도를 함께 고칩니다.
 - **문서 대칭 검사**: `make check`는 `scripts/check_docs_parity.py`를 실행하며, `X.md`/`X.ko.md` 쌍의 제목 수준, 표, 코드 블록, 상대 링크가 어긋나면 실패합니다. 본문 문장은 달라도 됩니다.
-- **실제 엔진 검증**: ORCA 실행 메커니즘이나 물리적 출력 분석 로직을 변경한 경우, [검증 가이드(VALIDATION.md)](VALIDATION.md)에 따라 실제 ORCA를 사용한 별도의 acceptance를 기록합니다.
+- **실제 엔진 검증**: ORCA 실행 메커니즘이나 물리적 출력 분석 로직을 변경한 경우, [검증 가이드(VALIDATION.md)](VALIDATION.md)에 따라 실제 ORCA를 사용한 별도의 acceptance를 기록합니다. `tests/integration/test_orca_worker_smoke.py`의 실제 ORCA 사례는 `ORCA_REAL_EXECUTABLE`이 ORCA 실행 파일을 가리킬 때만 실행되고, 그렇지 않으면 건너뜁니다.
 
 ---
 

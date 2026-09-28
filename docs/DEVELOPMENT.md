@@ -26,12 +26,14 @@ pip install -e '.[dev]'
 
 `src/orca_auto` is the single source root, structured into three distinct layers:
 
-- **`cli*.py`, `activity/`**: CLI entry points, formatting, and high-level queue queries.
+- **`cli*.py`, `activity/`, `activity_*.py`, `terminal*.py`**: CLI entry points, formatting, and high-level queue queries. The systemd commands are top-level modules too: `cli_systemd_*.py` over `systemd_plan.py`.
 - **`orca/`**: ORCA domain logic (input parsing, execution snapshot creation, output parsing, convergence checks, and report publication).
-- **`core/`**: Shared infrastructure (disk queue storage, concurrency slot admission, process supervision, and systemd integration).
+- **`core/`**: Shared infrastructure (disk queue storage, admission slots, process supervision, RAM scratch, configuration and filesystem locks).
 
 > **Import Direction Rule**:
-> Code dependencies flow strictly in one direction: **`orca` → `core`**. Domain and core modules must never import from the outer CLI modules. This is enforced by `import-linter` in CI.
+> Code dependencies flow strictly in one direction: **`orca` → `core`**. Domain and core modules must never import from the outer CLI modules. This is enforced by `import-linter` (`[tool.importlinter]` in `pyproject.toml`, run by `scripts/check_imports.py` in `make check` and CI).
+
+Section 3 of [ARCHITECTURE](ARCHITECTURE.md) is the ownership map: every durable file with its one writer and its readers, each action's call path, the invariants with the tests that enforce them, and the glossary. Read it before a change that writes a durable file or moves a step of an action.
 
 ---
 
@@ -76,8 +78,9 @@ the development dependencies. Fetch the clone when advancing the CI pin.
 - **Markers**: `os.fsync`/`os.fdatasync` are no-ops in every test unless it is marked `@pytest.mark.real_fsync`; `@pytest.mark.slow` marks the tests that stage the package in an isolated interpreter.
 - **Contract Goldens**: `tests/contracts` pins every public on-disk file, the `--json` and plain-text CLI documents, the argparse surface, the rendered systemd units, the published reports of every report kind (`job_report.html` and `si_block.md` bytes, `machine.json` and `execution_provenance.json` key trees under `golden/reports/`), the notification messages sent by the worker parent and by its children, and the order of durable writes and notification dispatches across both (`effect_log.py`, active in children through `tests/contracts/sitecustomize` only while `ORCA_AUTO_TEST_EFFECT_LOG` is set; there it also replaces every outbound channel with a recording one). Scenarios run real worker children against a fake ORCA and compare normalized output with `tests/contracts/golden/`. `ORCA_AUTO_REGEN_GOLDENS=1` rewrites the goldens instead of comparing; it is off by default.
 - **Rule Pins**: `tests/contracts/test_rule_pins_*.py` record the outcome of each rule that is consolidated into one owner, so any outcome a consolidation changes shows up as a table diff: queue generation identity and writer fences, requeue fields, process-owner liveness, `/proc/<pid>/stat` parsing, admission root and limit resolution, the child's admission slot outcome, terminal replay supersession and the output analyzer verdicts over `tests/contracts/pins/out_corpus`. The tables live in `tests/contracts/pins/` and regenerate with the same variable.
+- **Ownership Guards**: `tests/core/queue/test_ownership_guards.py` walks the package's AST and fails when a writer of a durable file (`queue.json`, `job_state.json`, `admission_slots.json`, `job_locations.json`, `machine.json` and the reports, the PID file, the snapshot intents) or a notification dispatch is reached from outside its listed owners. A change that adds or moves a writer updates the guard's owner table, with the reason for any new owner, and the ARCHITECTURE ownership map in the same commit.
 - **Docs Parity**: `make check` runs `scripts/check_docs_parity.py`, which fails when an `X.md`/`X.ko.md` pair drifts in heading levels, tables, fenced code blocks or relative links; prose may differ.
-- **Real-Engine Acceptance**: If you modify engine execution or scientific output parsing behavior, record a bounded real-engine run according to [VALIDATION.md](VALIDATION.md).
+- **Real-Engine Acceptance**: If you modify engine execution or scientific output parsing behavior, record a bounded real-engine run according to [VALIDATION.md](VALIDATION.md). The real-ORCA cases in `tests/integration/test_orca_worker_smoke.py` run only when `ORCA_REAL_EXECUTABLE` names an ORCA executable and are skipped otherwise.
 
 ---
 

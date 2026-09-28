@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from orca_auto.cli_handlers import _configure_orca_logging
-from orca_auto.core.config.files import discover_shared_config_path, shared_runs_root_from_config
+from orca_auto.cli_handlers import CommandConfigError, _configure_orca_logging, command_config_path
+from orca_auto.core.config.files import shared_runs_root_from_config
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca.run_dir_guard import (
     _pinned_run_dir_target,
@@ -33,8 +33,11 @@ def cmd_run_dir(args: Any) -> int:
         # Resolving it would erase the namespace identity that must remain bound
         # to the fd-backed inode for the whole synchronous publication.
         namespace_target = Path(raw_target).expanduser().absolute()
-        config_path = discover_shared_config_path(getattr(args, "config", None))
+        config_path = command_config_path(args)
         runs_root = shared_runs_root_from_config(config_path) or ""
+    except CommandConfigError as exc:
+        emit_error(exc, hint=exc.hint, json_output=json_output)
+        return 1
     except ValueError as exc:
         emit_error(exc, json_output=json_output)
         return 1

@@ -45,11 +45,10 @@ body:
     id: recovery
     attributes:
       label: Interruption recovery behavior
-      description: If execution was interrupted, describe the recovery and checkpoint used. Calculation failures are terminal.
+      description: If execution was interrupted, describe how it was recovered. Calculation failures are terminal.
       placeholder: |
         interruption:
         recovered execution:
-        restart artifact used:
   - type: textarea
     id: artifacts
     attributes:

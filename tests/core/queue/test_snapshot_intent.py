@@ -98,22 +98,18 @@ def test_reconcile_retires_dead_visible_intent_that_crashed_before_mkdir(
     assert not _intent_path(tmp_path, token).exists()
 
 
-@pytest.mark.parametrize("kind", ["input_snapshot_namespace", "orca_execution_pair"])
-def test_legacy_snapshot_intents_are_preserved_but_cannot_be_created(
-    tmp_path: Path, kind: str, dead_owner: None
+def test_unknown_snapshot_intent_kind_cannot_be_created_and_is_left_alone(
+    tmp_path: Path, dead_owner: None
 ) -> None:
-    input_generation = tmp_path / "job" / ".orca_auto_input_snapshots" / "generation-0001"
-    execution_generation = tmp_path / "job" / ".orca_auto_orca_executions" / input_generation.name
-    generations = [input_generation]
-    if kind == "orca_execution_pair":
-        generations.append(execution_generation)
-    token = "snapshot-intent-legacy-preserved"
+    generation = _visible_generation_path(tmp_path)
+    token = "snapshot-intent-unknown-kind"
     with pytest.raises(ValueError, match="Unsupported snapshot intent kind"):
-        create_snapshot_intent(tmp_path, token=token, kind=kind, generation_paths=generations)
+        create_snapshot_intent(
+            tmp_path, token=token, kind="unknown_kind", generation_paths=[generation]
+        )
     assert not _intent_path(tmp_path, token).parent.exists()
-    for generation in generations:
-        _create_generation(generation)
-        (generation / "legacy.txt").write_text("preserve original data", encoding="utf-8")
+    _create_generation(generation)
+    (generation / "data.txt").write_text("preserve original data", encoding="utf-8")
     intent = _intent_path(tmp_path, token)
     intent.parent.mkdir(mode=0o700)
     intent.write_text(
@@ -121,20 +117,20 @@ def test_legacy_snapshot_intents_are_preserved_but_cannot_be_created(
             {
                 "version": 1,
                 "token": token,
-                "kind": kind,
+                "kind": "unknown_kind",
                 "state": SNAPSHOT_INTENT_STATE_CREATING,
                 "queue_root": str(tmp_path.resolve()),
-                "generation_paths": [str(path.resolve()) for path in generations],
+                "generation_paths": [str(generation.resolve())],
             }
         ),
         encoding="utf-8",
     )
     before = intent.read_bytes()
     assert reconcile_orphaned_snapshot_generations(tmp_path) == 0
-    _retire(tmp_path, token, None)
+    with pytest.raises(ValueError, match="Snapshot intent contains invalid values"):
+        _retire(tmp_path, token, generation)
     assert intent.read_bytes() == before
-    for generation in generations:
-        assert (generation / "legacy.txt").read_text(encoding="utf-8") == "preserve original data"
+    assert (generation / "data.txt").read_text(encoding="utf-8") == "preserve original data"
 
 
 @pytest.mark.parametrize("kind", ["orca_visible_generation"])

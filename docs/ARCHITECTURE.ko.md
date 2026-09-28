@@ -8,20 +8,9 @@ ORCA_auto는 Linux 및 WSL 환경에서 단독 ORCA 양자화학 계산을 실�
 
 ## 1. 핵심 설계 철학
 
-> 한 동작을 따라갔을 때 원본, 변경 책임, 결과를 일관되게 설명할 수 있다.
+> 한 동작을 따라가며 그 원본, 어떤 상태를 누가 바꾸는지, 결과가 어디에 남는지를 실패·취소·재개에서도 설명할 수 있다.
 
-ORCA_auto를 변경할 때 아래 책임 표를 기준으로 동작을 따라갑니다. 실패·취소·재개에서도 작업 ID와 실행/generation 식별자가 연결되어야 합니다.
-
-| 동작 | 원본 | 변경 책임 | 결과 |
-| :--- | :--- | :--- | :--- |
-| 제출 | 선택한 `.inp`, 참조 파일, 자원 지시어 | `submission.py`와 입력 스냅샷 바인딩 | generation에 연결된 입력과 디스크 큐 항목 |
-| 실행권 할당 | 큐 항목과 실행권 기록 | 부모 큐 워커가 admission 저장소를 통해 변경 | 예약된 슬롯과 해당 작업에 연결된 자식 프로세스 |
-| 계산 | generation에 고정된 입력과 ORCA 실행 파일 | 자식 워커의 단일 시도(`attempt/run.py`) | 출력 파일과 기록된 실행 근거 |
-| 결과 발행 | 실행 근거와 종료 판정 | 정상 종료는 attempt 보고 계층, 중단·취소 뒤에는 실시간이든 재시작 재처리든 부모의 종료 정리(`queue/settlement.py`) | 종료 상태와 `machine.json`을 포함한 generation 보고서 |
-| 완료 알림 | 작업·실행 ID가 일치하는 루트의 종료 `job_state.json`과 최종 결과 | 부모 큐 워커가 실행 잠금 안에서 상태 저장 계층을 통해 한 번 전송권을 기록하고, 전송기는 확보한 메시지만 전달 | 루트의 알림 처리 기록; generation 실행 상태와 보고서는 변경하지 않음 |
-| 조회 | `queue.json` 행과 각 행 자신의 루트 `job_state.json` | 없음. `queue list`와 `queue cancel`이 둘을 직접 읽음([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)) | CLI 목록과 `queue cancel`이 처리하는 한 행 |
-
-변경을 검토할 때는 해당 동작의 원래 근거, 상태를 바꾸는 주체, 사용자가 확인할 결과를 짚습니다. 완료 알림은 한 주체가 맡고, 발행 복구를 기다리는 큐 항목만 실행권 할당에서 보류합니다. 접수 당시의 입력 출처는 실행 기록을 거쳐 결과 파일까지 이어집니다. 종료 근거 확정, 실행권 반환, 재시도 가능한 발행은 아래 책임 순서를 따릅니다.
+3장은 이 원칙을 검사되는 산출물로 바꿉니다. 모든 디스크 파일의 단일 기록 모듈과 읽는 쪽, 모든 동작의 호출 경로, 불변 조건마다 이를 강제하는 테스트, 그리고 용어집입니다. 변경은 동작 전체에서 작업 ID와 실행·generation 식별자를 연결된 상태로 유지하고, 검토에서는 바뀐 동작의 원래 근거, 상태를 쓰는 각 주체, 사용자가 확인할 결과를 짚습니다.
 
 1. **디스크 큐 기반 영속 실행**: 작업 제출 시점에 디스크에 원자적으로 기록되어 터미널 세션이 끊기거나 시스템이 재부팅되어도 작업이 유실되지 않습니다.
 2. **독립된 실행 디렉터리 격리 (`generation`)**: 동일한 작업 디렉터리에 재제출하더라도 이전 실행 기록을 덮어쓰지 않고 새로운 타임스탬프 기반 디렉터리(`generation`)에 분리하여 저장합니다.
@@ -47,15 +36,113 @@ graph TD
 
 | 패키지/모듈 | 주요 역할 및 책임 |
 | :--- | :--- |
-| **`cli*.py`, `activity/`, `terminal.py`** | 사용자 명령어 파싱, 텍스트/JSON 포맷팅 및 ANSI 스타일링, activity 레코드 모델, 큐 및 서비스 상태 조회, 작업 취소 인터페이스. 명령이 설정 파일과 `runs_root`를 찾고 (한 번) 읽고 확인하며 빠진 것을 알리는 곳은 `cli_handlers.resolve_command_config` 하나이고, activity 함수는 확인된 설정 경로와 `runs_root`를 받습니다. `activity_rendering.queue_list_table`이 `queue list` 텍스트 출력 전체(요약 줄, 머리글, 구분선, 행, 아래 안내 줄)를 돌려주고 `cli_queue`는 TTY용과 일반용 스타일만 고릅니다. 상태 묶음은 `core/statuses.py`에, 상태별 아이콘과 색 하나씩은 `terminal.py`에 있습니다. 닫힌 stdout 파이프는 `cli.main` 한 곳에서만 처리합니다 |
+| **`cli.py`, `cli_parsers.py`, `cli_handlers.py`, `cli_run_dir.py`, `cli_queue.py`, `cli_index.py`, `cli_scratch.py`, `cli_workers.py`, `cli_worker_supervision.py`** | 명령어 파싱과 명령 묶음마다 처리 모듈 하나. 닫힌 stdout 파이프는 `cli.main` 한 곳에서만 처리합니다. 명령이 설정 파일과 `runs_root`를 찾고 (한 번) 읽고 확인하며 빠진 것을 알리는 곳은 `cli_handlers.resolve_command_config` 하나입니다. `cli_run_dir`는 `run-dir` 대상을 inode 하나로 고정하고, `cli_workers`는 두 번째 워커를 거부하며 `cli_worker_supervision`은 워커 프로세스 하나를 다시 시작하고 멈춥니다 |
+| **`activity/`, `activity_labels.py`, `activity_rendering.py`, `terminal.py`, `terminal_table.py`** | 큐 카탈로그(`activity/_orca.catalog`), 취소 대상 규칙(`activity/_cancel.target_rows`), 출력 표시. `activity_labels`가 큐 표의 각 칸을 만들고, `activity_rendering.queue_list_table`이 `queue list` 텍스트 출력 전체를 돌려주며 `cli_queue`는 TTY용과 일반용 스타일만 고릅니다. 상태별 아이콘과 색 하나씩은 `terminal.py`에, 표시 폭 계산은 `terminal_table.py`에 있습니다. 상태 묶음은 `core/statuses.py`에 있습니다 |
+| **`cli_systemd_*.py`, `systemd_plan.py`, `_process_evidence.py`** | `systemd install`, `service status`, `service restart`. 아래에서 위로 쌓이며 import-linter가 강제합니다: 유닛 계획(`systemd_plan`), 유닛 렌더링(`cli_systemd_units`), 유닛과 `/proc` 읽기(`cli_systemd_evidence`), 최신성 판정(`cli_systemd_freshness*`), 실행권 저장소 하나에 대한 유휴 전용 재시작 가드(`cli_systemd_restart_guard`), 그 위의 명령 소유 모듈(`cli_systemd_apply`, `cli_systemd_restart`, `cli_systemd_status`). `_process_evidence`는 워커가 시작한 import 출처를 기록합니다 |
 | **`orca/`** | ORCA 전용 로직: 입력 파일(`.inp`) 파싱 및 자원 판별, 실행 준비, 큐 워커 및 프로세스 구동, 출력 로그 분석 및 수렴 판정, 결과 보고서(`machine.json`) 생성 |
-| **`core/`** | 공용 인프라: 디스크 큐 저장소, 동시 실행 슬롯(Admission) 관리, 프로세스 감독 및 PID 파일 관리, 파일 I/O 및 설정 로더, 인덱스 저장소, 파일시스템 잠금 |
+| **`core/`** | 공용 인프라: 디스크 큐 저장소, 실행권 슬롯, 프로세스 감독과 PID 파일, 제한된 파일 I/O, 설정 탐색과 로더, 위치 인덱스 저장소, RAM scratch 워크스페이스, 알림 채널, 파일시스템 잠금 |
+
+`pyproject.toml`의 `[tool.importlinter]` 계약이 이 의존 방향과 systemd 계층을 강제하고, `make check`가 `scripts/check_imports.py`로 이를 실행합니다.
 
 > **아키텍처 특징**: 엔진은 ORCA 하나이며, 작업 하나는 독립된 ORCA 입력 디렉터리 하나입니다. 워크플로우 계층은 없습니다([ADR 0005](adr/0005-remove-retired-workflow-support.md)).
 
 ---
 
-## 3. 작업 제출 및 실행 수명 주기 (Lifecycle)
+## 3. 소유 지도
+
+디스크 파일마다 기록 모듈은 하나입니다. `tests/core/queue/test_ownership_guards.py`는 패키지 소스를 훑어, 아래 표에 없는 곳에서 기록 함수에 닿으면 실패합니다. 소유자를 바꾸는 변경은 그 가드와 이 장을 함께 고칩니다. 경로의 `<runs_root>`는 큐 루트, `<reaction_dir>`는 작업 디렉터리, `<generation_dir>`는 그 안의 generation 디렉터리 하나입니다. "CLI"는 명령 프로세스, "부모"는 워커 부모, "자식"은 워커 자식입니다.
+
+### 디스크 파일과 기록 주체
+
+| 파일 | 잠금 | 기록 모듈 | 호출하는 곳 | 읽는 곳 |
+| :--- | :--- | :--- | :--- | :--- |
+| `<runs_root>/queue.json` | `<runs_root>/queue.lock` | `core/queue/store.mutate_entries`(→ `persistence.save_entries`). PENDING·종료 행은 `transitions.requeued_entry`와 `terminal_entry`만, 새 행은 `adapter.enqueue`만 만듦 | CLI: `adapter.enqueue`, `enqueue_publication`, `adapter.cancel`, `store.clear_terminal`. 부모: 인수(`store.dequeue_entry_if_pending`), `publication_repair`, 제출 알림 전송권 확보, `settlement`의 종료 표시와 결합, `orphans`. 자식: `adapter.requeue_running_entry`, `adapter.mark_failed`, `recovery_rebind` | `store.list_queue`(카탈로그, 워커 미리 보기, 어댑터), `store.QueueCancellationProbe`. `run_cleanup`과 의도 정리는 잠금 아래에서 읽기만 함 |
+| 루트 `<reaction_dir>/job_state.json` | `run.lock` 안의 `.job_state.mutation.lock` | `orca/state.save_state`, 종료 결과는 `finalize_state` | 자식: `execution.execute_locked_run`, `attempt/run`, `attempt/resume`, `output_adoption`, `attempt/reporting.exit_with_result`. 부모: `terminal_state._record_terminal_run_state`, `notifications.claim_and_send_terminal`. CLI: `run_cleanup.clear_terminal_run_states`가 삭제(`queue list clear`) | `state_reading.load_state`, `run_snapshot.load_pinned_state`(카탈로그), `terminal_marker` fingerprint |
+| generation `<generation_dir>/job_state.json` | 위와 같음 | `state.save_state` → `state.write_generation_bytes`. 검증된 generation에 실행 사실이 바뀔 때만 | 루트 상태와 같음 | `state_reading.load_generation_state` |
+| `<runs_root>/.admission/admission_slots.json` | `.admission/admission.lock` | `core/admission/store.py`(`AdmissionStore`, → `persistence.save_slots`) | 부모: `reserve_slot`, `update_slot_metadata`, `release_slot`, `recover_slot_engine_process`, `recover_orphaned_engine_slots`, `reconcile_stale_slots`. 자식: `execution._child_admission_slot`(활성화, 완료, 죽은 슬롯 해제), `engine_process`의 준비·등록 함수를 거치는 runner | `read_active_slot_count`(여유 확인, `queue list`, 재시작 가드), `get_slot`(자식의 인계 대기), `list_all_slots` |
+| `<runs_root>/job_locations.json` | `<runs_root>/job_locations.lock` | `core/indexing/store.py`(`_save_records`) | CLI: `queue/job_records.upsert_row_job_record`(대기), `index rebuild`(`merge_job_locations`), `index prune`. 부모: `upsert_row_job_record`(복구한 행과 실행 중 행), `settlement._publish`(`upsert_terminal_job_record`) | `run_snapshot`(`queue list clear`의 탐색), `job_locations.upsert_job_record` |
+| `<runs_root>/.orca_auto_snapshot_intents/<token>.json` | `.orca_auto_snapshot_intents.mutation.lock` | `core/queue/snapshot_intent.py` | CLI: `execution_binding` 생성(작성, 결합), `submission`(enqueueing, 이어서 owned 후 폐기). 부모: 시작 전 `retire_snapshot_intent_for_row`(제출이 남긴 의도), 복구의 `reconcile_orphaned_snapshot_generations`. 자식: 대체 generation을 만드는 `recovery_rebind` | `snapshot_intent.py` 자신 |
+| generation 소유자 xattr `user.orca_auto.generation_owner` | 의도 변경 잠금 | `core/queue/generation_owner.bind_direct_generation_owner` | `snapshot_intent.bind_snapshot_intent_generation_identities` | `generation_owner.require_direct_generation_owner`(`state_reading.verified_generation_artifact_target` 경유) |
+| 행 메타데이터의 재처리 표식 `orca_terminal_replay` | `queue.lock`(`queue.json` 안에 있음) | 형식: `orca/queue/terminal_marker.py`. 종료 표시와 같은 변경에서 기록하고 `settlement.clear_marker`만 제거 | 부모: `adapter.mark_completed`, `mark_failed`, `mark_cancelled`, `orphans.apply_terminal_reconciliation`, `settlement.retire_marker`. 자식: 취소 시 `adapter.requeue_running_entry`, 거부된 인수에 `adapter.mark_failed`. CLI: 대기 행에 대한 `adapter.cancel` | `settlement.work_item_for_row`, `replay`, 카탈로그(`result publication pending`) |
+| `<generation_dir>/machine.json`, `execution_provenance.json` | `run.lock` | `report/publication.write_report_json`(→ `state.write_generation_bytes`). `machine.json`의 모든 필드는 `machine_observation.build_machine_observation`이 만듦 | `publication.write_report_files`. 자식의 `attempt/reporting.exit_with_result`와 부모의 `terminal_state._record_terminal_run_state`가 호출 | 외부 소비자. `publication`이 종료 결과의 불변성을 확인 |
+| `<generation_dir>/job_report.html`, `si_block.md` | `run.lock` | `report/publication.write_job_html_report`, `report/si.write_si_block` | `publication.write_report_files`(같은 두 호출자) | 외부 소비자 |
+| `<reaction_dir>/run.lock` | 잠금 자체 | `orca/run_lock.acquire_run_lock` | 자식: `execution.execute_locked_run`, `recovery_rebind`. 부모: `terminal_state._record_terminal_run_state`, `notifications.claim_and_send_terminal` | `process_tracking.run_lock_status`를 쓰는 공유 확인: `run_status.observed_queue_status`, `orphans`, `run_cleanup`, `submission` |
+| `<runs_root>/queue_worker.pid` | 워커 수명 동안 잡는 `queue_worker.pid.lock` | `core/queue/worker/pid_file.py` | 부모: `OrcaQueueWorker._write_pid_file`과 `_remove_pid_file`. 읽는 쪽(`process.read_live_pid_file`)도 소유자가 살아 있음이 증명되지 않은 파일을 삭제 | `orca/commands/queue.existing_worker_pid`, `submission`, `orphans` |
+| RAM scratch manifest `<scratch_root>/attempt-*/.orca_auto_scratch.json` | `<scratch_root>/.orca_auto_scratch.lock` | `core/engine_scratch/_manifest._write_workspace_manifest` | 자식: `EngineScratchWorkspace.create`(`OrcaRunner.prepare`). CLI: `scratch clear`가 비활성 워크스페이스를 제거 | `engine_scratch/_inspect`(실행 전 점검, `scratch list`) |
+| `<generation_dir>`로의 scratch 회수와 `.orca_auto_scratch_publication.json` 저널 | `run.lock` | `core/engine_scratch/_publication._publish_workspace` | 자식: `EngineScratchWorkspace.publish`를 거치는 `OrcaRunner` | 다음 실행의 `_recover_incomplete_publication` |
+| `<runs_root>/logs/<queue_id>.log` | 없음 | `core/queue/processes.start_background_process`(자식의 stdout·stderr) | 부모: `OrcaQueueWorker._start_background_process`. CLI: `queue list clear`가 제거 | `queue list`가 경로를 표시 |
+| `orca_auto.yaml` | 없음 | `orca/commands/init._write_config` | CLI: `init` | `orca/config.load_config`를 거치는 `core/config/files` 로더 |
+| systemd 유닛 파일 | 없음 | `cli_systemd_apply._write_unit_files` | CLI: `systemd install` | systemd. `service status`가 실행 중인 워커와 비교 |
+
+### 동작별 호출 경로
+
+각 경로는 진입점부터 마지막 디스크 기록까지 이름 있는 단계를 나열합니다. `→`는 앞 단계가 호출하거나 앞 단계 다음에 실행되는 단계로 이어지고, 괄호는 그 단계가 직접 하는 호출입니다.
+
+| 동작 | 프로세스 | 호출 경로 | 디스크 결과 |
+| :--- | :--- | :--- | :--- |
+| 제출 | CLI | `cli_run_dir.cmd_run_dir` → `commands/run_inp.cmd_run_inp` → `submission.submit_reaction_dir_to_queue` → `submission.create_queued_submission`(`execution_binding.build_orca_execution_snapshot`) → `enqueue_publication.run_enqueue_publication`(`adapter.enqueue`) → `job_records.upsert_row_job_record` → `snapshot_intent.mark_snapshot_intent_owned` | 바인딩된 입력과 소유자 xattr가 있는 generation 디렉터리, 발행 임대가 붙은 `queue.json` 행, 대기 상태의 `job_locations.json` 기록. 행이 확정되면 스냅숏 의도는 폐기됨. 발행이 실패하면 행을 복구 대기로 두고 워커가 복구 |
+| 실행권 할당 | 부모 | `QueueWorkerLoop._fill_slots` → `OrcaQueueWorker._admit_next`(`repair_queue_publications`, `notify_queued_jobs`, `admission_has_capacity`, `roots.peek_next_entry`, `_try_reserve_admission_slot`, `roots.dequeue_next_entry`) → `_start_reserved`(`retire_snapshot_intent_for_row`) → `_start_job`(`_start_background_process`) → `_on_worker_process_started`(`update_slot_metadata`, `upsert_row_job_record`) | 슬롯이 `reserved`에서 자식 pid를 가진 `active`로, 행은 RUNNING, 의도 폐기, 실행 중 위치 기록. 인수를 놓치면 슬롯 해제 |
+| 계산 | 자식 | `commands/worker_child.main` → `worker_execution.run_worker_child_job`(`maybe_rebind_recovery_generation`, `await_parent_admission_handoff`) → `process_dequeued_entry` → `execution.execute_orca_run` → `execute_locked_run`(`run.lock`, `recover_crashed_state`, `_child_admission_slot`) → `attempt/run.run_attempt`(`OrcaRunner.run`, `out_analyzer.analyze_output`) → `attempt/reporting.exit_with_result`(`write_report_files`) | 루트와 generation의 `job_state.json`, ORCA 출력, 보고서. 슬롯 활성화와 완료. scratch 용량이 부족하면 행을 `pending`으로 되돌리고, 중지되면 다시 대기시키거나 취소가 요청된 경우 재처리 표식과 함께 취소로 표시 |
+| 종료 정리 | 부모 | `QueueWorkerLoop._check_completed_jobs` → `OrcaQueueWorker._finalize_completed_job`(`recover_slot_engine_process`, `settlement.mark_terminal_row`) → `_hand_off_terminal_row`(`settlement.work_item_for_row`) → `_settle_live`(`settlement.is_superseded`) → `settlement.prepare`(`terminal_state.record_failed_run_state`, `record_cancelled_run_state`) → `settlement.bind_row` → `_release_terminal_job`(`release_slot`) → `settlement.finish`(`_publish`, `retire_marker`) | 표식이 붙은 종료 행, 빠진 실패·취소 `job_state.json`과 보고서, 슬롯 삭제, 종료 위치 기록, 알림 전송권, 표식 제거. 한 단계가 실패하면 작업이나 재처리 항목을 남겨 재시도 |
+| 복구 | 부모 | `OrcaQueueWorker._reconcile_worker_state` → `snapshot_intent.reconcile_orphaned_snapshot_generations` → `_release_unattached_admission_slots` → `recover_orphaned_engine_slots`, `reconcile_stale_slots` → `orphans.reconcile_orphaned_running_entries` → `replay.reconcile_terminal_replays`(`settlement.settle`) | 버려진 의도와 generation 삭제, 남은 슬롯 해제, 고아 RUNNING 행을 재대기 또는 종료로 표시, 표시된 행을 위와 같이 정리 |
+| 알림 | 부모, 자식 | 접수: `_periodic_upkeep` 또는 `_admit_next` → `notifications.notify_queued_jobs`(`_claim_queued_notifications`) → `orca/notifications.dispatch_notification`. 시작: `attempt/run.run_attempt` → `dispatch_notification`. 종료: `settlement._publish` → `notifications.claim_and_send_terminal` → `dispatch_notification` | `queue.json`의 `orca_queued_notification_pending` 해제, 루트 `job_state.json`의 `finished_notification_claimed_at`. 시작 알림은 기록 없음. 전송은 아무것도 쓰지 않음 |
+| 취소 요청 | CLI | `cli_queue.cmd_queue_cancel` → `activity/_cancel.cancel_activity`(`_orca.catalog`, `target_rows`) → `adapter.cancel` → `transitions.request_cancel` | 대기 행은 재처리 표식과 함께 취소되고 다음 복구 패스가 정리. 실행 중 행에는 `cancel_requested` |
+| 취소 중지 | 부모, 자식 | 부모: `OrcaQueueWorker._check_cancel_requests`(`cancel_requested_ids`) → `_cancel_running_job`(`_stop_child_and_recover_engine`, 자식이 표시하지 않았으면 `adapter.mark_cancelled`) → `_hand_off_terminal_row` → `_settle_live`. 자식: `OrcaRunner.run`이 `WorkerShutdownInterrupt`를 올림 → `run_worker_child_job`(`adapter.requeue_running_entry`) | 자식의 시도·scratch 근거, 자식이나 부모가 표식과 함께 취소로 표시한 행. `job_state.json`의 취소 결과는 부모의 종료 정리만 씀([ADR 0008](adr/0008-parent-writes-the-cancelled-result.md)) |
+| 조회 | CLI | `cli_queue.cmd_queue_list` → `activity/_list.list_activities` → `activity/_orca.catalog`(`adapter.list_queue`, `run_snapshot.collect_run_snapshots`) → `run_status.observed_queue_status` → `activity_rendering.queue_list_table` | 기록 없음. `queue.json`, 각 행의 루트 `job_state.json`, `run.lock` 확인, 슬롯 수를 읽음 |
+| 인덱스 재구성 | CLI | `cli_index.cmd_index_rebuild` → `job_locations/_rebuild.rebuild_job_location_records` → `core/indexing/store.merge_job_locations`(`_save_records`). `index prune`: `cli_index.cmd_index_prune` → `prune_job_locations` | 디스크의 실행 상태로 `job_locations.json` 행을 추가·갱신하며 재구성은 행을 지우지 않음 |
+| 정리 | CLI | `cli_queue.cmd_queue_list`(`clear`) → `activity/_clear.clear_activities` → `run_cleanup.clear_terminal_records` → `clear_terminal_run_states` → `clear_terminal_queue_entries`(`store.clear_terminal`) | 보호되지 않은 루트 `job_state.json` 삭제, 표식 없는 종료 행을 워커 로그·발행 잠금 파일과 함께 제거. generation 산출물은 보존 |
+
+### 불변 조건 색인
+
+| 불변 조건 | 소유자 | 강제하는 곳 |
+| :--- | :--- | :--- |
+| `queue.json`의 기록 주체는 하나이고, 그 밖에서는 읽을 때만 잠금을 잡는다 | `core/queue/store.mutate_entries` | `tests/core/queue/test_ownership_guards.py`(`test_queue_file_is_written_only_by_the_store`, `test_queue_lock_is_held_outside_the_store_only_by_read_only_users`) |
+| PENDING·종료 행은 두 생성 함수에서만 나오고, 행은 한 번만 만들며 `enqueued_at`은 다시 쓰지 않는다 | `transitions.requeued_entry`, `terminal_entry`, `adapter.enqueue` | `test_ownership_guards.py`(`test_pending_and_terminal_rows_are_built_only_by_the_transition_constructors`, `test_rows_are_created_once_and_no_rewrite_sets_enqueued_at`) |
+| generation 식별 하나가 토큰과 모든 쓰기 fence를 정한다([ADR 0006](adr/0006-one-generation-identity-for-token-and-fences.md)) | `orca/queue/entries.generation_identity` | `tests/contracts/test_rule_pins_queue.py`, `tests/orca/queue/test_entries.py` |
+| 원자적 쓰기 함수는 그 파일을 소유한 모듈만 호출한다 | 위 표 | `test_ownership_guards.py::test_atomic_writers_are_called_only_by_the_module_that_owns_the_file` |
+| `job_state.json`은 상태 저장 계층으로만 저장하고 generation 근거를 루트보다 먼저 쓴다 | `orca/state.save_state` | `test_ownership_guards.py::test_job_state_is_written_only_through_the_state_writer_by_its_owners`, `tests/orca/test_state.py` |
+| 취소 결과는 부모의 종료 정리만 쓴다([ADR 0008](adr/0008-parent-writes-the-cancelled-result.md)) | `terminal_state.record_cancelled_run_state` | `test_ownership_guards.py::test_only_the_parent_settlement_records_a_cancelled_result`, `tests/orca/queue/test_settlement_faults.py`, `tests/orca/test_worker_execution.py::test_cancelled_child_leaves_the_cancelled_result_to_the_parent` |
+| `machine.json`과 보고서는 발행 모듈이 만들고 쓰며, 종료 보고서는 불변이다 | `report/publication.write_report_files`, `machine_observation.build_machine_observation` | `test_ownership_guards.py::test_machine_json_and_reports_are_written_only_by_the_publisher`, `tests/orca/test_state.py::test_terminal_machine_observation_is_immutable`, `tests/contracts/test_report_outputs.py` |
+| `runs_root` 아래 실행권 저장소 하나, 한도는 `scheduler.max_active_simulations`([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)) | `core.admission.admission_dir` | `tests/contracts/test_rule_pins_admission.py::test_admission_resolution`, `tests/orca/queue/test_worker_start.py::test_worker_roots_and_limit_match_the_rendered_unit` |
+| 슬롯은 저장소만 쓰고 각 변경은 그 소유자에서만 오며, 자식은 슬롯 규칙 하나를 따른다 | `core/admission/store.py`, `execution._child_admission_slot` | `test_ownership_guards.py`(`test_admission_slots_are_written_only_by_the_store_for_their_owners`, `test_only_the_worker_reconcile_lists_slots_with_a_rewrite`), `tests/contracts/test_rule_pins_admission.py::test_child_slot_outcome` |
+| 행을 인수하기 전에 슬롯을 예약하고, 인수에 실패하면 해제한다 | `OrcaQueueWorker._admit_next` | `tests/orca/queue/test_worker_admission.py`(`test_admission_pass_reserves_the_slot_before_it_claims_the_row`, `test_admission_pass_releases_the_slot_when_the_claim_fails`) |
+| 한 generation에서 ORCA는 최대 한 번 실행되고, 재개는 재바인딩으로만 한다([ADR 0009](adr/0009-resume-only-by-rebind.md)) | `recovery_rebind.maybe_rebind_recovery_generation`, `attempt/run.run_attempt` | `tests/orca/test_recovery_rebind.py::test_rebind_moves_crashed_claim_into_new_generation`, `tests/orca/attempt/test_single_attempt_contract.py` |
+| 종료 정리는 실시간과 재처리에서 같은 순서로 쓰고, 실패한 단계는 재시도한다 | `orca/queue/settlement.py` | `tests/orca/queue/test_settlement_faults.py::test_settlement_fault_matrix`, `tests/contracts/test_rule_pins_replay_retry.py`, `tests/contracts/test_durable_files.py`의 `effects.json` 골든 |
+| fail-closed 판정 하나가 종료 generation이 아직 디렉터리를 소유하는지 정한다 | `terminal_marker.terminal_generation_verdict` | `tests/contracts/test_rule_pins_replay.py::test_replay_supersession_truth_table` |
+| `job_locations.json`은 작업 기록 투영과 `index` 명령으로만 쓴다 | `core/indexing/store.py`, `queue/job_records.py` | `test_ownership_guards.py::test_location_index_is_written_only_through_job_records_and_index_commands` |
+| 큐 명령은 큐 행과 각 행 자신의 상태만 읽는다([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)) | `activity/_orca.catalog` | `tests/activity/test_orca_discovery.py::test_listing_reads_neither_the_location_index_nor_the_run_tree`, `tests/activity/test_orca.py::test_catalog_joins_queue_rows_with_their_own_state_only` |
+| 알림은 세 곳에서만 보내고 전송권은 최대 한 번 확보한다 | `orca/queue/notifications.py`, `attempt/run.run_attempt` | `test_ownership_guards.py::test_notifications_are_dispatched_only_from_the_three_claim_sites`, `tests/orca/queue/test_notifications.py` |
+| 워커가 자신의 PID 파일을 쓴다 | `OrcaQueueWorker._write_pid_file` | `test_ownership_guards.py::test_worker_pid_file_is_written_only_by_the_worker`, `tests/core/queue/test_worker.py::test_worker_pid_file_handles_live_stale_dead_missing_and_invalid_pids` |
+| 폴링 패스 하나가 실패해도 실행 중인 자식의 감독은 멈추지 않는다 | `QueueWorkerLoop.run` | `tests/core/queue/test_worker.py::test_queue_worker_loop_keeps_supervising_after_a_failed_poll_pass` |
+| 규칙 하나가 입력의 route를 분류해 완료 판정, 보고서, SI 블록에 쓴다 | `completion_rules.route_facts` | `tests/orca/test_completion_rules.py::test_route_facts_classify_every_route_line_and_the_scan_block`, `tests/contracts/test_rule_pins_analysis.py` |
+| 도메인과 코어는 CLI 계층을 import하지 않고, systemd 모듈은 계층을 지킨다 | `pyproject.toml`의 `[tool.importlinter]` | `make check`의 `scripts/check_imports.py`, `tests/tooling/test_cli_layer_contract.py` |
+| 공개 디스크 파일, CLI 문서, 보고서 바이트는 의도한 변경에서만 바뀐다 | `tests/contracts/golden/` | `tests/contracts/test_durable_files.py`, `test_cli_documents.py`, `test_report_outputs.py` |
+
+### 용어집
+
+| 용어 | 뜻 | 코드 이름 |
+| :--- | :--- | :--- |
+| runs root, allowed root, 큐 루트 | 같은 디렉터리 하나. `queue.json`, `job_locations.json`, `.admission/`, `logs/`, 스냅숏 의도, PID 파일이 있고 모든 작업 디렉터리가 그 아래에 있음 | 설정 키 `runs_root`, `cfg.runtime.allowed_root`, `orca/queue/roots.queue_root(cfg)` |
+| reaction 디렉터리, 작업 디렉터리 | 사용자가 제출한 디렉터리. `reaction_dir`는 큐 행이 대조하는 저장 키이자 `queue list --json`이 출력하는 필드이고, `job_state.json`은 같은 경로를 `job.dir`로, `run-dir`는 `job_dir`로 표시함 | 행 메타데이터 `reaction_dir`, `RunExecutionContext.reaction_dir` |
+| generation(큐 행) | 작업의 제출 한 번. 생명주기 메타데이터를 뺀 행의 식별이며 `job_state.json`이 그 해시를 기록함 | `entries.generation_identity`, `queue_entry_generation_token`, 상태의 `queue_generation` |
+| generation 디렉터리 | `<reaction_dir>/<YYYYMMDD-HHMMSS-8hex>`. 실행 한 번의 바인딩된 입력, 출력, 보고서 | `core/queue/generation.new_visible_generation_name`, 스냅숏의 `execution_dir` |
+| 디렉터리 소유자 | generation 디렉터리를 그 의도에 묶는 소유자 xattr. 재처리에서는 디렉터리마다 종료 행을 정리할 generation 하나 | `generation_owner.py`, `replay._select_generation_owner` |
+| 실행 스냅숏 | 바인딩된 입력, 식별 정보, 자원, 실행 파일을 담은 행의 기록. 인수할 때 검증함 | 행 메타데이터 `execution_snapshot`, `execution_binding` |
+| 스냅숏 의도 | enqueue 전 기록(creating, enqueueing, owned). 어느 행도 소유하지 않는 generation을 복구가 지울 수 있게 함 | `core/queue/snapshot_intent.py` |
+| 실행 스냅숏 조회(run snapshot) | 목록과 정리를 위해 작업 디렉터리의 루트 상태를 고정 핸들로 읽은 것 | `run_snapshot.collect_run_snapshots` |
+| 실행권 슬롯, 실행권 토큰 | `admission_slots.json`의 행 하나(`state`, `engine_process_state`). 토큰은 `--admission-token`으로 자식에 전달됨 | `AdmissionSlot`, `reserve_slot`, `RunExecutionContext.admission_token` |
+| 재처리 표식 | 종료 표시와 함께 쓰는 행 메타데이터. 부모가 아직 해야 할 일(상태, 보고서, 인덱스, 알림)이며 제거될 때까지 같은 디렉터리의 다음 제출을 막음 | `orca_terminal_replay`, `terminal_marker.py`. 부수 효과 없는 fence: `orca_terminal_replay_fence_only` |
+| 종료 정리(settlement) | 종료 표시된 행에서 결과 발행까지의 부모 단계: 표시, 준비, 결합, 슬롯 반환, 마무리. 실시간 또는 재시작 재처리 | `orca/queue/settlement.py`, `OrcaQueueWorker._settle_live`, `replay.reconcile_terminal_replays` |
+| 대체(supersession) | 디렉터리 상태가 더 새로운 실행으로 넘어간 종료 generation. 아무것도 쓰지 않고 표식만 제거함 | `terminal_generation_verdict`, `settlement.is_superseded` |
+| 대기 기록 발행 | 새 행의 대기 위치 기록을 임대 아래에서 발행하는 것. 실패하면 워커가 복구 | `enqueue_publication.py`, `publication_repair.py` |
+| 종료 발행 | 종료 정리 뒤의 인덱스 기록, 알림 전송권, 표식 제거. `result publication pending`으로 표시됨 | `settlement.finish`, 범위 `orca_terminal_publication` |
+| scratch 회수 | RAM scratch 출력을 저널과 함께 generation 디렉터리로 옮기는 것 | `engine_scratch/_publication.py` |
+| 위치 인덱스 | `job_locations.json`. 각 작업이 실행된 위치이며 디스크에서 재구성할 수 있고 `queue list`는 읽지 않음. 예전 SQLite activity 투영은 제거됨 | `core/indexing`, `orca/job_locations`, `index rebuild` |
+| 재바인딩 | 실행 시작 근거가 있는 generation의 인수를 실행 전에 새 generation으로 옮기는 것 | `recovery_rebind.maybe_rebind_recovery_generation` |
+
+---
+
+## 4. 작업 제출 및 실행 수명 주기 (Lifecycle)
 
 ### 1. 제출
 - `orca_auto run-dir <PATH>` 실행 시 `orca/submission.py`가 디렉터리 내 최신 `.inp` 파일과 자원 설정(`%pal`, `%maxcore`)을 파싱합니다.
@@ -73,7 +160,7 @@ graph TD
 
 ### 3. 실행 감독 및 복구
 - 워커는 자식 프로세스의 상태를 추적하며, 외부 시그널(SIGTERM) 수신 시 프로세스를 정리하고 정상 종료합니다.
-- 작업이 비정상 종료되어도 큐와 실행 상태 파일에 명확한 원인이 영속적으로 기록됩니다.
+- 워커 종료나 워커 유실로 중단된 실행은 큐 행이 `pending`으로 돌아가고, 다음 인수는 완료 출력으로 마무리되지 않는 한 실행 전에 새 generation으로 재바인딩됩니다([ADR 0009](adr/0009-resume-only-by-rebind.md)). 실패한 실행은 큐 항목과 generation 상태 모두에 구체적인 실패 원인을 남깁니다.
 
 ### 4. 상태 확정 및 결과 저장
 - ORCA 계산이 끝나면 `orca/out_analyzer.py`가 출력 파일을 한 번 줄 단위로 읽으며 정상 종료 배너 및 오류/미수렴 마커를 분석하고, TS route이면 같은 읽기에서 마지막 진동수 구간의 허수 모드를 셉니다. (입력 echo나 주석에 포함된 오류 문구는 제외)
@@ -129,8 +216,9 @@ ID 기준 인수, 인수를 놓치면 슬롯 해제 순이다. 기반 클래스 
 작업이 없으면 복구 패스를 실행한다. 따라서 한 번의 폴링 패스는 회수, 취소, 수용,
 주기 작업, 대기 순이다. 한 패스에서 일반 예외가 나면 기록한 뒤 폴링 간격
 후 그 패스를 다시 시도하며, 실행 중인 자식은 계속 감독한다. KeyboardInterrupt,
-SystemExit, 시작 실패는 이전처럼 워커를 끝낸다. 테스트는 `_start_background_process`와 `sleep_fn`을
-교체하며, 주입되는 의존성 묶음은 없다. 부모 진입점은
+SystemExit, 시작 실패는 이전처럼 워커를 끝낸다. 테스트는 워커의 `_start_background_process`와
+`sleep_fn`을 교체하고, 설정 탐색·`/dev/shm`·인수는 `tests/conftest.py`의 공용 fixture로
+다룬다([DEVELOPMENT](DEVELOPMENT.ko.md)). 주입되는 의존성 묶음은 없다. 부모 진입점은
 `python -m orca_auto.orca.commands.queue --config …`, 자식 진입점은
 `python -m orca_auto.orca.commands.worker_child --config … --queue-root …
 --queue-id … [--admission-token …]`이다.
@@ -146,7 +234,7 @@ ID를 먼저 모은다), 고아 RUNNING 행 정리, 마지막으로 그 큐 읽�
 재처리 상태의 `retry_keys`에 남아 다음 패스에서 다시 시도하며, 처음부터 종료
 상태로 관찰된 행은 재처리하지 않는다.
 
-취소 관찰은 변경되지 않은 큐 스냅샷을 재사용한다. 실행을 마친 자식은 종료 상태와 보고서를 발행한 뒤 종료하고, 취소된 자식은 결과를 부모에게 맡깁니다. 부모가 큐의 종료 처리를 정리하고 작업·실행 ID가 일치하는 상태에서 완료 알림의 전송권을 기록합니다. 부모의 두 전송권 확보, 즉 디스크 큐 행의 접수 알림과 `job_state.json`의 종료 알림은 모두 `orca/queue/notifications.py`에 있습니다. 동시 전송 수가 제한된 백그라운드 전송기는 확보한 메시지만 전달하며, 실행 슬롯을 붙잡거나 전송 후 상태를 다시 쓰지 않습니다. 종료 처리를 반복해도 이미 전송권을 기록한 알림은 건너뛰며, 과거 전송 완료 표식도 인식합니다. 알림은 참고용이므로 전송권 기록 뒤 프로세스가 중단되거나 전송 실패·용량 부족이 발생하면 유실될 수 있고, 이를 재시도하거나 계산 결과를 변경하지 않습니다. 제출은 디스크 큐 항목에 `orca_queued_notification_pending`을 기록합니다. 위치 기록 발행 후 부모 워커가 큐 잠금 안에서 전송권을 확보하고 제출 알림을 별도로 전달하므로 CLI가 종료돼도 전송 전의 의도는 남습니다. 이 표시가 없는 과거 항목의 알림을 소급 전송하지 않습니다. 자식은 시도 시작을 기록한 뒤 시작 알림을 캡처해 별도로 전달하고 계산을 진행합니다. 세 알림은 같은 전송기를 사용하며 동시 전송 수는 프로세스당 4개입니다. 전송 실패·용량 부족·프로세스 종료로 참고용 메시지가 유실될 수 있고, 전송기는 실행 상태를 쓰지 않습니다. 제출 알림의 전송권 기록이 실패하면 전송을 건너뛰되 실행권 할당은 보류하지 않습니다.
+취소 관찰은 변경되지 않은 큐 스냅샷을 재사용한다. 실행을 마친 자식은 종료 상태와 보고서를 발행한 뒤 종료하고, 취소된 자식은 결과를 부모에게 맡깁니다. 부모가 큐의 종료 처리를 정리하고 작업·실행 ID가 일치하는 상태에서 완료 알림의 전송권을 기록합니다. 부모의 두 전송권 확보, 즉 디스크 큐 행의 접수 알림과 `job_state.json`의 종료 알림은 모두 `orca/queue/notifications.py`에 있습니다. 동시 전송 수가 제한된 백그라운드 전송기는 확보한 메시지만 전달하며, 실행 슬롯을 붙잡거나 전송 후 상태를 다시 쓰지 않습니다. 종료 처리를 반복해도 이미 전송권을 기록한 알림은 건너뛰며, 과거 전송 완료 표식도 인식합니다. 알림은 참고용이므로 전송권 기록 뒤 프로세스가 중단되거나 전송 실패·용량 부족이 발생하면 유실될 수 있고, 이를 재시도하거나 계산 결과를 변경하지 않습니다. 제출은 디스크 큐 항목에 `orca_queued_notification_pending`을 기록합니다. 위치 기록 발행 후 부모 워커가 큐 잠금 안에서 전송권을 확보하고 제출 알림을 별도로 전달하므로 CLI가 종료돼도 전송 전의 의도는 남습니다. 이 표시가 없는 과거 항목의 알림을 소급 전송하지 않습니다. 자식은 실행 중 상태를 저장한 뒤 시작 알림을 캡처해 별도로 전달하고 ORCA를 실행합니다. 세 알림은 같은 전송기를 사용하며 동시 전송 수는 프로세스당 4개입니다. 전송 실패·용량 부족·프로세스 종료로 참고용 메시지가 유실될 수 있고, 전송기는 실행 상태를 쓰지 않습니다. 제출 알림의 전송권 기록이 실패하면 전송을 건너뛰되 실행권 할당은 보류하지 않습니다.
 
 `core/queue`의 모듈 이름은 그 모듈을 실행하는 프로세스를 따른다. `worker/`(루프,
 여유 확인, PID 파일)와 `processes.py`(자식을 자기 세션으로 띄우고 프로세스 그룹을
@@ -207,8 +295,8 @@ generation으로의 재바인딩으로만 일어난다([ADR 0009](adr/0009-resum
 거친다. 자식은 슬롯을 활성화하고, 실행이 정상 반환하면 엔진 프로세스를 완료 처리하며,
 예외가 나면 슬롯을 그대로 둔다. 자식이 해제하는 슬롯은 활성화 시점에 살아 있지 않은
 슬롯뿐이다. 성공·중단·예외 모두 슬롯 해제는 자식이 끝난 뒤 부모가 한다.
-`tests/core/queue/test_ownership_guards.py`는 `release_slot`과
-`complete_slot_engine_process`를 이 소유자만 호출하도록 제한한다. 슬롯 하나의 생명주기:
+`tests/core/queue/test_ownership_guards.py`는 모든 슬롯 변경을 이 소유자로
+제한한다. 슬롯 하나의 생명주기:
 
 | 단계 | 기록 주체 | `state` | `engine_process_state` |
 |---|---|---|---|
@@ -232,7 +320,7 @@ generation으로의 재바인딩으로만 일어난다([ADR 0009](adr/0009-resum
 
 ---
 
-## 4. 운영 아키텍처
+## 5. 운영 아키텍처
 
 - **큐 카탈로그**: `queue list`와 `queue cancel`은 카탈로그 하나(`activity/_orca.catalog`)를 함께 씁니다. `queue.json`의 ORCA 행마다 자기 디렉터리의 루트 `job_state.json`이 그 행의 실행이나 generation에 속할 때만 붙입니다. 재귀 스캔도 `job_locations.json` 읽기도 없으며, 큐 행이 없는 실행 상태는 목록에 나오지 않습니다. `queue cancel`은 이 카탈로그에서 대상을 한 번만 해석합니다(`activity/_cancel.target_rows`). 살아 있는 run lock이 없는 `running` 행을 `pending`으로 보이는 규칙은 CLI 계층이 아니라 `orca/run_status.py`에 있습니다. `job_locations.json`은 디스크의 실행 상태에서 `index rebuild`로 재구성할 수 있습니다([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)).
 - **Scratch 운영 명령**: `orca_auto scratch list`와 `scratch clear`로 비활성(non-live) RAM scratch 워크스페이스를 점검·제거합니다. stale, unverifiable, invalid-manifest 워크스페이스가 하나라도 남아 있으면 이후의 모든 scratch 실행이 차단(fail-closed)됩니다.
@@ -240,7 +328,7 @@ generation으로의 재바인딩으로만 일어난다([ADR 0009](adr/0009-resum
 
 ---
 
-## 5. 아키텍처 결정 기록 (ADR)
+## 6. 아키텍처 결정 기록 (ADR)
 
 ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.md)에 있습니다(영어).
 

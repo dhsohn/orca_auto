@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-28
+- Supersedes: [ADR 0006](0006-one-generation-identity-for-token-and-fences.md)
 
 ## Problem
 

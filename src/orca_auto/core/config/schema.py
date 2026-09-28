@@ -24,10 +24,6 @@ def as_nonempty_str(value: Any, default: str = "") -> str:
     return default
 
 
-def as_int(value: Any, default: int) -> int:
-    return safe_int(value, default=default)
-
-
 def _bounded_delivery_float(
     value: Any,
     *,

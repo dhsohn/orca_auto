@@ -258,7 +258,7 @@ def test_cmd_run_dir_dispatches_to_orca_command_module(
 
     monkeypatch.setattr(run_inp_command, "cmd_run_inp", _fake_run_inp)
     monkeypatch.setattr(
-        cli_run_dir, "discover_shared_config_path", lambda _explicit: resolved_config
+        cli_handlers, "discover_shared_config_path", lambda _explicit: resolved_config
     )
     args = Namespace(
         config="/tmp/orca_auto.yaml",
@@ -674,6 +674,7 @@ def test_emit_error_under_json_prints_the_error_document_and_the_stderr_line(
 def test_cmd_run_dir_dispatches_to_orca_for_inp_directories(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    config: Path,
 ) -> None:
     target = tmp_path / "orca_job"
     target.mkdir()
@@ -690,6 +691,7 @@ def test_cmd_run_dir_dispatches_to_orca_for_inp_directories(
     result = cli_run_dir.cmd_run_dir(
         SimpleNamespace(
             path=str(target),
+            config=str(config),
         )
     )
 
@@ -749,6 +751,7 @@ def test_cli_run_dir_rejects_orca_namespace_replacement_after_preflight(
 def test_pinned_run_dir_does_not_relabel_downstream_oserror(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    config: Path,
 ) -> None:
     target = tmp_path / "orca-job"
     target.mkdir()
@@ -761,12 +764,15 @@ def test_pinned_run_dir_does_not_relabel_downstream_oserror(
     monkeypatch.setattr(run_inp_command, "cmd_run_inp", _raise_publication_error)
 
     with pytest.raises(OSError, match="disk full while publishing queue"):
-        cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(target), priority=None))
+        cli_run_dir.cmd_run_dir(
+            SimpleNamespace(path=str(target), config=str(config), priority=None)
+        )
 
 
 def test_cmd_run_dir_prefers_orca_for_mixed_input_xyz_and_inp_without_manifest(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    config: Path,
 ) -> None:
     target = tmp_path / "mixed_job"
     target.mkdir()
@@ -784,6 +790,7 @@ def test_cmd_run_dir_prefers_orca_for_mixed_input_xyz_and_inp_without_manifest(
     result = cli_run_dir.cmd_run_dir(
         SimpleNamespace(
             path=str(target),
+            config=str(config),
         )
     )
 
@@ -793,6 +800,7 @@ def test_cmd_run_dir_prefers_orca_for_mixed_input_xyz_and_inp_without_manifest(
 
 def test_cmd_run_dir_reports_unknown_directory_layout(
     tmp_path: Path,
+    config: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     target = tmp_path / "unknown_job"
@@ -801,6 +809,7 @@ def test_cmd_run_dir_reports_unknown_directory_layout(
     result = cli_run_dir.cmd_run_dir(
         SimpleNamespace(
             path=str(target),
+            config=str(config),
         )
     )
 
@@ -813,6 +822,7 @@ def test_cmd_run_dir_reports_unknown_directory_layout(
 
 def test_cmd_run_dir_rejects_xyz_only_directories(
     tmp_path: Path,
+    config: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     target = tmp_path / "xyz_only"
@@ -822,6 +832,7 @@ def test_cmd_run_dir_rejects_xyz_only_directories(
     result = cli_run_dir.cmd_run_dir(
         SimpleNamespace(
             path=str(target),
+            config=str(config),
         )
     )
 
@@ -834,15 +845,16 @@ def test_cmd_run_dir_rejects_xyz_only_directories(
 
 def test_cmd_run_dir_reports_missing_and_file_targets(
     tmp_path: Path,
+    config: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     missing = tmp_path / "missing"
-    assert cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(missing))) == 1
+    assert cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(missing), config=str(config))) == 1
     assert f"run-dir target not found: {missing.resolve()}" in capsys.readouterr().err
 
     file_target = tmp_path / "not-a-dir"
     file_target.write_text("not a directory\n", encoding="utf-8")
-    assert cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(file_target))) == 1
+    assert cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(file_target), config=str(config))) == 1
     assert f"run-dir target is not a directory: {file_target.resolve()}" in capsys.readouterr().err
 
 
@@ -874,6 +886,26 @@ def test_cli_run_dir_reports_an_invalid_config_without_a_traceback(
     stderr = capsys.readouterr().err
     assert "Traceback" not in stderr
     assert "Unknown top-level config fields" in stderr
+    assert not (runs_root / "queue.json").exists()
+
+
+def test_cli_run_dir_reports_a_missing_config_without_a_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # No --config, no ORCA_AUTO_CONFIG and an empty HOME: nothing is discoverable.
+    runs_root, job, _config = _run_dir_fixture(tmp_path)
+
+    assert main(["run-dir", str(job)]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert captured.err.splitlines() == [
+        "error: No orca_auto.yaml found: pass --config, set ORCA_AUTO_CONFIG, "
+        "or create ~/orca_auto/config/orca_auto.yaml.",
+        "hint: Run `orca_auto init` to create it.",
+    ]
     assert not (runs_root / "queue.json").exists()
 
 

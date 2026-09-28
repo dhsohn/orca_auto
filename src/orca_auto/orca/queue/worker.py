@@ -224,11 +224,10 @@ class OrcaQueueWorker(QueueWorkerLoop):
         self._write_pid_file()
         self._reconcile_worker_state_now()
         logger.info(
-            "Queue worker started (pid=%d, max_concurrent=%d, admission_root=%s, admission_limit=%d)",
+            "Queue worker started (pid=%d, max_concurrent=%d, admission_root=%s)",
             os.getpid(),
             self.max_concurrent,
             self.admission_root,
-            self.max_concurrent,
         )
         self._warn_if_concurrency_exceeds_host_cores()
 

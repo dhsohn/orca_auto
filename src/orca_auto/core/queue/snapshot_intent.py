@@ -48,16 +48,7 @@ _INTENT_DIR_NAME = ".orca_auto_snapshot_intents"
 _MAINTENANCE_LOCK_NAME = ".orca_auto_snapshot_intents.lock"
 _MUTATION_LOCK_NAME = ".orca_auto_snapshot_intents.mutation.lock"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{16,160}")
-_MANAGED_PARENT_NAMES = frozenset({".orca_auto_input_snapshots", ".orca_auto_orca_executions"})
 _DIRECT_VISIBLE_GENERATION_KINDS = frozenset({"orca_visible_generation"})
-# Retired values remain readable; only direct visible ORCA generations are produced.
-_KINDS = frozenset(
-    {
-        "input_snapshot_namespace",
-        "orca_execution_pair",
-        *_DIRECT_VISIBLE_GENERATION_KINDS,
-    }
-)
 _MAX_INTENT_BYTES = 32 * 1024
 _MAX_PENDING_INTENTS = 1024
 _MAX_INTENT_DIRECTORY_ENTRIES = 2 * _MAX_PENDING_INTENTS
@@ -108,7 +99,6 @@ def _validated_generation_paths(
     generation_paths: Iterable[str | Path],
     *,
     require_existing: bool | None,
-    kind: str,
 ) -> tuple[Path, ...]:
     paths: list[Path] = []
     for raw_value in generation_paths:
@@ -116,16 +106,7 @@ def _validated_generation_paths(
         if not raw_path.is_absolute() or raw_path.is_symlink():
             raise ValueError(f"Snapshot generation must be an absolute real path: {raw_path}")
         resolved = raw_path.resolve()
-        inside_queue = resolved.is_relative_to(queue_root)
-        managed_hidden_generation = resolved.parent.name in _MANAGED_PARENT_NAMES
-        direct_visible_generation = kind in _DIRECT_VISIBLE_GENERATION_KINDS
-        managed_visible_generation = bool(
-            direct_visible_generation and inside_queue and is_visible_generation_name(resolved.name)
-        )
-        if not inside_queue or (
-            not managed_visible_generation
-            and (direct_visible_generation or not managed_hidden_generation)
-        ):
+        if not resolved.is_relative_to(queue_root) or not is_visible_generation_name(resolved.name):
             raise ValueError(f"Snapshot generation escapes its queue root: {raw_path}")
         if require_existing:
             if not resolved.is_dir() or resolved.stat().st_uid != os.geteuid():
@@ -194,7 +175,7 @@ def _read_intent(path: Path, *, expected_root: Path) -> dict[str, Any]:
     if path.name != f"{token}.json" or str(raw.get("queue_root") or "") != str(expected_root):
         raise ValueError(f"Snapshot intent identity mismatch: {path}")
     kind = str(raw.get("kind") or "")
-    if kind not in _KINDS or str(raw.get("state") or "") not in {
+    if kind not in _DIRECT_VISIBLE_GENERATION_KINDS or str(raw.get("state") or "") not in {
         SNAPSHOT_INTENT_STATE_CREATING,
         SNAPSHOT_INTENT_STATE_ENQUEUEING,
         SNAPSHOT_INTENT_STATE_OWNED,
@@ -203,12 +184,7 @@ def _read_intent(path: Path, *, expected_root: Path) -> dict[str, Any]:
     raw_paths = raw.get("generation_paths")
     if not isinstance(raw_paths, list):
         raise ValueError(f"Snapshot intent has no generation paths: {path}")
-    validated = _validated_generation_paths(
-        expected_root,
-        raw_paths,
-        require_existing=None,
-        kind=kind,
-    )
+    validated = _validated_generation_paths(expected_root, raw_paths, require_existing=None)
     raw["generation_paths"] = [str(item) for item in validated]
     raw_identities = raw.get("generation_identities")
     if raw_identities is not None:
@@ -275,12 +251,7 @@ def create_snapshot_intent(
     if normalized_kind not in _DIRECT_VISIBLE_GENERATION_KINDS:
         raise ValueError(f"Unsupported snapshot intent kind: {kind!r}")
     normalized_token = _normalized_token(token)
-    paths = _validated_generation_paths(
-        resolved_root,
-        generation_paths,
-        require_existing=False,
-        kind=normalized_kind,
-    )
+    paths = _validated_generation_paths(resolved_root, generation_paths, require_existing=False)
     intent_dir = _intent_dir(resolved_root, create=True)
     with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         if len(_bounded_intent_paths(intent_dir)) >= _MAX_PENDING_INTENTS:
@@ -324,16 +295,11 @@ def bind_snapshot_intent_generation_identities(
     with _locked_intent(resolved_root, token) as held:
         assert held is not None
         intent_path, marker = held
-        if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
-            raise ValueError("Only direct visible generations require directory identity binding")
         if marker["state"] != SNAPSHOT_INTENT_STATE_CREATING:
             raise ValueError("Direct visible generation identities must be bound while creating")
         identities: dict[str, dict[str, int]] = {}
         for generation_path in _validated_generation_paths(
-            resolved_root,
-            marker["generation_paths"],
-            require_existing=True,
-            kind=str(marker["kind"]),
+            resolved_root, marker["generation_paths"], require_existing=True
         ):
             details = generation_path.stat()
             identities[str(generation_path)] = {
@@ -492,13 +458,8 @@ def retire_snapshot_intent(
         if held is None:
             return
         intent_path, marker = held
-        if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
-            return
         _validated_generation_paths(
-            resolved_root,
-            marker["generation_paths"],
-            require_existing=True,
-            kind=str(marker["kind"]),
+            resolved_root, marker["generation_paths"], require_existing=True
         )
         identities = marker.get("generation_identities")
         if not isinstance(identities, Mapping) or set(identities) != set(
@@ -598,19 +559,13 @@ def _remove_generation(
     path: Path,
     *,
     queue_root: Path,
-    kind: str,
     expected_identity: Mapping[str, Any],
     owner_token: str,
 ) -> None:
     """Remove one bound generation, refusing any other directory at its path."""
     if not path.exists():
         return
-    validated = _validated_generation_paths(
-        queue_root,
-        [path],
-        require_existing=True,
-        kind=kind,
-    )[0]
+    validated = _validated_generation_paths(queue_root, [path], require_existing=True)[0]
     details = validated.stat()
     generation_identity = (
         int(expected_identity.get("device", -1)),
@@ -632,17 +587,14 @@ def _remove_generation(
 def _reconcile_intent(root: Path, intent_path: Path, entries: Sequence[Any]) -> bool:
     """Settle one intent; True only when a dead owner's generations were removed.
 
-    Unreadable and retired-format intents stay. An OWNED or queue-referenced
-    intent is retired and its generation kept. A dead owner's generations are
-    removed only while they are the exact bound directories; any refusal keeps
-    the intent for the next pass.
+    Unreadable intents stay. An OWNED or queue-referenced intent is retired
+    and its generation kept. A dead owner's generations are removed only while
+    they are the exact bound directories; any refusal keeps the intent for the
+    next pass.
     """
     try:
         marker = _read_intent(intent_path, expected_root=root)
     except (OSError, ValueError):
-        return False
-    if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
-        # Retired intent formats are read-only.
         return False
     if marker["state"] == SNAPSHOT_INTENT_STATE_OWNED or any(
         _entry_references_intent(entry, marker) for entry in entries
@@ -669,7 +621,6 @@ def _reconcile_intent(root: Path, intent_path: Path, entries: Sequence[Any]) -> 
             _remove_generation(
                 Path(generation_path),
                 queue_root=root,
-                kind=str(marker["kind"]),
                 expected_identity=identities[generation_path],
                 owner_token=str(marker["token"]),
             )

@@ -24,11 +24,9 @@ from .generation_validation import (
 )
 from .types import RunFinalResult, RunState
 
-STATE_FILE_NAME = RUN_STATE_FILE
-
 
 def state_path(reaction_dir: Path) -> Path:
-    return reaction_dir / STATE_FILE_NAME
+    return reaction_dir / RUN_STATE_FILE
 
 
 def state_payload_job_id(payload: Any) -> str:
@@ -220,7 +218,6 @@ def load_generation_state(
 
 
 __all__ = [
-    "STATE_FILE_NAME",
     "get_run_id_from_state",
     "load_generation_state",
     "load_state",

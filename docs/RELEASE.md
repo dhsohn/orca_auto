@@ -28,62 +28,87 @@ checkout. They also verify a prepared immutable runtime. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
-## Upgrading past 8.0.x (unreleased)
+## Upgrading to 9.0
 
-The next major release removes the remaining workflow handling
-([ADR 0005](adr/0005-remove-retired-workflow-support.md)). A directory that
-holds `flow.yaml` or `workflow.json`, or lies under one, becomes an ordinary
-directory, and a queue row's `workflow_id` metadata is ignored.
+Version 9.0 changes public contracts (the CHANGELOG entries marked *public
+contract*) and needs an idle-window cutover; publishing the package alone
+performs none of these steps. No job may run across the switch: the queue
+generation token ([ADR 0006](adr/0006-one-generation-identity-for-token-and-fences.md))
+and the writer of a cancelled result
+([ADR 0008](adr/0008-parent-writes-the-cancelled-result.md)) changed, and the
+worker child takes its admission slot token only from `--admission-token`. The
+idle window ensures that a 9.0 worker never supervises or settles a child that
+an 8.x worker started.
 
-- Before upgrading, cancel or clear any pending or running row that belongs to
-  old workflow work: the new worker claims and runs it like any other row.
-- Leftover workflow trees under `runs_root` join the scans: `index rebuild`
-  records their ORCA job states and `queue list clear` removes the
-  `job_state.json` of their terminal runs. Move trees that must stay untouched
-  out of `runs_root` first.
-- 8.x never writes `workflow_id` into `admission_slots.json`, and the new version
-  rejects a slot row that carries it. Upgrading directly from 7.0.x therefore
-  needs an idle window with no reserved or active slots.
-- The `queue_generation` value in `job_state.json` is computed from the new
-  queue generation identity, which leaves out the queued-notification flag
-  (`orca_queued_notification_pending`) that 8.x counted. Every row that carries
-  the flag, nearly every row 8.x wrote, therefore gets a new token, and nothing
-  rewrites the values 8.x recorded
-  ([ADR 0006](adr/0006-one-generation-identity-for-token-and-fences.md)). A job
-  still running across an upgrade outside an idle window keeps its 8.x value:
-  `queue list` shows it without its run ID and `queue cancel <run ID>` cannot
-  find it, while `queue cancel <queue ID>` and `queue cancel <job directory>`
-  still work. This clears when the job finishes. Upgrade only in an idle window
-  (`active_simulations: 0` in `queue list --json`). Rolling back to 8.x needs
-  an idle window too: 8.x counts the flag again, so a job the new version
-  started that is still running shows the same effects in reverse.
-- `queue list` and `queue cancel` read `queue.json` and each row's own
-  `job_state.json` directly ([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)).
-  Replace `queue list --refresh` with `orca_auto index rebuild` followed by
-  `queue list`; a run state without a queue row is no longer listed. Scripts
-  that parse `queue cancel --json` read the outcome from `result.status` and
-  `result.reason`. After `service status --json` shows the new worker, the
-  unused `<runs_root>/.activity.sqlite3*` files,
-  `<runs_root>/.activity-query.lock` and `<runs_root>/.activity-dirty/` may be
-  removed by hand. Before rolling back to 8.x, delete every
-  `<runs_root>/.activity.sqlite3*` file, the database and its
-  `.activity.sqlite3-journal` alike, so that 8.x rebuilds the projection from
-  disk instead of trusting one this version did not update.
-- `scheduler.admission_root` is removed: admission state always lives in
-  `<runs_root>/.admission` and its limit is `scheduler.max_active_simulations`
-  ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)). A config that
-  still sets the key, including one that followed the 7.0 steps below with a
-  separate root, no longer loads. In the idle window, when `admission_slots.json`
-  holds no reserved or active slot (as `service restart` already requires),
-  delete the key before running the new `systemd install`, which loads the
-  config and stops with a one-line hint while the key is present. The old
-  directory may then be deleted. `ReadWritePaths` in the rendered unit names
-  only `runs_root`. `service restart` may then refuse, because the edited config
-  is newer than the worker's start or because
-  `<runs_root>/.admission/admission.lock` does not exist yet. After confirming
-  the host is idle, run `orca_auto service restart --force`, or stop and start
-  the service. Rolling back to 8.x needs no config change: 8.x uses the same
-  `<runs_root>/.admission` when the key is absent.
+Before the maintenance window:
+
+1. Cancel or clear every pending or running row that belongs to old workflow
+   work, and move workflow trees that must stay untouched out of `runs_root`
+   ([ADR 0005](adr/0005-remove-retired-workflow-support.md)). A directory that
+   holds `flow.yaml` or `workflow.json`, or lies under one, becomes an ordinary
+   directory: the new worker claims and runs its rows, `index rebuild` records
+   its ORCA job states and `queue list clear` removes the `job_state.json` of
+   its terminal runs.
+2. Update scripts ([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)).
+   Replace `queue list --refresh` with `orca_auto index rebuild` followed by
+   `queue list`; a run state without a queue row is no longer listed.
+   `queue cancel --json` reports its outcome in `result`, which is now
+   `{status, reason, queue_id, job_id, reaction_dir}` with `reason` one of
+   `target_not_found`, `ambiguous`, `already_terminal` and `cancel_failed`; a
+   target that names no row or several rows prints the whole document with
+   empty row fields. Journal filters that match a logger name follow the
+   renamed loggers listed in the CHANGELOG.
+
+In the idle window:
+
+3. Wait until `queue list --json` shows `active_simulations: 0` and
+   `admission_slots.json` in the configured admission store
+   (`scheduler.admission_root` if still set, else `<runs_root>/.admission`)
+   holds no reserved or active slot; `service restart` checks again under the
+   admission lock. A job still
+   running across the switch keeps its 8.x `queue_generation`: `queue list`
+   shows it without its run ID and `queue cancel <run ID>` cannot find it
+   until it finishes. Upgrading directly from 7.0.x also needs the empty slot
+   file, because the new version rejects a slot row that carries the retired
+   `workflow_id` field.
+4. Delete `scheduler.admission_root` from the config
+   ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)). Admission
+   state always lives in `<runs_root>/.admission` and its limit is
+   `scheduler.max_active_simulations`; a config that still sets the key,
+   including one that followed the 7.0 steps below with a separate root, no
+   longer loads. The old directory may then be deleted.
+5. Install the new version and reinstall its units as for any release: a new
+   environment or a [prepared runtime](RUNTIME.md), then
+   `orca_auto systemd install --user USER --repo <repo>`, which loads the
+   config and stops with a one-line hint while the removed key is present.
+   `ReadWritePaths` in the rendered unit names only `runs_root`. Restart under
+   the guard with `orca_auto service restart` and verify
+   `service status --json` against the running worker. The restart may refuse
+   because the edited config is newer than the worker's start or because
+   `<runs_root>/.admission/admission.lock` does not exist yet; after confirming
+   the host is idle, run `orca_auto service restart --force`, or stop and start
+   the service.
+
+After the switch:
+
+6. Run `orca_auto index rebuild` to record in `job_locations.json` the runs
+   that `queue list` no longer shows, including those under leftover workflow
+   trees.
+7. Once `service status --json` shows the new worker, the unused
+   `<runs_root>/.activity.sqlite3*` files, `<runs_root>/.activity-query.lock`
+   and `<runs_root>/.activity-dirty/` may be removed by hand.
+
+Rolling back to 8.x:
+
+- Roll back in an idle window too. 8.x counts the queued-notification flag in
+  `queue_generation` again, so a job the new version started that is still
+  running shows the same effects in reverse.
+- Before 8.x starts, delete every `<runs_root>/.activity.sqlite3*` file, the
+  database and its `.activity.sqlite3-journal` alike, so that 8.x rebuilds the
+  projection from disk instead of trusting one this version did not update.
+- The config needs no change: 8.x uses the same `<runs_root>/.admission` when
+  `scheduler.admission_root` is absent. Reinstall the 8.x units with its own
+  `systemd install` and restart through the same idle sequence.
 
 ## Upgrading to 8.0
 
