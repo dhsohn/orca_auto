@@ -76,7 +76,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 ## 4. 구조화된 관측 결과 (`machine.json`) 스키마
 
-계산이 완료되면 해당 generation 디렉터리에 다운스트림 도구(Chemvas, LLMdocx 등) 연동을 위한 구조화 데이터 파일 `machine.json`이 생성됩니다:
+계산이 완료되면 해당 generation 디렉터리에 다운스트림 도구(Chemvas, Chemleaf 등) 연동을 위한 구조화 데이터 파일 `machine.json`이 생성됩니다:
 
 - **메타데이터 래퍼 (Envelope)**: 공통 규격인 `factory/machine-observation` v1 메타데이터 스키마(Envelope)를 준수합니다.
 - **오퍼레이션 및 페이로드**: `chemistry/orca-run` 작업 식별자와 `chemistry/results-bundle` v1 페이로드를 포함합니다.
