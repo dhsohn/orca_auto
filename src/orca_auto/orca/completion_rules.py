@@ -109,17 +109,20 @@ class RouteFacts:
     is_opt: bool  # a non-TS optimization, partial ones (OptH, MECP-Opt, ...) included
     is_full_opt: bool  # an optimization of the full surface, which may claim a minimum
     is_relaxed_scan: bool  # an optimization with a %geom Scan block
+    has_constraints: bool
     is_non_stationary: bool  # a plain NEB / NEB-CI path or MD, no TS search
 
 
-def route_facts(inp_path: Path) -> RouteFacts:
-    """Read ``inp_path`` once and classify its route lines and scan block."""
-    lines = input_file_lines(inp_path)
+def route_facts(inp_path: Path, *, lines: list[str] | None = None) -> RouteFacts:
+    """Classify input routes and geometry settings, reusing verified lines when supplied."""
+    if lines is None:
+        lines = input_file_lines(inp_path)
     route_lines = tuple(orca_route_lines(lines))
     routes = " ".join(route_lines)
     ts_keywords = {match.group(1).upper() for match in TS_ROUTE_RE.finditer(routes)}
     is_ts = bool(ts_keywords)
     is_opt = is_optimization_route(routes)
+    has_constraints = _has_geometry_constraints(lines)
     return RouteFacts(
         inp_path=inp_path,
         route_lines=route_lines,
@@ -127,7 +130,9 @@ def route_facts(inp_path: Path) -> RouteFacts:
         is_irc=bool(IRC_ROUTE_RE.search(routes)),
         is_neb_ts="NEB-TS" in ts_keywords,
         is_opt=is_opt,
-        is_full_opt=is_full_optimization_route(routes) and not _has_geometry_constraints(lines),
+        is_full_opt=is_full_optimization_route(routes) and not has_constraints,
+        has_constraints=has_constraints
+        or bool(re.search(r"\bRIGIDBODYOPT\b", routes, re.IGNORECASE)),
         is_relaxed_scan=is_opt and scan_coordinate_rows(lines) is not None,
         # The NEB alternative also matches the NEB of NEB-TS, a TS route.
         is_non_stationary=not is_ts and bool(_NON_STATIONARY_ROUTE_RE.search(routes)),
@@ -136,18 +141,27 @@ def route_facts(inp_path: Path) -> RouteFacts:
 
 @dataclass
 class CompletionMode:
-    """What the completion analyzer verifies beyond a normal termination.
-
-    ``kind`` is ``"ts"`` for a TS route (OptTS, NEB-TS), whose completion also
-    needs exactly one imaginary mode, and ``"opt"`` for every other input,
-    single points and IRC included. ``require_irc`` records an IRC keyword;
-    only a ``"ts"`` verdict consults it.
-    """
+    """Requested work whose positive evidence the analyzer must verify."""
 
     kind: str
     require_irc: bool
+    require_frequency: bool = False
 
 
 def detect_completion_mode(inp_path: Path) -> CompletionMode:
-    route = route_facts(inp_path)
-    return CompletionMode(kind="ts" if route.is_ts else "opt", require_irc=route.is_irc)
+    return completion_mode(route_facts(inp_path))
+
+
+def completion_mode(route: RouteFacts) -> CompletionMode:
+    """Completion requirements from already-read input facts."""
+    # Only differences in completion requirements need a mode. IRC/Freq
+    # requirements are flags; detailed job labels remain in RouteFacts.
+    kind = "ts" if route.is_ts else "opt" if route.is_opt else "sp"
+    frequencies = bool(
+        re.search(r"\b(?:NUMFREQ|ANFREQ|FREQ)\b", " ".join(route.route_lines), re.IGNORECASE)
+    )
+    return CompletionMode(
+        kind=kind,
+        require_irc=route.is_irc,
+        require_frequency=route.is_ts or frequencies,
+    )

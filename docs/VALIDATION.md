@@ -72,3 +72,18 @@ combinations should not be collected as permanent skips.
 
 Tests do not update an installed runtime. Release publication and idle deployment
 require the separate checks in [RELEASE](RELEASE.md) and [RUNTIME](RUNTIME.md).
+
+## Scientific evidence regression fixtures
+
+The small H2, water and ammonia calculations in tests/fixtures/orca_6_1_1
+retain authentic inputs and complete ORCA 6.1.1 outputs, with SHA256 provenance.
+Literal expected energies, convergence and imaginary-mode counts supplement
+synthetic edge cases; SCF recovery sequencing currently has synthetic evidence
+only. These are parser regressions, not a fresh execution of the current runner.
+
+For the scientific-evidence change, the full repository and distribution gates
+are required. A new bounded real-engine run remains pending while both slots in
+the operational shared admission store are occupied. Do not bypass that limit.
+Historical reports remain untouched. The wheel-only systemd test renders and
+applies units to a temporary directory with injected systemctl; it does not
+restart the operational services.

@@ -18,7 +18,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 | `queue cancel TARGET` | 큐 ID, Run ID, 또는 모호하지 않은 작업 디렉터리 경로를 지정하여 작업을 취소합니다. 디렉터리 경로나 이름은 그 디렉터리의 활성 generation으로, 활성 generation이 없으면 가장 최근에 끝난 행으로 해석합니다. 서로 다른 디렉터리가 같은 이름을 쓰거나 활성 generation이 둘이면 모호한 대상으로 거부합니다. 큐 ID나 Run ID는 디렉터리 이름보다 우선하며, 현재 작업 디렉터리에 큐 행이 없는 같은 이름의 디렉터리가 있어도 모호한 대상으로 거부합니다. `--json`의 `result`는 `{status, reason, queue_id, job_id, reaction_dir}`이며, 실패하면 `reason`이 `target_not_found`, `ambiguous`, `already_terminal`, `cancel_failed` 중 하나인 채로 종료 코드 1을 반환하고 한 행을 특정하지 못하면 행 필드는 비워 둡니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 종료 코드 1을 반환합니다. |
 | `index prune` | 디스크에서 실제 경로가 삭제된 인덱스 항목을 확인합니다. `--apply` 플래그를 넘길 때만 정리합니다. |
 | `index rebuild` | `runs_root` 아래의 모든 `job_state.json`에서 `job_locations.json` 항목을 다시 유도합니다. 작업 ID 기준으로 추가·갱신만 하며 삭제하지 않습니다. `--dry-run`은 기록 없이 결과만 출력합니다. |
-| `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. 설정 파일이 존재하지만 읽을 수 없으면 유닛을 쓰지 않고 종료 코드 1을 반환하며, `TimeoutStopSec`은 `scheduler.max_active_simulations`에서 계산해 렌더링하고 `ReadWritePaths`에는 `runs_root`만 둡니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
+| `systemd install` | 지정한 사용자와 현재 가상환경, 또는 명시한 체크아웃·준비된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. 설정 파일이 존재하지만 읽을 수 없으면 유닛을 쓰지 않고 종료 코드 1을 반환하며, `TimeoutStopSec`은 `scheduler.max_active_simulations`에서 계산해 렌더링하고 `ReadWritePaths`에는 `runs_root`만 둡니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
 | `service status` | 등록된 유닛의 상태와 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지(freshness) 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 종료 코드 1(`--json`에서는 `ok: false`)을 반환합니다. |
 | `service restart` | 활성 계산이나 예약된 작업이 진행 중일 때는 중단을 방지하도록 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 사용합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
 | `scratch list` | `orca.runtime.scratch_root` 아래의 RAM scratch 워크스페이스 목록과, 비활성(non-live) 워크스페이스가 새 scratch 실행을 막고 있는지 표시합니다. 차단 항목이 있어도 종료 코드는 0이며 `--json`을 지원합니다. |
@@ -29,6 +29,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 - 종료 코드 0은 성공 또는 처리할 것이 없음, 1은 거부·실패·잘못된 명령, 2는 argparse 사용법 오류입니다. `sudo`/`systemctl`의 원래 종료 코드는 그대로 전달하지 않습니다.
 
 ### `run-dir` 세부 동작 규격
+- --input NAME.inp를 지정하면 작업 폴더 안의 입력을 명시적으로 선택합니다. 생략하면 아래 자동 선택을 유지합니다.
 - 디렉터리 내에서 가장 최근에 수정된 적합한 `.inp` 파일을 자동 선택하며, 수정 시각이 같으면 파일명 알파벳 순으로 결정합니다.
 - 입력 파일, 참조 좌표 파일(`.xyz`), ORCA 실행 바이너리 정보를 새로운 독립 실행 디렉터리(`generation`)에 격리하여 바인딩합니다.
 - 인식된 ORCA 파일 키워드(좌표 파일, `%moinp`, `%pointcharges`, ESD `GSHessian`/`ESHessian`을 포함한 Hessian 입력, NEB 끝점·재시작 경로)가 가리키는 파일은 generation에 함께 바인딩합니다. 그 밖의 키워드 값 중 따옴표로 감싼 파일 경로(절대 경로, `~`로 시작하는 경로, 슬래시 종류와 무관한 `./`·`../` 상대 경로, 파일 확장자가 있는 이름)는 접수 단계에서 `Unsupported ORCA file reference`로 거부합니다. ORCA가 쓰는 출력 파일 이름(`%plots` 파일 인자, `%md`의 `Filename`)은 경로 없는 파일 이름이어야 합니다.
@@ -80,7 +81,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 - **메타데이터 래퍼 (Envelope)**: 공통 규격인 `factory/machine-observation` v1 메타데이터 스키마(Envelope)를 준수합니다.
 - **오퍼레이션 및 페이로드**: `chemistry/orca-run` 작업 식별자와 `chemistry/results-bundle` v1 페이로드를 포함합니다.
 - **입력 출처**: 접수 당시 원본 식별 정보가 기록되어 있으면 `payload.data.results.execution_provenance_artifact`가 필수 artifact인 `execution-provenance`를 참조합니다(`execution_provenance.json`, `application/json`). 이 파일은 접수 당시 원본 입력·참조 파일, 실행 입력과 복사본, 확정된 자원 요청, 실행 파일, 장애 복구 시 이전 실행의 식별 정보를 보존합니다. `artifacts.input`은 실행용 `.inp`를 가리키며, 자원 지시어 보완과 참조 경로 변경으로 원본과 다를 수 있습니다. 출처 파일은 식별 정보 기록이며 원본 파일 내용의 보관본은 아닙니다. 이 파일 이름은 예약되어 있으므로 같은 이름의 참조 입력 파일은 실행 전에 거부합니다. 영수증은 원본 경로를 다시 열지 않고 어느 읽는 쪽이든 검증할 수 있고, generation 상태와의 일치는 릴리스 smoke가 확인합니다. 이 근거가 없는 과거 보고서는 그대로 읽을 수 있고 정보를 소급해서 채우지 않습니다. 종료 결과 발행·재처리도 당시 출처를 덮어쓰지 않습니다.
-- **결과 검증**: 프로세스 종료 코드(0)에만 의존하지 않고, ORCA 출력 로그의 정상 종료 배너(`ORCA TERMINATED NORMALLY`) 및 치명적 오류 마커 유무를 검사하여 완료(`completed`) 상태를 판정합니다(TS 계산의 경우 추가 stationary point 조건 검사). 이는 모든 수치적 속성의 수렴을 보장하는 것은 아니며, 예컨대 단일점 에너지 출력에 `SCF not fully converged!` 마커가 있을 경우 해당 에너지 필드는 미검증 값 대신 `null`로 생략됩니다. 추출된 화학적 속성은 검증된 근거만을 반영합니다.
+- **결과 검증**: 완료에는 정상 종료, 해결되지 않은 오류의 부재, 유한한 최종 에너지가 필요합니다. Opt/TS는 명시적 최적화 수렴, 요청한 Freq는 최종 진동수 섹션을 추가로 요구합니다. SCF 미수렴 주석이 붙은 에너지는 null이며 성공 근거로 쓰지 않습니다. 자세한 조건과 측정하지 않은 값의 의미는 아래 과학적 근거 규격을 따릅니다.
 - **도구의 역할 및 범위**: ORCA_auto는 계산 런타임 실행 제어와 구조화된 데이터 추출을 맡으며, 화학적 입력 구성과 결과 해석은 사용자가 수행합니다.
 
 ---
@@ -89,3 +90,34 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 - **독립 ORCA 작업만 지원**: conformer 탐색 오케스트레이션, scaffold, 내장 xTB/CREST 엔진은 7.0에서 제거되었습니다([7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)).
 - **남은 워크플로우 파일은 의미가 없음**: `flow.yaml`이나 `workflow.json`이 있는 디렉터리와 그 하위 디렉터리는 `run-dir`, 워커, `queue cancel`, `queue list clear`, 정리 작업, `index rebuild`에서 일반 디렉터리로 취급합니다. 큐 항목 메타데이터의 `workflow_id`는 무시하며, `workflow_id`가 있는 `admission_slots.json` 항목은 손상된 기록으로 거부합니다([ADR 0005](adr/0005-remove-retired-workflow-support.md)).
+
+## 과학적 근거와 호환성
+
+완료에는 정상 종료, 해결되지 않은 오류의 부재, 유한한 최종 단일점 에너지가
+필요합니다. Opt/TS는 마지막 최적화 수렴 판정을, 요청한 Freq는 최종 진동수
+섹션을 추가로 요구합니다. 나중의 명시적 SCF 수렴은 앞선 SCF 실패를 해소합니다.
+근거 누락은 incomplete 분석과 failed 실행으로 남으며 자동 재시도하지 않습니다.
+
+새 machine 관측은 공통 v1 엔벨로프를 바꾸지 않고 payload.data.results.science를
+추가합니다. 필드는 status (verified/unknown/failed), reason, energy_hartree,
+scf_converged, optimization_converged, frequencies_available,
+imaginary_frequency_count, geometry_scope, stationary_point, output_artifact와
+에너지/SCF/최적화의 1-based evidence_lines입니다. 측정하지 않은 값은 null이며,
+진동수 섹션이 없을 때 허수 진동수 개수도 null입니다. 분석한 바이트는 입력·출력
+artifact 영수증과 일치해야 합니다. 실패 실행은 verified science를 게시할 수 없고
+과학 근거가 부족하면 성공 handoff를 차단합니다.
+
+minimum은 제약 없는 전체 Opt와 허수 진동수 0개, first_order_saddle은 제약 없는
+TS 최적화와 정확히 1개를 요구합니다. 이는 관측한 국소 조화 근거이며 전역 안정성의
+보장이 아닙니다. 제약 구조, SP 단독, 경로 계산의 정상점은 unverified입니다.
+현재 IRC 근거는 드라이버/경로 요약의 존재이며 전체 경로 수렴 검증이 아닙니다.
+MD, NEB와 compound/multi-job 출력은 완전한 과학적 검증 범위에 포함되지 않습니다.
+unknown을 0 또는 true로 해석하면 안 됩니다.
+
+과거 terminal 관측은 불변이며 science가 없을 수 있습니다. 소비자는 필드 존재와
+검증 상태를 확인해야 하며 과거 성공을 소급해 확정하면 안 됩니다. 공개 JSON 추가는
+기존 필드 이름·의미, CLI 기본값과 공통 엔벨로프를 유지합니다. 파괴적 제거에는 ADR,
+마이그레이션 안내와 메이저 릴리스가 필요합니다. 패키지 분류는 Beta이며 실제
+acceptance 검증 범위는 현재 ORCA 6.1.1입니다.
+
+systemd install에서 --repo를 생략하면 현재 격리된 가상환경과 패키지 템플릿을 사용합니다. --repo는 체크아웃 또는 준비된 런타임을 명시할 때 선택적으로 사용합니다.

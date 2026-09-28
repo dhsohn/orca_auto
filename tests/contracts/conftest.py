@@ -103,7 +103,6 @@ VIBRATIONAL FREQUENCIES
      7:    4140.20 cm**-1
      8:    4391.40 cm**-1
 
-FINAL SINGLE POINT ENERGY       -74.965995310
 TOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds 0 msec
                              ****ORCA TERMINATED NORMALLY****
 EOF

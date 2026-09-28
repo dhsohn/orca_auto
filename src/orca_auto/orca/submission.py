@@ -167,7 +167,16 @@ def resolve_submission_target(args: Any, *, cfg: AppConfig) -> SubmissionTarget 
             raise ValueError(
                 f"Job directory must be under allowed root: {allowed_root}. got={reaction_dir}"
             )
-        selected_inp = select_latest_inp(reaction_dir)
+        input_name = getattr(args, "input", None)
+        if input_name is None:
+            selected_inp = select_latest_inp(reaction_dir)
+        else:
+            name = Path(input_name)
+            if name.name != input_name or name.suffix.lower() != ".inp":
+                raise ValueError("--input must name a .inp file directly inside the job directory")
+            selected_inp = require_confined_regular_file(
+                reaction_dir, reaction_dir / name, label="ORCA selected input"
+            )
     except ValueError as exc:
         logger.error("%s", exc)
         return None

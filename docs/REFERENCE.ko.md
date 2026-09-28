@@ -24,13 +24,15 @@ orca_auto init [--config PATH] [--force]
 ### `orca_auto run-dir`
 지정된 디렉터리의 ORCA 입력 파일을 검증하고 큐에 영속적으로 제출합니다.
 ```bash
-orca_auto run-dir <PATH> [--config PATH] [--force] [--priority N] [--json]
+orca_auto run-dir <PATH> [--input NAME.inp] [--config PATH] [--force] [--priority N] [--json]
 ```
 - `<PATH>`: ORCA 입력 파일(`.inp`)이 위치한 디렉터리 경로
 - `--force`: 이미 완료된 성공 기록이 있더라도 새 generation을 생성하여 강제 재실행
 - `--priority N`: 큐 내 우선순위 지정 (기본값: 10, 낮을수록 먼저 실행 / 높은 우선순위)
 - `--json`: 제출 결과를 JSON 형식으로 출력
 - 설정 파일을 읽을 수 없거나(`invalid_config`) `queue.json`이 손상되었을 때(`queue_store_corrupt`) `--log-file`을 지정했더라도 `error:` 한 줄과 종료 코드 1로 보고합니다.
+
+--input NAME.inp는 작업 폴더 안의 입력을 명시적으로 선택합니다. 경로와 심볼릭 링크는 거부합니다. 생략하면 기존 최신 수정 파일 선택을 유지합니다.
 
 ---
 

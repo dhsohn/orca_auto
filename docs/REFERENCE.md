@@ -24,13 +24,15 @@ orca_auto init [--config PATH] [--force]
 ### `orca_auto run-dir`
 Validates an ORCA input directory and enqueues it atomically.
 ```bash
-orca_auto run-dir <PATH> [--config PATH] [--force] [--priority N] [--json]
+orca_auto run-dir <PATH> [--input NAME.inp] [--config PATH] [--force] [--priority N] [--json]
 ```
 - `<PATH>`: Target directory containing an ORCA `.inp` file.
 - `--force`: Force resubmission in a new generation even if an earlier attempt succeeded.
 - `--priority N`: Queue scheduling priority (default: 10; lower values = higher priority, run earlier).
 - `--json`: Output submission metadata in structured JSON format.
 - A config that does not load (`invalid_config`) or a corrupt `queue.json` (`queue_store_corrupt`) is reported as one `error:` line with exit 1, also with `--log-file`.
+
+--input NAME.inp explicitly selects an input within the job directory. Paths and symlinks are rejected. Omitting it preserves selection by most recent modification time.
 
 ---
 

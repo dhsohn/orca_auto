@@ -70,7 +70,12 @@
           "geom_not_converged": false,
           "last_opt_converged": true,
           "total_run_time_seen": true,
-          "final_frequency_section": false
+          "final_frequency_section": true,
+          "energy_hartree": -74.96599531,
+          "scf_converged": null,
+          "energy_line": 14,
+          "optimization_line": 16,
+          "scf_line": null
         },
         "patch_actions": [],
         "started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
@@ -87,12 +92,12 @@
         "executable_identity": {
           "path": "<tmp>/bin/fake_orca",
           "sha256": "<sha256:2>",
-          "size_bytes": 1789
+          "size_bytes": 1743
         },
         "output_identity": {
           "path": "<tmp>/runs/resubmit/<generation:1>/h2o.out",
           "sha256": "<sha256:4>",
-          "size_bytes": 1404
+          "size_bytes": 1358
         }
       }
     ],
@@ -128,7 +133,7 @@
       "executable_identity": {
         "path": "<tmp>/bin/fake_orca",
         "sha256": "<sha256:2>",
-        "size_bytes": 1789
+        "size_bytes": 1743
       }
     },
     "final_result": {

@@ -237,7 +237,10 @@ def test_argparse_surface() -> None:
 def _unit_repo(tmp_path: Path) -> tuple[Path, Path]:
     """A checkout with unit templates, a venv python and a fixed config."""
     repo = tmp_path / "orca_auto"
-    shutil.copytree(_REPO_ROOT / "systemd", repo / "systemd")
+    shutil.copytree(
+        _REPO_ROOT / "src" / "orca_auto" / "systemd_templates",
+        repo / "src" / "orca_auto" / "systemd_templates",
+    )
     python = repo / ".venv" / "bin" / "python"
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/sh\n", encoding="utf-8")

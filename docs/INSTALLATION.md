@@ -11,7 +11,7 @@ ORCA_auto is a queue runner and execution manager for ORCA on Linux and WSL2.
 - **Operating System**: Linux or WSL2 (Ubuntu 20.04 LTS or newer recommended)
 - **Python**: 3.11+
 - **Service Manager**: `systemd` (for supervised background execution)
-- **ORCA Engine**: Separately installed ORCA executable (compatible with ORCA 5.x and 6.x)
+- **ORCA Engine**: Separately installed ORCA executable (acceptance-tested with ORCA 6.1.1; other versions are unverified)
 
 > **Upgrading**: If you are upgrading from 6.x or earlier, consult the [7.0 Upgrade Guide](RELEASE.md#upgrading-to-70).
 
@@ -46,15 +46,13 @@ orca_auto init --config ~/orca_auto.yaml
 ```
 
 ### Background Execution with systemd
-To supervise workers in the background, register systemd worker units. The installer requires `--repo` pointing to either a local repository checkout (containing `.venv`) or a prepared runtime root:
 
-```bash
-# Register systemd worker units for the current user (from checkout or prepared runtime)
-orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
+The installed package includes service templates. Run the following from the activated virtual environment to bind its Python without cloning a repository. To select a source checkout or prepared runtime, keep using --repo PATH.
 
-# Verify worker and runtime status
+~~~bash
+orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
 orca_auto service status
-```
+~~~
 
 > **Note**: For interactive sessions or direct command-line use without systemd, you can enqueue jobs with `orca_auto run-dir` and run the supervisor in the foreground via `orca_auto queue worker`.
 

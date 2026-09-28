@@ -180,7 +180,9 @@ def main() -> int:
     )
     parser.add_argument("--releases-root", type=Path, required=True)
     parser.add_argument(
-        "--templates", type=Path, default=Path(__file__).resolve().parents[1] / "systemd"
+        "--templates",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "src" / "orca_auto" / "systemd_templates",
     )
     args = parser.parse_args()
     try:

@@ -20,7 +20,7 @@ from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.types import AttemptRecord
 from tests.conftest import make_run_context
 
-_COMPLETED_OUT = "****ORCA TERMINATED NORMALLY****\n"
+_COMPLETED_OUT = "FINAL SINGLE POINT ENERGY -1.1\n****ORCA TERMINATED NORMALLY****\n"
 
 
 def _must_not_launch(_runner: OrcaRunner, inp_path: Path) -> Any:

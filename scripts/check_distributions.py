@@ -231,11 +231,15 @@ def _prepared_runtime_smoke(core: Path, wheelhouse: Path, *, work: Path) -> None
     assert len(yaml_wheels) == 1
     wheels = [core, *yaml_wheels]
     root = prepare_runtime(
-        wheels=wheels, releases_root=work / "releases", templates=REPO_ROOT / "systemd"
+        wheels=wheels,
+        releases_root=work / "releases",
+        templates=REPO_ROOT / "src" / "orca_auto" / "systemd_templates",
     )
     assert (
         prepare_runtime(
-            wheels=wheels, releases_root=work / "releases", templates=REPO_ROOT / "systemd"
+            wheels=wheels,
+            releases_root=work / "releases",
+            templates=REPO_ROOT / "src" / "orca_auto" / "systemd_templates",
         )
         == root
     )
@@ -404,6 +408,24 @@ def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
     return machines[0]
 
 
+def _installed_service_plan(python: Path, *, work: Path) -> None:
+    """The wheel alone renders a usable service from an unrelated directory."""
+    code = """
+    import pathlib, pwd, sys
+    from orca_auto.systemd_plan import build_systemd_install_plan
+    root = pathlib.Path(sys.argv[1])
+    plan = build_systemd_install_plan(
+        target_user=pwd.getpwuid(__import__('os').getuid()).pw_name,
+        repo=None, config=root / 'fake-worker' / 'config.yaml',
+        unit_dir=root / 'dry-run-units', no_enable=True, no_start=True, no_sudo=True)
+    assert plan.python_path == pathlib.Path(sys.executable)
+    service = next(unit for unit in plan.units if unit.name.endswith('.service'))
+    assert str(sys.executable) + ' -I -m orca_auto.cli queue worker' in service.content
+    assert not plan.unit_dir.exists()
+    """
+    _run([str(python), "-I", "-c", textwrap.dedent(code), str(work)], cwd=work)
+
+
 def run_matrix(work: Path) -> dict[str, object]:
     print(f"[distributions] retained workspace: {work}", flush=True)
     with (REPO_ROOT / "pyproject.toml").open("rb") as source:
@@ -443,6 +465,7 @@ def run_matrix(work: Path) -> dict[str, object]:
     _wheel_config_default(python, work / "wheel-config-home", cwd=work)
     _prepared_runtime_smoke(wheel, wheelhouse, work=work)
     machine = _fake_orca(python, work / "fake-worker", package=package)
+    _installed_service_plan(python, work=work)
     # A second fresh environment proves the source archive independently
     # rebuilds an installable distribution without the original checkout.
     rebuilt_python = _new_environment(work / "rebuilt-installed", wheelhouse, cwd=work)

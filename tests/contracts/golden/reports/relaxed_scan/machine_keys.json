@@ -46,11 +46,15 @@
     "status": "str"
   },
   "handoff": {
-    "codes": [],
+    "codes": [
+      "str"
+    ],
     "status": "str"
   },
   "lifecycle": {
-    "codes": [],
+    "codes": [
+      "str"
+    ],
     "outcome": "str",
     "phase": "str"
   },
@@ -84,6 +88,23 @@
         "resumed": "bool",
         "run_id": "str",
         "runner_error": "str",
+        "science": {
+          "energy_hartree": "NoneType",
+          "evidence_lines": {
+            "energy": "NoneType",
+            "optimization": "NoneType",
+            "scf": "NoneType"
+          },
+          "frequencies_available": "bool",
+          "geometry_scope": "str",
+          "imaginary_frequency_count": "int",
+          "optimization_converged": "NoneType",
+          "output_artifact": "str",
+          "reason": "str",
+          "scf_converged": "NoneType",
+          "stationary_point": "str",
+          "status": "str"
+        },
         "skipped_execution": "bool"
       },
       "summary": {

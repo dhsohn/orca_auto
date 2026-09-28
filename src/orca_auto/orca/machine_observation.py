@@ -38,8 +38,10 @@ from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils import normalize_text
 
+from .completion_rules import completion_mode, route_facts
+from .out_analyzer import analyze_output
 from .state_reading import normalized_text
-from .statuses import ACTIVE_RUN_STATUS_VALUES, RunStatus
+from .statuses import ACTIVE_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
 
 MACHINE_CONTRACT_NAME = "factory/machine-observation"
 MACHINE_CONTRACT_VERSION = 1
@@ -253,6 +255,99 @@ def report_result_fields(
     return summary, results
 
 
+def _scientific_results(
+    generation_dir: Path,
+    artifacts: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Facts from the same receipted input/output used for execution and reporting.
+
+    Missing measurements remain null. Execution success and stationary-point
+    characterization are separate: an Opt without Freq proves no minimum.
+    """
+    data: dict[str, Any] = {
+        "status": "unknown",
+        "reason": "evidence_unavailable",
+        "energy_hartree": None,
+        "scf_converged": None,
+        "optimization_converged": None,
+        "frequencies_available": False,
+        "imaginary_frequency_count": None,
+        "geometry_scope": None,
+        "stationary_point": "unverified",
+        "output_artifact": None,
+        "evidence_lines": {},
+    }
+    inp, out = artifacts.get("input", {}), artifacts.get("orca-output", {})
+    if inp.get("status") != "available" or out.get("status") != "available":
+        return data
+    inp_path = generation_dir / str(inp["path"])
+    out_path = generation_dir / str(out["path"])
+    try:
+        raw_input = inp_path.read_bytes()
+        if (
+            len(raw_input) != inp["bytes"]
+            or hashlib.sha256(raw_input).hexdigest() != inp["byte_sha256"]
+        ):
+            return data
+        route = route_facts(
+            inp_path, lines=raw_input.decode("utf-8", errors="replace").splitlines()
+        )
+        if not route.route_lines:
+            return data
+        output_digest = ReceiptDigest()
+        analysis = analyze_output(
+            out_path, completion_mode(route), byte_observer=output_digest.update
+        )
+        if output_digest.size != out["bytes"] or output_digest.hexdigest() != out["byte_sha256"]:
+            return data
+    except OSError:
+        return data
+    markers = analysis.markers
+    if analysis.status == AnalyzerStatus.COMPLETED:
+        status = "verified"
+    elif analysis.status == AnalyzerStatus.INCOMPLETE:
+        status = "unknown"
+    else:
+        status = "failed"
+
+    if route.is_ts:
+        geometry_scope = "partial" if route.has_constraints else "transition_state"
+    elif route.is_relaxed_scan or route.is_irc or route.is_non_stationary:
+        geometry_scope = "path"
+    elif route.is_full_opt:
+        geometry_scope = "full"
+    elif route.is_opt:
+        geometry_scope = "partial"
+    else:
+        geometry_scope = "single_point"
+    frequency_available = markers["final_frequency_section"]
+    imaginary = markers["imaginary_frequency_count"] if frequency_available else None
+    stationary = "unverified"
+    if status == "verified" and frequency_available:
+        if geometry_scope == "full" and imaginary == 0:
+            stationary = "minimum"
+        elif geometry_scope == "transition_state" and imaginary == 1:
+            stationary = "first_order_saddle"
+    data.update(
+        status=status,
+        reason=analysis.reason,
+        energy_hartree=markers["energy_hartree"],
+        scf_converged=markers["scf_converged"],
+        optimization_converged=markers["last_opt_converged"],
+        frequencies_available=frequency_available,
+        imaginary_frequency_count=imaginary,
+        geometry_scope=geometry_scope,
+        stationary_point=stationary,
+        output_artifact="orca-output",
+        evidence_lines={
+            "energy": markers["energy_line"],
+            "scf": markers["scf_line"],
+            "optimization": markers["optimization_line"],
+        },
+    )
+    return data
+
+
 def _receipt(
     generation_dir: Path, artifact_id: str, candidate: Path | None, *, required: bool
 ) -> dict[str, Any]:
@@ -309,6 +404,15 @@ def build_machine_observation(
             required=True,
         )
 
+    science = _scientific_results(generation_dir, artifacts)
+    if outcome != "succeeded" and science["status"] == "verified":
+        science["status"] = "unknown"
+        science["reason"] = reason or "operation_not_succeeded"
+        science["stationary_point"] = "unverified"
+    result_details["science"] = science
+    if outcome == "succeeded" and science["status"] != "verified":
+        outcome = "uncertain" if science["status"] == "unknown" else "failed"
+        reason = str(science["reason"])
     complete = required_delivery_complete(artifacts)
     if phase != "finished":
         handoff_status = "pending"

@@ -18,7 +18,7 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 | `queue cancel TARGET` | Cancels a job by queue ID, run ID, or unambiguous directory path alias. A directory path or name resolves to that directory's active generation, or to its newest finished row when none is active; a name shared by different directories, or two active generations, is ambiguous. A queue ID or run ID wins over a directory name, and a name that is an existing directory in the working directory without a queue row of its own is ambiguous too. Under `--json`, `result` is `{status, reason, queue_id, job_id, reaction_dir}`; a failure exits 1 with `reason` `target_not_found`, `ambiguous`, `already_terminal` or `cancel_failed`, and the row fields stay empty when no single row was named. Exits 1 without a discoverable config or an existing `runs_root`. |
 | `index prune` | Previews indexed rows whose disk paths no longer exist. Removes them only when `--apply` is passed. |
 | `index rebuild` | Re-derives `job_locations.json` rows from every `job_state.json` under `runs_root`, adding or updating rows by job id and never removing one. `--dry-run` reports without writing. |
-| `systemd install` | Installs systemd unit templates for the specified user and repository or prepared runtime root (`--repo`). A config that exists but does not load exits 1 and writes no units; `TimeoutStopSec` is rendered from `scheduler.max_active_simulations` and `ReadWritePaths` names only `runs_root`. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
+| `systemd install` | Installs systemd unit templates for the specified user and current virtual environment, or an explicit checkout/prepared runtime (`--repo`). A config that exists but does not load exits 1 and writes no units; `TimeoutStopSec` is rendered from `scheduler.max_active_simulations` and `ReadWritePaths` names only `runs_root`. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
 | `service status` | Inspects systemd units and verifies worker process freshness against the checkout HEAD or the installed runtime build. Exits 1 (`ok: false` under `--json`) when a unit is unhealthy or a worker is stale or undetermined. |
 | `service restart` | Refuses restart if active calculations or reservations exist, preventing accidental data loss. Use `--force` to bypass. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
 | `scratch list` | Lists RAM-scratch workspaces under `orca.runtime.scratch_root` and whether any non-live workspace blocks new scratch launches. Exits 0 even when blockers exist; supports `--json`. |
@@ -29,6 +29,7 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 - Exit code 0 means success or nothing to do; 1 means the command was refused, failed or was invalid; 2 is an argparse usage error. Raw exit codes of `sudo`/`systemctl` are never passed through.
 
 ### `run-dir` Behavior
+- --input NAME.inp selects a confined regular input within the job directory; omission preserves automatic selection below.
 - Automatically detects the most recently modified eligible `.inp` file in the target directory (ties broken alphabetically by filename).
 - Binds inputs, referenced coordinate files, and the verified ORCA executable into a fresh execution generation.
 - Files named by recognized ORCA file keywords (coordinate files, `%moinp`, `%pointcharges`, Hessian inputs including ESD `GSHessian`/`ESHessian`, NEB endpoint and restart paths) are bound into the generation. Any other quoted keyword value that looks like a file path (absolute, starting with `~`, `./` or `../` relative with either slash, or with a filename extension) is rejected at submission with `Unsupported ORCA file reference`. File names ORCA writes (`%plots` file arguments, a `%md` `Filename`) must be plain basenames.
@@ -80,7 +81,7 @@ Upon completion, each job publishes a structured `machine.json` artifact in its 
 - **Envelope Schema**: Conforms to the standard `factory/machine-observation` v1 contract.
 - **Operation & Payload**: Emits `chemistry/orca-run` with a `chemistry/results-bundle` v1 payload.
 - **Input Provenance**: When submission source identities are recorded, `payload.data.results.execution_provenance_artifact` references the required `execution-provenance` artifact (`execution_provenance.json`, `application/json`). It preserves the captured original input/dependency identities, bound input and materialized-copy identities, resolved resource request, executable identity and any crash-recovery origin. `artifacts.input` refers to the execution `.inp`, which can differ from the original after resource normalization and reference rewriting. The provenance file records identities, not an archive of original file contents. Its filename is reserved; referenced input files with that basename are rejected before execution. Any reader can verify its receipt without reopening source paths; the release smoke checks agreement with generation state. Historical reports lacking this evidence remain readable and are not backfilled; terminal publication and replay do not rewrite it.
-- **Verification**: Completion (`completed`) verifies normal termination (`ORCA TERMINATED NORMALLY`) without detected fatal crash markers (and for TS calculations, satisfies mode-specific stationary point criteria). It does not guarantee that every numerical property converged; for example, if the final single-point energy line is annotated `SCF not fully converged!`, energy fields are omitted (`null`) rather than populated with unverified numbers. Extracted chemical properties (energies, stationary points, electronic states) reflect verified evidence without synthetic defaults.
+- **Verification**: Completion requires normal termination, no unresolved failure and finite final energy. Opt/TS additionally require explicit optimization convergence, and requested Freq requires a final frequency section. An energy annotated with SCF nonconvergence is null and cannot establish success. The scientific-evidence contract below defines the detailed conditions and missing measurements.
 - **Scope Boundary**: ORCA_auto supervises process lifecycle and structures output artifacts; scientific acceptance and chemical validity remain the researcher's responsibility.
 
 ---
@@ -89,3 +90,37 @@ Upon completion, each job publishes a structured `machine.json` artifact in its 
 
 - **Standalone ORCA only**: Conformer search orchestration, scaffolds and the internal xTB/CREST engines were removed in 7.0 ([7.0 Upgrade Guide](RELEASE.md#upgrading-to-70)).
 - **Leftover workflow files have no meaning**: A directory that holds `flow.yaml` or `workflow.json`, or lies under one, is an ordinary directory for `run-dir`, the worker, `queue cancel`, `queue list clear`, cleanup and `index rebuild`. A queue row's `workflow_id` metadata is ignored, and an `admission_slots.json` row carrying `workflow_id` is rejected as corrupt ([ADR 0005](adr/0005-remove-retired-workflow-support.md)).
+
+## Scientific evidence and compatibility
+
+Completion requires normal termination, no unresolved failure and a finite final
+single-point energy. Opt/TS additionally require an explicit final optimization
+convergence verdict; requested Freq requires a final frequency section. A later
+explicit SCF convergence clears an earlier SCF failure. Missing evidence returns
+an incomplete analysis and a failed run; no retry or inferred success occurs.
+
+New machine observations add payload.data.results.science without changing the
+common v1 envelope: status (verified/unknown/failed), reason, energy_hartree,
+scf_converged, optimization_converged, frequencies_available,
+imaginary_frequency_count, geometry_scope, stationary_point, output_artifact and
+one-based evidence_lines for energy/SCF/optimization. Missing measurements are
+null, including the imaginary count when no frequency section exists. Parsed
+bytes must match the input/output artifact receipts. A non-successful operation
+cannot produce verified science; insufficient science blocks successful handoff.
+
+A minimum requires an unconstrained full Opt and zero imaginary frequencies;
+a first_order_saddle requires an unconstrained TS optimization and exactly one.
+These labels describe the observed local harmonic evidence, not global stability.
+Constrained geometries, SP-only jobs and paths remain unverified stationary
+points. IRC evidence currently proves driver/path-summary presence, not complete
+path convergence. MD, NEB and compound/multi-job outputs are not covered by full
+scientific validation. Unknown data must never be interpreted as zero or true.
+
+Historical terminal observations remain immutable and can lack science. Consumers
+must check field presence and verification status rather than backfill historical
+success. Public JSON additions are additive; existing field names and meanings,
+CLI defaults and the common envelope remain stable. Breaking removals require an
+ADR, migration instructions and a major release. The package classifier is Beta;
+acceptance evidence currently covers ORCA 6.1.1 only.
+
+Omitting --repo from systemd install selects the current isolated virtual environment and packaged templates. An explicit --repo selects a checkout or prepared runtime.

@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypedDict
 
 from .completion_rules import CompletionMode
-from .frequencies import frequency_values, is_imaginary_frequency, scan_frequency_sections
+from .frequencies import scan_frequency_sections
 from .output_status import (
     is_execution_output_line,
     optimization_convergence_line,
+    scf_convergence_line,
     termination_line,
 )
 from .parser.io import open_orca_text
+from .parser.patterns import FINAL_SINGLE_POINT_ENERGY_RE, final_single_point_energy_value
 from .statuses import AnalyzerStatus
 
 logger = logging.getLogger(__name__)
@@ -53,12 +55,14 @@ class OutMarkers(TypedDict):
     geom_not_converged: bool
     last_opt_converged: bool | None
     total_run_time_seen: bool
-    # True when ``imaginary_frequency_count`` is a verdict on the final
-    # geometry: it was counted in a frequency section not followed by another
-    # final single point energy and the analyzer reached the TS criteria.
-    # False for a superseded-only output, for the legacy whole-file count,
-    # for non-TS modes, and for runs that ended in a geometry or SCF failure.
+    # Whether the count comes from the final frequency section. This is
+    # observed evidence, not by itself a successful calculation or a minimum.
     final_frequency_section: bool
+    energy_hartree: float | None
+    scf_converged: bool | None
+    energy_line: int | None
+    optimization_line: int | None
+    scf_line: int | None
 
 
 # Evidence that ORCA's IRC driver ran. The analyzer looks for the upper-case
@@ -73,7 +77,6 @@ IRC_PATH_SUMMARY_RE = re.compile(r"\bIRC\s+PATH\s+SUMMARY\b", re.IGNORECASE)
 _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     ("total_run_time_seen", ("TOTAL RUN TIME",)),
     ("irc_marker_found", IRC_PATH_FOUND_NEEDLES),
-    ("scf_error", ("SCF NOT CONVERGED", "SCF CONVERGENCE FAILED")),
     ("scfgrad_abort", ("ORCA FINISHED BY ERROR TERMINATION IN SCF GRADIENT",)),
     ("disk_io_error", ("COULD NOT WRITE TO DISK", "NO SPACE LEFT ON DEVICE")),
     ("ts_failure_marker", ("NO ACCEPTABLE TS", "FAILED TO FIND TS")),
@@ -117,13 +120,36 @@ def _default_markers(out_path: Path) -> OutMarkers:
         "last_opt_converged": None,
         "total_run_time_seen": False,
         "final_frequency_section": False,
+        "energy_hartree": None,
+        "scf_converged": None,
+        "energy_line": None,
+        "optimization_line": None,
+        "scf_line": None,
     }
 
 
-def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
+def _scan_line_for_markers(line: str, markers: OutMarkers, line_number: int) -> None:
     if not is_execution_output_line(line):
         return
     upper = line.upper()
+    scf = scf_convergence_line(line)
+    if scf is not None:
+        markers["scf_converged"] = scf
+        markers["scf_error"] = not scf
+        markers["scf_line"] = line_number
+    if upper.lstrip().startswith("FINAL SINGLE POINT ENERGY"):
+        markers["energy_hartree"] = None
+        markers["energy_line"] = line_number
+        match = FINAL_SINGLE_POINT_ENERGY_RE.fullmatch(line.rstrip("\r\n"))
+        if match is not None and match.group(2) is None:
+            try:
+                markers["energy_hartree"] = final_single_point_energy_value(match.group(1))
+            except ValueError:
+                pass
+        elif match is not None:
+            markers["scf_converged"] = False
+            markers["scf_error"] = True
+            markers["scf_line"] = line_number
     normal, error = termination_line(line)
     markers["terminated_normally"] |= normal
     markers["generic_error_termination"] |= error
@@ -136,6 +162,7 @@ def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
     verdict = optimization_convergence_line(line)
     if verdict is not None:
         markers["last_opt_converged"] = verdict
+        markers["optimization_line"] = line_number
         if verdict:
             markers["opt_converged"] = True
         else:
@@ -147,8 +174,8 @@ def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
 
 def _marked_lines(lines: Iterable[str], markers: OutMarkers) -> Iterator[str]:
     """``lines`` passed through unchanged, each scanned for the diagnostic markers."""
-    for line in lines:
-        _scan_line_for_markers(line, markers)
+    for line_number, line in enumerate(lines, start=1):
+        _scan_line_for_markers(line, markers, line_number)
         yield line
 
 
@@ -172,8 +199,27 @@ def _interpret_markers(markers: OutMarkers, mode: CompletionMode) -> OutAnalysis
         )
 
     if markers["terminated_normally"]:
+        missing = ""
+        if markers["energy_hartree"] is None:
+            missing = "energy_evidence_missing"
+        elif mode.kind in {"opt", "ts"} and markers["last_opt_converged"] is not True:
+            missing = "optimization_evidence_missing"
+        elif (mode.require_frequency or mode.kind == "ts") and not markers[
+            "final_frequency_section"
+        ]:
+            missing = "frequency_evidence_missing"
+        elif mode.require_irc and not markers["irc_marker_found"]:
+            missing = "irc_evidence_missing"
+        if missing:
+            return OutAnalysis(status=AnalyzerStatus.INCOMPLETE, reason=missing, markers=markers)
         if mode.kind == "ts":
-            return _interpret_ts_completion(markers, mode)
+            if markers["imaginary_frequency_count"] != 1:
+                return OutAnalysis(
+                    status=AnalyzerStatus.TS_NOT_FOUND, reason="ts_criteria_failed", markers=markers
+                )
+            return OutAnalysis(
+                status=AnalyzerStatus.COMPLETED, reason="ts_criteria_met", markers=markers
+            )
         return OutAnalysis(
             status=AnalyzerStatus.COMPLETED, reason="normal_termination", markers=markers
         )
@@ -210,57 +256,9 @@ def _marker_error_analysis(markers: OutMarkers) -> OutAnalysis | None:
     return None
 
 
-def _interpret_ts_completion(markers: OutMarkers, mode: CompletionMode) -> OutAnalysis:
-    imag_ok = markers["imaginary_frequency_count"] == 1
-    irc_ok = (not mode.require_irc) or bool(markers["irc_marker_found"])
-    if imag_ok and irc_ok:
-        return OutAnalysis(
-            status=AnalyzerStatus.COMPLETED, reason="ts_criteria_met", markers=markers
-        )
-    return OutAnalysis(
-        status=AnalyzerStatus.TS_NOT_FOUND, reason="ts_criteria_failed", markers=markers
-    )
-
-
-def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
-    """Imaginary modes of the frequency section that verifies the final geometry.
-
-    ORCA prints a ``VIBRATIONAL FREQUENCIES`` section for every Hessian it
-    computes, including the initial and recalculated Hessians of an ``OptTS``
-    run. A section followed by another final single point energy belongs to an
-    earlier geometry and verifies nothing; only a section after the last final
-    energy counts. Section selection, the frequency line rule and the noise
-    threshold are ``frequencies.scan_frequency_sections``: the count is the
-    ``imaginary_count()`` of the very analysis the SI and reports publish, so
-    the verdict and the published Nimag cannot disagree. An output whose
-    sections were all superseded reports zero modes, and an output without any
-    section keeps the legacy whole-file count of imaginary wavenumbers.
-
-    Returns ``(imaginary_count, final_section)`` where ``final_section`` is
-    True only when the count came from a section after the last final energy.
-    ``lines`` are split like a file read (CR, LF and CRLF only), as
-    :func:`analyze_output` streams them.
-    """
-    headerless_count = 0
-
-    def counted_lines() -> Iterator[str]:
-        nonlocal headerless_count
-        for line in lines:
-            if is_execution_output_line(line):
-                headerless_count += sum(
-                    1 for value in frequency_values(line) if is_imaginary_frequency(value)
-                )
-            yield line
-
-    sections = scan_frequency_sections(counted_lines())
-    if sections.analysis is not None:
-        return sections.analysis.imaginary_count(), True
-    if sections.seen:
-        return 0, False
-    return headerless_count, False
-
-
-def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
+def analyze_output(
+    out_path: Path, mode: CompletionMode, *, byte_observer: Callable[[bytes], None] | None = None
+) -> OutAnalysis:
     markers = _default_markers(out_path)
     logger.debug("Analyzing output: %s (mode=%s)", out_path, mode.kind)
     if not out_path.exists():
@@ -268,33 +266,17 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
             status=AnalyzerStatus.INCOMPLETE, reason="output_missing", markers=markers
         )
 
-    ts_count: tuple[int, bool] | None = None
     try:
-        # One streamed pass, decoded by the parser's rule (``parser.io``), so the
-        # verdict reads the same text as the frequency analysis and the reports.
-        with open_orca_text(out_path) as handle:
-            if mode.kind == "ts":
-                # The section scan reads every line, so the markers see all of them.
-                ts_count = scan_ts_lines_for_imag_count(_marked_lines(handle, markers))
-            else:
-                for line in handle:
-                    _scan_line_for_markers(line, markers)
+        with open_orca_text(out_path, byte_observer=byte_observer) as handle:
+            sections = scan_frequency_sections(_marked_lines(handle, markers))
     except OSError:
         return OutAnalysis(
             status=AnalyzerStatus.INCOMPLETE, reason="output_read_error", markers=markers
         )
-    # A TS verdict needs the imaginary count of the final frequency section.
-    if ts_count is not None and markers["terminated_normally"]:
-        markers["imaginary_frequency_count"], markers["final_frequency_section"] = ts_count
-
-    analysis = _interpret_markers(markers, mode)
-    if analysis.reason not in ("ts_criteria_met", "ts_criteria_failed"):
-        # The count is a verdict on the final geometry only when the analyzer
-        # reached the TS criteria. A normally terminated run whose geometry
-        # did not converge or whose SCF failed keeps its count for diagnostics
-        # but does not characterize a stationary point.
-        markers["final_frequency_section"] = False
-    return analysis
+    if sections.analysis is not None:
+        markers["imaginary_frequency_count"] = sections.analysis.imaginary_count()
+        markers["final_frequency_section"] = True
+    return _interpret_markers(markers, mode)
 
 
 def apply_exit_code(analysis: OutAnalysis, return_code: int) -> OutAnalysis:
@@ -302,12 +284,11 @@ def apply_exit_code(analysis: OutAnalysis, return_code: int) -> OutAnalysis:
 
     A specific analyzer failure stands, but success is never published over a
     failed process: a completed-looking output of a nonzero exit becomes
-    ``nonzero_exit_code``, and its frequencies no longer verify the geometry.
+    ``nonzero_exit_code``, observed evidence remains available for diagnosis.
     """
     if analysis.status != AnalyzerStatus.COMPLETED or return_code == 0:
         return analysis
     markers = analysis.markers.copy()
-    markers["final_frequency_section"] = False
     return OutAnalysis(
         status=AnalyzerStatus.UNKNOWN_FAILURE,
         reason="nonzero_exit_code",

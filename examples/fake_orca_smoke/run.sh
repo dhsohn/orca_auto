@@ -52,6 +52,7 @@ fake_orca.write_text(
             "inp_name = Path(sys.argv[1]).name if len(sys.argv) > 1 else '<missing>'",
             "print(f'Fake ORCA consumed {inp_name}')",
             "print('FINAL SINGLE POINT ENERGY     -1.000000000000')",
+            "print('THE OPTIMIZATION HAS CONVERGED')",
             "print('TOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds')",
             "print('****ORCA TERMINATED NORMALLY****')",
             "raise SystemExit(0)",

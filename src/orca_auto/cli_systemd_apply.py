@@ -108,9 +108,11 @@ def apply_systemd_install_plan(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> int:
-    python_path = plan.repo / ".venv" / "bin" / "python"
+    python_path = plan.python_path
     if not python_path.is_file() or not os.access(python_path, os.X_OK):
-        emit_error(f"service Python is missing or not executable: {python_path}; run `make venv`")
+        emit_error(
+            f"service Python is missing or not executable: {python_path}; repair the selected Python environment"
+        )
         return 1
     if plan.use_sudo and shutil.which("sudo") is None:
         emit_error("sudo is required to write system units; rerun as root or use --no-sudo")

@@ -22,6 +22,7 @@ from orca_auto.core.artifacts import EXECUTION_PROVENANCE_FILE, MAX_RUN_ARTIFACT
 from orca_auto.core.confined_io import read_confined_text, require_confined_regular_file
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import copy_dict_or_empty as _dict
+from orca_auto.orca.completion_rules import completion_mode, route_facts
 from orca_auto.orca.generation_validation import is_retired_generation_marker
 from orca_auto.orca.machine_observation import (
     ARTIFACT_ROLES,
@@ -39,6 +40,7 @@ from orca_auto.orca.machine_observation import (
     report_json_path,
     report_result_fields,
 )
+from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.state_reading import (
     _execution_provenance,
     _selected_input_text,
@@ -309,6 +311,91 @@ def _retired_retry_budget_matches(
     return True
 
 
+def _science_matches(
+    science: Mapping[str, Any],
+    root: Path,
+    artifacts: Mapping[str, Any],
+    operation_outcome: str,
+    operation_reason: str,
+) -> bool:
+    """Validate domain measurements independently of the observation assembler."""
+    expected: dict[str, Any] = {
+        "status": "unknown",
+        "reason": "evidence_unavailable",
+        "energy_hartree": None,
+        "scf_converged": None,
+        "optimization_converged": None,
+        "frequencies_available": False,
+        "imaginary_frequency_count": None,
+        "geometry_scope": None,
+        "stationary_point": "unverified",
+        "output_artifact": None,
+        "evidence_lines": {},
+    }
+    inp, out = artifacts.get("input", {}), artifacts.get("orca-output", {})
+    if inp.get("status") == out.get("status") == "available":
+        try:
+            raw = (root / inp["path"]).read_bytes()
+            if len(raw) != inp["bytes"] or hashlib.sha256(raw).hexdigest() != inp["byte_sha256"]:
+                return False
+            route = route_facts(
+                root / inp["path"], lines=raw.decode("utf-8", errors="replace").splitlines()
+            )
+            if route.route_lines:
+                digest = hashlib.sha256()
+                verdict = analyze_output(
+                    root / out["path"], completion_mode(route), byte_observer=digest.update
+                )
+                if digest.hexdigest() != out["byte_sha256"]:
+                    return False
+                markers = verdict.markers
+                state = {"completed": "verified", "incomplete": "unknown"}.get(
+                    verdict.status, "failed"
+                )
+                scope = "single_point"
+                if route.is_opt:
+                    scope = "full" if route.is_full_opt else "partial"
+                if route.is_relaxed_scan or route.is_irc or route.is_non_stationary:
+                    scope = "path"
+                if route.is_ts:
+                    scope = "partial" if route.has_constraints else "transition_state"
+                imaginary = (
+                    markers["imaginary_frequency_count"]
+                    if markers["final_frequency_section"]
+                    else None
+                )
+                stationary = "unverified"
+                if state == "verified":
+                    if scope == "full" and imaginary == 0:
+                        stationary = "minimum"
+                    elif scope == "transition_state" and imaginary == 1:
+                        stationary = "first_order_saddle"
+                reason = verdict.reason
+                if state == "verified" and operation_outcome != "succeeded":
+                    state, stationary = "unknown", "unverified"
+                    reason = operation_reason or "operation_not_succeeded"
+                expected.update(
+                    status=state,
+                    reason=reason,
+                    energy_hartree=markers["energy_hartree"],
+                    scf_converged=markers["scf_converged"],
+                    optimization_converged=markers["last_opt_converged"],
+                    frequencies_available=markers["final_frequency_section"],
+                    imaginary_frequency_count=imaginary,
+                    geometry_scope=scope,
+                    stationary_point=stationary,
+                    output_artifact="orca-output",
+                    evidence_lines={
+                        "energy": markers["energy_line"],
+                        "scf": markers["scf_line"],
+                        "optimization": markers["optimization_line"],
+                    },
+                )
+        except (OSError, TypeError, ValueError):
+            return False
+    return all(key in science and science[key] == value for key, value in expected.items())
+
+
 def load_report_json_with_output_receipt(
     generation_dir: Path,
     *,
@@ -379,6 +466,10 @@ def load_report_json_with_output_receipt(
     operation_id = normalized_text(observation.get("operation", {}).get("id"))
     expected_phase, expected_outcome = machine_lifecycle(normalized_text(status.get("state")))
     lifecycle = _dict(observation.get("lifecycle"))
+    operation_outcome = expected_outcome
+    science = _dict(results.get("science"))
+    if expected_outcome == "succeeded" and science.get("status") != "verified":
+        expected_outcome = "uncertain" if science.get("status") == "unknown" else "failed"
     expected_summary, expected_results = report_result_fields(payload)
     if (
         operation_id
@@ -398,7 +489,13 @@ def load_report_json_with_output_receipt(
     artifacts = observation.get("artifacts")
     if not isinstance(artifacts, Mapping):
         return None
-    outcome = expected_outcome
+    outcome = operation_outcome
+    if (
+        require_consumable_success
+        and operation_outcome == "succeeded"
+        and expected_outcome != "succeeded"
+    ):
+        return None
     if require_consumable_success and outcome == "succeeded":
         handoff = _dict(observation.get("handoff"))
         delivery = _dict(observation.get("delivery"))
@@ -479,6 +576,16 @@ def load_report_json_with_output_receipt(
         if artifacts.get("orca-output") != expected_output:
             return None
         accepted_output_receipt = expected_output
+    if not _science_matches(
+        science,
+        resolved_generation_dir,
+        artifacts,
+        operation_outcome,
+        normalized_text(final_result.get("reason") or status.get("reason")),
+    ):
+        return None
+    if expected_outcome != "succeeded" and observation.get("handoff", {}).get("status") == "ready":
+        return None
     try:
         after = report_path.lstat()
         generation_details = resolved_generation_dir.stat()

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 import pytest
 
 from orca_auto.orca import out_analyzer
 from orca_auto.orca.completion_rules import CompletionMode
 from orca_auto.orca.evidence import parsed_frequency_analysis
+from orca_auto.orca.frequencies import scan_frequency_sections
 from orca_auto.orca.out_analyzer import (
     OutAnalysis,
     analyze_output,
     apply_exit_code,
-    scan_ts_lines_for_imag_count,
 )
 from orca_auto.orca.output_status import iter_output_lines, termination_line
 from orca_auto.orca.parser.io import open_orca_text
@@ -26,6 +26,9 @@ from tests.orca.test_evidence import _FREQUENCIES as _EVIDENCE_FREQUENCIES
 from tests.orca_output_helpers import FREQ_TS_BLOCK, si_out_text
 
 NORMAL = "****ORCA TERMINATED NORMALLY****"
+ENERGY = "FINAL SINGLE POINT ENERGY -100.2"
+CONVERGED = "THE OPTIMIZATION HAS CONVERGED"
+OPT_EVIDENCE = ENERGY + "\n" + CONVERGED + "\n"
 _OPT_MODE = CompletionMode(kind="opt", require_irc=False)
 _TS_MODE = CompletionMode(kind="ts", require_irc=False)
 _TS_IRC_MODE = CompletionMode(kind="ts", require_irc=True)
@@ -39,25 +42,26 @@ def _write_out(tmp_path: Path, payload: str) -> Path:
 
 
 def test_status_is_analyzer_status_enum(tmp_path: Path) -> None:
-    result = analyze_output(_write_out(tmp_path, NORMAL + "\n"), _OPT_MODE)
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + NORMAL + "\n"), _OPT_MODE)
     assert isinstance(result.status, AnalyzerStatus)
     assert result.status == AnalyzerStatus.COMPLETED
 
 
-def test_completed_ts(tmp_path: Path) -> None:
+def test_headerless_ts_is_unverified(tmp_path: Path) -> None:
     payload = "\n".join(["some line -123.45 cm**-1", "IRC PATH SUMMARY", NORMAL])
-    result = analyze_output(_write_out(tmp_path, payload), _TS_IRC_MODE)
-    assert result.status == "completed"
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _TS_IRC_MODE)
+    assert result.status == "incomplete"
+    assert result.reason == "frequency_evidence_missing"
 
 
 def test_ts_verdict_reads_the_output_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     payload = "\n".join(["VIBRATIONAL FREQUENCIES", "  -120.00 cm**-1", "  140.00 cm**-1", NORMAL])
-    out = _write_out(tmp_path, payload)
+    out = _write_out(tmp_path, OPT_EVIDENCE + payload)
     opened: list[Path] = []
 
-    def counting_open(path: Path) -> TextIO:
+    def counting_open(path: Path, **kwargs: Any) -> TextIO:
         opened.append(path)
-        return open_orca_text(path)
+        return open_orca_text(path, **kwargs)
 
     monkeypatch.setattr(out_analyzer, "open_orca_text", counting_open)
     result = analyze_output(out, _TS_MODE)
@@ -66,11 +70,12 @@ def test_ts_verdict_reads_the_output_once(tmp_path: Path, monkeypatch: pytest.Mo
     assert opened == [out]
 
 
-def test_completed_ts_with_irc_marker_outside_tail_window(tmp_path: Path) -> None:
+def test_irc_marker_outside_tail_window_does_not_verify_headerless_ts(tmp_path: Path) -> None:
     filler = ("X" * 120 + "\n") * 4000
     payload = "\n".join(["IRC PATH SUMMARY", filler, "some line -123.45 cm**-1", NORMAL])
-    result = analyze_output(_write_out(tmp_path, payload), _TS_IRC_MODE)
-    assert result.status == "completed"
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _TS_IRC_MODE)
+    assert result.status == "incomplete"
+    assert result.reason == "frequency_evidence_missing"
     assert result.markers["irc_marker_found"]
 
 
@@ -86,7 +91,7 @@ def test_ts_uses_last_vibrational_frequency_section(tmp_path: Path) -> None:
             NORMAL,
         ]
     )
-    result = analyze_output(_write_out(tmp_path, payload), _TS_MODE)
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _TS_MODE)
     assert result.status == "completed"
     assert result.markers["imaginary_frequency_count"] == 1
 
@@ -106,8 +111,8 @@ def test_ts_frequency_section_before_the_final_energy_verifies_nothing(tmp_path:
         ]
     )
     result = analyze_output(_write_out(tmp_path, payload), _TS_MODE)
-    assert result.status == AnalyzerStatus.TS_NOT_FOUND
-    assert result.reason == "ts_criteria_failed"
+    assert result.status == AnalyzerStatus.INCOMPLETE
+    assert result.reason == "frequency_evidence_missing"
     assert result.markers["imaginary_frequency_count"] == 0
     assert not result.markers["final_frequency_section"]
 
@@ -133,7 +138,7 @@ def test_ts_counts_only_the_frequency_section_after_the_last_final_energy(
             NORMAL,
         ]
     )
-    result = analyze_output(_write_out(tmp_path, payload), _TS_FREQ_MODE)
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _TS_FREQ_MODE)
     assert result.status == AnalyzerStatus.COMPLETED
     assert result.reason == "ts_criteria_met"
     assert result.markers["imaginary_frequency_count"] == 1
@@ -150,7 +155,7 @@ def test_ts_rejected_for_two_modes_keeps_the_final_section_count(tmp_path: Path)
             NORMAL,
         ]
     )
-    result = analyze_output(_write_out(tmp_path, payload), _TS_FREQ_MODE)
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _TS_FREQ_MODE)
     assert result.status == AnalyzerStatus.TS_NOT_FOUND
     assert result.markers["imaginary_frequency_count"] == 2
     assert result.markers["final_frequency_section"]
@@ -181,7 +186,7 @@ def test_ts_final_section_is_not_a_verdict_when_the_run_failed(
     result = analyze_output(_write_out(tmp_path, payload), _TS_FREQ_MODE)
     assert result.status == expected_status
     assert result.markers["imaginary_frequency_count"] == 1
-    assert not result.markers["final_frequency_section"]
+    assert result.markers["final_frequency_section"]
 
 
 def test_ts_legacy_headerless_count_is_not_a_final_section(tmp_path: Path) -> None:
@@ -192,9 +197,10 @@ def test_ts_legacy_headerless_count_is_not_a_final_section(tmp_path: Path) -> No
             NORMAL,
         ]
     )
-    result = analyze_output(_write_out(tmp_path, payload), _TS_FREQ_MODE)
-    assert result.status == AnalyzerStatus.COMPLETED
-    assert result.markers["imaginary_frequency_count"] == 1
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _TS_FREQ_MODE)
+    assert result.status == AnalyzerStatus.INCOMPLETE
+    assert result.reason == "frequency_evidence_missing"
+    assert result.markers["imaginary_frequency_count"] == 0
     assert not result.markers["final_frequency_section"]
 
 
@@ -213,10 +219,12 @@ def test_ts_line_rule_matches_the_workflow_recount_across_a_form_feed(tmp_path: 
             NORMAL,
         ]
     )
-    out = _write_out(tmp_path, payload)
+    out = _write_out(tmp_path, OPT_EVIDENCE + payload)
     result = analyze_output(out, _TS_FREQ_MODE)
     with open_orca_text(out) as handle:
-        recount = scan_ts_lines_for_imag_count(handle)
+        sections = scan_frequency_sections(handle)
+        assert sections.analysis is not None
+        recount = (sections.analysis.imaginary_count(), True)
     assert recount == (1, True)
     assert result.reason == "ts_criteria_met"
     assert result.markers["imaginary_frequency_count"] == recount[0]
@@ -233,15 +241,15 @@ def test_ts_ignores_tiny_negative_modes(tmp_path: Path) -> None:
             NORMAL,
         ]
     )
-    result = analyze_output(_write_out(tmp_path, payload), _TS_MODE)
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _TS_MODE)
     assert result.status == AnalyzerStatus.COMPLETED
     assert result.markers["imaginary_frequency_count"] == 1
 
 
-def test_ts_not_found(tmp_path: Path) -> None:
+def test_termination_alone_does_not_verify_ts(tmp_path: Path) -> None:
     payload = "\n".join([NORMAL, "TOTAL RUN TIME: 0 days 0 hours 1 minutes 0 seconds"])
     result = analyze_output(_write_out(tmp_path, payload), _TS_MODE)
-    assert result.status == "ts_not_found"
+    assert result.status == "incomplete"
 
 
 @pytest.mark.parametrize(
@@ -316,7 +324,7 @@ def test_memory_warning_does_not_fail_a_normally_terminated_run(
     filler = "ordinary output\n" * (22000 if large else 1)
     payload = filler + warning + "THE OPTIMIZATION HAS CONVERGED\n" + filler + NORMAL + "\n"
 
-    result = analyze_output(_write_out(tmp_path, payload), _OPT_MODE)
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _OPT_MODE)
 
     assert result.status is AnalyzerStatus.COMPLETED
     assert result.reason == "normal_termination"
@@ -367,7 +375,7 @@ def test_missing_output_file(tmp_path: Path) -> None:
 
 def test_normal_opt_completed(tmp_path: Path) -> None:
     payload = NORMAL + "\nTOTAL RUN TIME: 0 days 0 hours 5 minutes\n"
-    result = analyze_output(_write_out(tmp_path, payload), _OPT_MODE)
+    result = analyze_output(_write_out(tmp_path, OPT_EVIDENCE + payload), _OPT_MODE)
     assert result.status == "completed"
     assert result.reason == "normal_termination"
     assert result.markers["total_run_time_seen"]
@@ -401,7 +409,7 @@ def test_normal_opt_completed(tmp_path: Path) -> None:
 def test_normal_terminated_opt_convergence_verdict(
     tmp_path: Path, lines: list[str], expected_status: AnalyzerStatus, expected_reason: str
 ) -> None:
-    payload = "\n".join([*lines, NORMAL])
+    payload = "\n".join([ENERGY, *lines, NORMAL])
     result = analyze_output(_write_out(tmp_path, payload), _OPT_MODE)
     assert result.status == expected_status
     assert result.reason == expected_reason
@@ -458,16 +466,13 @@ def test_input_block_syntax_abort_is_error_termination_evidence() -> None:
     assert not any(normal for normal, _error in evidence)
 
 
-# Every frequency-bearing inline output fixture in the test suite, with the
-# TS-mode verdict the analyzer gave before the count was consolidated into
-# ``frequencies`` (status, imaginary count, final-section flag). The realistic
-# ORCA-format texts are shared with the parser and report tests, the short ones
-# are the verifier's own fixtures.
+# Synthetic frequency boundaries with independent expected counts and verdicts.
+# Positive energy and optimization evidence isolate the frequency requirement.
 _FREQUENCY_FIXTURES: tuple[tuple[str, str, AnalyzerStatus, int, bool], ...] = (
     ("realistic_opt_freq", _B3LYP_OPT_FREQ_COMPLETED, AnalyzerStatus.TS_NOT_FOUND, 0, True),
     ("realistic_ts_imaginary", _TS_OPT_WITH_IMAGINARY, AnalyzerStatus.COMPLETED, 1, True),
     ("realistic_ts_scaling_factor", _TS_REAL_VIB_FORMAT, AnalyzerStatus.COMPLETED, 1, True),
-    ("report_ts_block_unterminated", FREQ_TS_BLOCK, AnalyzerStatus.INCOMPLETE, 0, False),
+    ("report_ts_block_unterminated", FREQ_TS_BLOCK, AnalyzerStatus.INCOMPLETE, 1, True),
     ("evidence_freqs", _EVIDENCE_FREQUENCIES + NORMAL, AnalyzerStatus.COMPLETED, 1, True),
     (
         "si_ts_with_thermo",
@@ -481,8 +486,8 @@ _FREQUENCY_FIXTURES: tuple[tuple[str, str, AnalyzerStatus, int, bool], ...] = (
     (
         "headerless_legacy_count",
         "some line -123.45 cm**-1\nIRC PATH SUMMARY\n" + NORMAL,
-        AnalyzerStatus.COMPLETED,
-        1,
+        AnalyzerStatus.INCOMPLETE,
+        0,
         False,
     ),
     (
@@ -506,7 +511,7 @@ _FREQUENCY_FIXTURES: tuple[tuple[str, str, AnalyzerStatus, int, bool], ...] = (
         "FINAL SINGLE POINT ENERGY      -100.100000000000\n"
         "THE OPTIMIZATION HAS CONVERGED\n"
         "FINAL SINGLE POINT ENERGY      -100.200000000000\n" + NORMAL,
-        AnalyzerStatus.TS_NOT_FOUND,
+        AnalyzerStatus.INCOMPLETE,
         0,
         False,
     ),
@@ -535,7 +540,7 @@ _FREQUENCY_FIXTURES: tuple[tuple[str, str, AnalyzerStatus, int, bool], ...] = (
         "VIBRATIONAL FREQUENCIES\n  1   -420.00 cm**-1\n" + NORMAL,
         AnalyzerStatus.GEOM_NOT_CONVERGED,
         1,
-        False,
+        True,
     ),
     (
         "scf_failure_keeps_count",
@@ -543,7 +548,7 @@ _FREQUENCY_FIXTURES: tuple[tuple[str, str, AnalyzerStatus, int, bool], ...] = (
         "VIBRATIONAL FREQUENCIES\n  1   -420.00 cm**-1\n" + NORMAL,
         AnalyzerStatus.ERROR_SCF,
         1,
-        False,
+        True,
     ),
     (
         "form_feed_inside_section",
@@ -562,12 +567,12 @@ _FREQUENCY_FIXTURES: tuple[tuple[str, str, AnalyzerStatus, int, bool], ...] = (
         1,
         True,
     ),
-    ("no_frequencies", NORMAL + "\nTOTAL RUN TIME: 0 days", AnalyzerStatus.TS_NOT_FOUND, 0, False),
+    ("no_frequencies", NORMAL + "\nTOTAL RUN TIME: 0 days", AnalyzerStatus.INCOMPLETE, 0, False),
     (
         "echoed_section_is_not_evidence",
         "| 1> # IRC PATH SUMMARY\n| 2> # VIBRATIONAL FREQUENCIES -150.0 cm**-1\n"
         "ordinary output\n" + NORMAL,
-        AnalyzerStatus.TS_NOT_FOUND,
+        AnalyzerStatus.INCOMPLETE,
         0,
         False,
     ),
@@ -594,10 +599,9 @@ def test_verifier_count_is_the_published_frequency_analysis(
     final_section: bool,
 ) -> None:
     # The TS verdict and the SI/report frequency analysis must count the same
-    # modes of the same section; the expectations pin the verdicts from before
-    # the consolidation.
+    # modes of the same section, including diagnostic sections of failed runs.
     out = tmp_path / "rxn.out"
-    out.write_text(text, encoding="utf-8")
+    out.write_text(OPT_EVIDENCE + text, encoding="utf-8")
 
     result = analyze_output(out, _TS_FREQ_MODE)
     analysis = parsed_frequency_analysis(out)
@@ -605,10 +609,7 @@ def test_verifier_count_is_the_published_frequency_analysis(
     assert result.status is status
     assert result.markers["imaginary_frequency_count"] == count
     assert result.markers["final_frequency_section"] is final_section
-    if not result.markers["terminated_normally"]:
-        # An unterminated run is never counted; nothing is published for it.
-        assert count == 0
-    elif analysis is not None:
+    if analysis is not None:
         assert analysis.imaginary_count() == count
     else:
         assert not final_section
@@ -646,8 +647,8 @@ def test_unreadable_final_energy_line_still_supersedes_the_frequency_section(
 
     result = analyze_output(out, _TS_FREQ_MODE)
 
-    assert result.status is AnalyzerStatus.TS_NOT_FOUND
-    assert result.reason == "ts_criteria_failed"
+    assert result.status is AnalyzerStatus.INCOMPLETE
+    assert result.reason == "energy_evidence_missing"
     assert result.markers["imaginary_frequency_count"] == 0
     assert result.markers["final_frequency_section"] is False
     assert parsed_frequency_analysis(out) is None
@@ -710,7 +711,7 @@ def test_geom_not_converged_detection(tmp_path: Path, text: str) -> None:
 def test_apply_exit_code_never_publishes_success_over_a_failed_process(tmp_path: Path) -> None:
     out = _write_out(
         tmp_path,
-        "VIBRATIONAL FREQUENCIES\n  1   -420.00 cm**-1\n  2    120.00 cm**-1\n"
+        OPT_EVIDENCE + "VIBRATIONAL FREQUENCIES\n  1   -420.00 cm**-1\n  2    120.00 cm**-1\n"
         "****ORCA TERMINATED NORMALLY****\n",
     )
     completed = analyze_output(out, _TS_MODE)
@@ -723,9 +724,84 @@ def test_apply_exit_code_never_publishes_success_over_a_failed_process(tmp_path:
         AnalyzerStatus.UNKNOWN_FAILURE,
         "nonzero_exit_code",
     )
-    assert rejected.markers["final_frequency_section"] is False
+    assert rejected.markers["final_frequency_section"] is True
     assert rejected.markers["imaginary_frequency_count"] == 1
     assert completed.markers["final_frequency_section"] is True
 
     failed = OutAnalysis(AnalyzerStatus.ERROR_SCF, "scf_not_converged", completed.markers)
     assert apply_exit_code(failed, 42) is failed
+
+
+@pytest.mark.parametrize(
+    ("text", "mode", "reason"),
+    [
+        (ENERGY + "\n" + NORMAL, _OPT_MODE, "optimization_evidence_missing"),
+        (CONVERGED + "\n" + NORMAL, _OPT_MODE, "energy_evidence_missing"),
+        (OPT_EVIDENCE + NORMAL, CompletionMode("opt", False, True), "frequency_evidence_missing"),
+        (
+            "VIBRATIONAL FREQUENCIES\n 0: -400.0 cm**-1\n" + OPT_EVIDENCE + NORMAL,
+            _TS_MODE,
+            "frequency_evidence_missing",
+        ),
+        (
+            OPT_EVIDENCE + "FINAL SINGLE POINT ENERGY ********\n" + NORMAL,
+            _OPT_MODE,
+            "energy_evidence_missing",
+        ),
+    ],
+)
+def test_positive_evidence_is_required(
+    tmp_path: Path, text: str, mode: CompletionMode, reason: str
+) -> None:
+    result = analyze_output(_write_out(tmp_path, text), mode)
+    assert result.status is AnalyzerStatus.INCOMPLETE
+    assert result.reason == reason
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "status"),
+    [
+        ("SCF NOT CONVERGED\nSCF CONVERGED AFTER 12 CYCLES\n", AnalyzerStatus.COMPLETED),
+        ("SCF CONVERGED AFTER 12 CYCLES\nSCF NOT CONVERGED\n", AnalyzerStatus.ERROR_SCF),
+        (
+            "SCF NOT CONVERGED\nSCF CONVERGED AFTER 12 CYCLES\nSCF CONVERGENCE FAILED\n",
+            AnalyzerStatus.ERROR_SCF,
+        ),
+    ],
+)
+def test_scf_explicit_final_verdict_controls_recovery(
+    tmp_path: Path, diagnostics: str, status: AnalyzerStatus
+) -> None:
+    result = analyze_output(
+        _write_out(tmp_path, diagnostics + ENERGY + "\n" + NORMAL),
+        CompletionMode("sp", False),
+    )
+    assert result.status is status
+
+
+def test_recovered_scf_does_not_clear_error_termination(tmp_path: Path) -> None:
+    result = analyze_output(
+        _write_out(
+            tmp_path,
+            "SCF NOT CONVERGED\nSCF CONVERGED AFTER 12 CYCLES\n"
+            + ENERGY
+            + "\nORCA FINISHED BY ERROR TERMINATION\n"
+            + NORMAL,
+        ),
+        CompletionMode("sp", False),
+    )
+    assert result.status is AnalyzerStatus.UNKNOWN_FAILURE
+    assert result.reason == "error_termination"
+
+
+def test_annotated_final_energy_invalidates_earlier_clean_energy(tmp_path: Path) -> None:
+    result = analyze_output(
+        _write_out(
+            tmp_path,
+            ENERGY + "\nSCF CONVERGED AFTER 12 CYCLES\n"
+            "FINAL SINGLE POINT ENERGY -100.3 (SCF not fully converged!)\n" + NORMAL,
+        ),
+        CompletionMode("sp", False),
+    )
+    assert result.status is AnalyzerStatus.ERROR_SCF
+    assert result.markers["energy_hartree"] is None

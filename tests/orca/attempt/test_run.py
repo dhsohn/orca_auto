@@ -20,6 +20,7 @@ from tests.conftest import RecordingChannel
 
 _OPT_INPUT = "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
 _NORMAL_TERMINATION = (
+    "FINAL SINGLE POINT ENERGY -1.1\nTHE OPTIMIZATION HAS CONVERGED\n"
     "****ORCA TERMINATED NORMALLY****\nTOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds 0 msec\n"
 )
 
@@ -237,6 +238,7 @@ def test_neb_ts_failure_is_terminal(tmp_path: Path, attempt: Attempt) -> None:
     )
     seen: list[Path] = []
     run = _output_run(
+        "FINAL SINGLE POINT ENERGY -1.1\nTHE OPTIMIZATION HAS CONVERGED\n"
         "VIBRATIONAL FREQUENCIES\n  1    120.00 cm**-1\n  2    240.00 cm**-1\n"
         "****ORCA TERMINATED NORMALLY****\n",
         return_code=0,

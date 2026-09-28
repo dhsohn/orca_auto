@@ -156,7 +156,10 @@ def test_each_command_loads_its_config_once(
         encoding="utf-8",
     )
     repo = tmp_path / "repo"
-    shutil.copytree(Path(__file__).resolve().parents[2] / "systemd", repo / "systemd")
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "src" / "orca_auto" / "systemd_templates",
+        repo / "src" / "orca_auto" / "systemd_templates",
+    )
     reads: list[Path] = []
     real_load_yaml_mapping = config_files.load_yaml_mapping
 

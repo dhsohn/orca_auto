@@ -7,7 +7,7 @@
   "executable_identity": {
     "path": "<tmp>/bin/fake_orca",
     "sha256": "<sha256:2>",
-    "size_bytes": 1789
+    "size_bytes": 1743
   },
   "execution_dir": "<tmp>/runs/opt_freq/<generation:1>",
   "execution_dir_identity": {

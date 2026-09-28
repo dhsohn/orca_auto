@@ -1,0 +1,3 @@
+# Preserve original engine bytes, including trailing spaces in its tables.
+*.out -text -whitespace
+*.inp -text

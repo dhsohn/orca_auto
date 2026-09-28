@@ -38,7 +38,10 @@ def _make_bundle(root: Path, *, version: str = "6.0.0") -> Path:
     source = root / ".venv/lib/python3/site-packages/orca_auto/_process_evidence.py"
     source.parent.mkdir(parents=True)
     source.write_text("# fixture package\n")
-    shutil.copytree(Path(__file__).resolve().parents[2] / "systemd", root / "systemd")
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "src" / "orca_auto" / "systemd_templates",
+        root / "systemd",
+    )
     for path in root.rglob("*"):
         path.chmod(path.stat().st_mode & ~0o222)
     identity = {"version": version, "wheels": [], "systemd": {}}

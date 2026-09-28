@@ -35,7 +35,10 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     orca_executable.chmod(0o755)
     python_path.write_text("#!/usr/bin/env python\n", encoding="utf-8")
     python_path.chmod(0o755)
-    shutil.copytree(Path(__file__).resolve().parents[3] / "systemd", repo / "systemd")
+    shutil.copytree(
+        Path(__file__).resolve().parents[3] / "src" / "orca_auto" / "systemd_templates",
+        repo / "src" / "orca_auto" / "systemd_templates",
+    )
     config_path.write_text(
         "\n".join(
             [
@@ -299,9 +302,12 @@ def test_systemd_default_nested_admission_uses_writable_runs_root(
 
 def test_systemd_rejects_a_repo_without_unit_templates(tmp_path: Path) -> None:
     repo, config_path = _make_repo(tmp_path)
-    shutil.rmtree(repo / "systemd")
+    shutil.rmtree(repo / "src" / "orca_auto" / "systemd_templates")
 
-    with pytest.raises(ValueError, match=r"--repo must name a checkout that contains a systemd/"):
+    with pytest.raises(
+        ValueError,
+        match=r"--repo must name a checkout that contains src/orca_auto/systemd_templates",
+    ):
         systemd_plan.build_systemd_install_plan(
             target_user="alice",
             repo=repo,
@@ -1248,6 +1254,7 @@ def _single_unit_plan(
     return systemd_plan.SystemdInstallPlan(
         target_user="alice",
         repo=tmp_path,
+        python_path=python_path,
         config=tmp_path / "config" / "orca_auto.yaml",
         unit_dir=tmp_path / "units",
         units=(
@@ -1424,7 +1431,7 @@ def test_apply_systemd_install_plan_rejects_missing_python_before_writing(
     assert cli_systemd_apply.apply_systemd_install_plan(plan, run=fake_run) == 1
     assert not plan.unit_dir.exists()
     assert commands == []
-    assert "run `make venv`" in capsys.readouterr().err
+    assert "repair the selected Python environment" in capsys.readouterr().err
 
 
 def test_apply_systemd_install_plan_requires_sudo_when_plan_uses_sudo(
@@ -1697,3 +1704,89 @@ def test_cmd_service_status_full_mode_rejects_any_non_active_required_unit(
     # tuple that no longer matches the installed units.
     assert _exit_code(_statuses(None)) == 0
     assert _exit_code(_statuses(unhealthy_label)) == 1
+
+
+def test_no_repo_plan_uses_packaged_templates_and_the_running_virtualenv(tmp_path: Path) -> None:
+    _repo, config = _make_repo(tmp_path)
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=None,
+        config=config,
+        unit_dir=tmp_path / "units",
+        no_enable=True,
+        no_start=True,
+        no_sudo=True,
+    )
+    units = {unit.name: unit.content for unit in plan.units}
+    worker = units["orca_auto-queue-worker@.service"]
+    assert plan.repo == Path(sys.prefix).resolve()
+    assert f"WorkingDirectory={Path(sys.prefix).resolve()}\n" in worker
+    assert f"ExecStart={sys.executable} -I -m orca_auto.cli queue worker\n" in worker
+    assert f"Environment=ORCA_AUTO_CONFIG={config}\n" in worker
+    assert f"ReadWritePaths={_repo / 'orca_runs'}\n" in worker
+    assert set(units) == {
+        "orca_auto-runtime@.target",
+        "orca_auto-engine-workers@.target",
+        "orca_auto-queue-worker@.service",
+    }
+    # Exercise the rendered interpreter safely; do not start a worker or systemd.
+    completed = subprocess.run(
+        [sys.executable, "-I", "-m", "orca_auto.cli", "--version"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.stdout.startswith("orca_auto ")
+    assert not (tmp_path / "units").exists()
+
+
+def test_no_repo_plan_rejects_non_virtualenv_before_reading_templates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(systemd_plan.sys, "prefix", sys.base_prefix)
+    monkeypatch.setattr(
+        systemd_plan,
+        "_read_unit_template",
+        lambda *_args: pytest.fail("unisolated interpreter must be refused before rendering"),
+    )
+    with pytest.raises(ValueError, match="isolated virtual environment"):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=None,
+            unit_dir=tmp_path / "units",
+        )
+    assert not (tmp_path / "units").exists()
+
+
+def test_no_repo_install_applies_packaged_units_with_isolated_systemctl(
+    tmp_path: Path,
+) -> None:
+    _repo, config = _make_repo(tmp_path)
+    unit_dir = tmp_path / "units"
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=None,
+        config=config,
+        unit_dir=unit_dir,
+        no_enable=True,
+        no_start=True,
+        no_sudo=True,
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def fake_systemctl(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert argv[0] == "systemctl"
+        calls.append(tuple(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    assert cli_systemd_apply.apply_systemd_install_plan(plan, run=fake_systemctl) == 0
+
+    assert set(path.name for path in unit_dir.iterdir()) == {
+        "orca_auto-runtime@.target",
+        "orca_auto-engine-workers@.target",
+        "orca_auto-queue-worker@.service",
+    }
+    worker = (unit_dir / "orca_auto-queue-worker@.service").read_text()
+    assert f"ExecStart={sys.executable} -I -m orca_auto.cli queue worker" in worker
+    assert calls == list(plan.commands)

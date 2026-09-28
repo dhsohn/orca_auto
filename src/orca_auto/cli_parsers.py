@@ -101,6 +101,7 @@ def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     add_config_argument(run_dir_parser)
     add_orca_logging_arguments(run_dir_parser)
     run_dir_parser.add_argument("path", help="ORCA input directory")
+    run_dir_parser.add_argument("--input", help="Explicit .inp filename within the job directory")
     run_dir_parser.add_argument(
         "--force",
         action="store_true",
@@ -283,8 +284,7 @@ def add_systemd_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     )
     install_parser.add_argument(
         "--repo",
-        required=True,
-        help="Absolute path to a repository checkout or a prepared wheel runtime",
+        help="Checkout or prepared runtime; omit to use the current installed virtual environment",
     )
     install_parser.add_argument(
         "--config",

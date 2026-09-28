@@ -23,7 +23,7 @@ def test_bare_ts_token_is_not_a_ts_route(tmp_path: Path) -> None:
     # ORCA has no `! TS` keyword; treating one as a TS search would demand
     # Nimag == 1 from jobs that never ran a TS optimization.
     mode = _detect(tmp_path, "! TS Freq B3LYP def2-SVP\n* xyzfile 0 1 input.xyz\n")
-    assert mode.kind == "opt"
+    assert mode.kind == "sp"
     assert not mode.require_irc
 
 
@@ -52,15 +52,15 @@ def test_detect_completion_mode_skips_blank_and_comment_lines(tmp_path: Path) ->
     assert mode.require_irc
 
 
-def test_detect_completion_mode_defaults_to_opt_when_no_ts_keyword(tmp_path: Path) -> None:
+def test_detect_completion_mode_recognizes_standalone_irc(tmp_path: Path) -> None:
     mode = _detect(tmp_path, "! SP IRC\n* xyz 0 1\n")
-    assert mode.kind == "opt"
+    assert mode.kind == "sp"
     assert mode.require_irc
 
 
-def test_detect_completion_mode_without_a_route_line_is_plain_opt(tmp_path: Path) -> None:
+def test_detect_completion_mode_without_a_route_line_is_plain_sp(tmp_path: Path) -> None:
     mode = _detect(tmp_path, "\n# comment only\n* xyz 0 1\nH 0 0 0\n")
-    assert mode.kind == "opt"
+    assert mode.kind == "sp"
     assert not mode.require_irc
 
 
@@ -95,7 +95,7 @@ def test_detect_completion_mode_scans_ts_irc_keywords_on_later_route_lines(
     assert mode.require_irc is True
 
 
-def test_detect_completion_mode_defaults_to_opt_when_no_route_line_is_present(
+def test_detect_completion_mode_defaults_to_sp_when_no_route_line_is_present(
     tmp_path: Path,
 ) -> None:
     inp = tmp_path / "rxn.inp"
@@ -106,7 +106,7 @@ def test_detect_completion_mode_defaults_to_opt_when_no_route_line_is_present(
 
     mode = detect_completion_mode(inp)
 
-    assert mode.kind == "opt"
+    assert mode.kind == "sp"
     assert mode.require_irc is False
 
 
@@ -203,3 +203,24 @@ def test_geometry_restrictions_do_not_claim_full_optimization(
     )
     assert parts is not None and parts.opt is not None
     assert parts.opt.kind == ("opt" if full else "partial")
+
+
+@pytest.mark.parametrize(
+    ("route", "kind", "frequency"),
+    [
+        ("SP", "sp", False),
+        ("Opt", "opt", False),
+        ("Opt NumFreq", "opt", True),
+        ("AnFreq", "sp", True),
+        ("OptTS", "ts", True),
+        ("IRC", "sp", False),
+        ("NEB-CI", "sp", False),
+        ("MD", "sp", False),
+    ],
+)
+def test_completion_requirements_follow_requested_operations(
+    tmp_path: Path, route: str, kind: str, frequency: bool
+) -> None:
+    mode = _detect(tmp_path, f"! HF STO-3G {route}\n* xyz 0 1\nH 0 0 0\n*\n")
+    assert mode.kind == kind
+    assert mode.require_frequency is frequency

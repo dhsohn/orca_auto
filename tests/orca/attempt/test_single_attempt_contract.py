@@ -124,7 +124,7 @@ def test_nonzero_exit_rejects_otherwise_completed_attempt(
     assert record["analyzer_status"] == "unknown_failure"
     assert record["analyzer_reason"] == "nonzero_exit_code"
     assert record["markers"]["terminated_normally"] is True
-    assert record["markers"]["final_frequency_section"] is False
+    assert record["markers"]["final_frequency_section"] is True
     if "OptTS" in route:
         assert record["markers"]["imaginary_frequency_count"] == 1
     assert saved["final_result"] is not None
@@ -146,6 +146,7 @@ def test_nonzero_exit_rejects_otherwise_completed_attempt(
         ("! SP", "ORCA FINISHED BY ERROR TERMINATION", "error_termination"),
         (
             "! OptTS Freq",
+            "FINAL SINGLE POINT ENERGY -1.1\nTHE OPTIMIZATION HAS CONVERGED\n"
             "VIBRATIONAL FREQUENCIES\n  1   -420.00 cm**-1\n  2   -120.00 cm**-1",
             "ts_criteria_failed",
         ),

@@ -397,7 +397,9 @@ def _scratch_run(
         assert working_directory_fd is not None
         launches.append(inp_path)
         out = inp_path.with_suffix(".out")
-        out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+        out.write_text(
+            "FINAL SINGLE POINT ENERGY -1.1\n****ORCA TERMINATED NORMALLY****\n", encoding="utf-8"
+        )
         return RunResult(out_path=str(out), return_code=0)
 
     monkeypatch.setattr(execution, "acquire_run_lock", passthrough)
@@ -563,7 +565,8 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     rxn = queue_root / "rxn"
     fake_orca = tmp_path / "fake-orca"
     fake_orca.write_text(
-        "#!/bin/sh\necho '****ORCA TERMINATED NORMALLY****'\nexit 0\n", encoding="utf-8"
+        "#!/bin/sh\necho 'FINAL SINGLE POINT ENERGY -1.1'\necho '****ORCA TERMINATED NORMALLY****'\nexit 0\n",
+        encoding="utf-8",
     )
     fake_orca.chmod(0o755)
     entry = enqueue(

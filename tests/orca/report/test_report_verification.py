@@ -23,7 +23,7 @@ def report_generation(tmp_path: Path) -> tuple[Path, Path]:
     state = dict(new_state(tmp_path, selected))
     generation = bind_report_generation(tmp_path, state)
     output = generation / "sample.out"
-    output.write_text("****ORCA TERMINATED NORMALLY****\n")
+    output.write_text("FINAL SINGLE POINT ENERGY -1.1\n****ORCA TERMINATED NORMALLY****\n")
     state.update(
         run_id="report-verification-run",
         status="completed",
@@ -54,6 +54,19 @@ def test_machine_report_owned_fields_have_expected_values(
         "attempt_count": 1,
     }
     assert data["results"] == {
+        "science": {
+            "status": "verified",
+            "reason": "normal_termination",
+            "energy_hartree": -1.1,
+            "scf_converged": None,
+            "optimization_converged": None,
+            "frequencies_available": False,
+            "imaginary_frequency_count": None,
+            "geometry_scope": "single_point",
+            "stationary_point": "unverified",
+            "output_artifact": "orca-output",
+            "evidence_lines": {"energy": 1, "scf": None, "optimization": None},
+        },
         "run_id": "report-verification-run",
         "reason": "normal_termination",
         "analyzer_status": "completed",
@@ -259,7 +272,9 @@ def test_report_verifier_rejects_a_digest_bug_in_the_writer(
     state = dict(new_state(tmp_path, selected))
     generation = bind_report_generation(tmp_path, state)
     output = generation / "sample.out"
-    output.write_text("output\n" * 20000 + "****ORCA TERMINATED NORMALLY****\n")
+    output.write_text(
+        "output\n" * 20000 + "FINAL SINGLE POINT ENERGY -1.1\n****ORCA TERMINATED NORMALLY****\n"
+    )
     state.update(
         status="completed",
         attempts=[{"index": 1, "inp_path": state["selected_inp"], "out_path": str(output)}],
@@ -280,4 +295,65 @@ def test_report_verifier_rejects_a_digest_bug_in_the_writer(
     report = write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state))
     assert report is not None
     assert json.loads(report.read_text())["artifacts"]["orca-output"]["byte_sha256"] == "0" * 64
+    assert load_report_json(generation, require_consumable_success=True) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong"),
+    [
+        ("status", "unknown"),
+        ("reason", "invented"),
+        ("energy_hartree", -2.2),
+        ("scf_converged", True),
+        ("optimization_converged", True),
+        ("frequencies_available", True),
+        ("imaginary_frequency_count", 0),
+        ("geometry_scope", "full"),
+        ("stationary_point", "minimum"),
+        ("output_artifact", "input"),
+        ("evidence_lines", {"energy": 999}),
+    ],
+)
+@pytest.mark.parametrize("remove", [False, True])
+def test_report_verifier_rejects_scientific_field_tampering(
+    report_generation: tuple[Path, Path],
+    field: str,
+    wrong: Any,
+    remove: bool,
+) -> None:
+    generation, report = report_generation
+    observation = json.loads(report.read_text())
+    science = observation["payload"]["data"]["results"]["science"]
+    assert science[field] != wrong
+    if remove:
+        del science[field]
+    else:
+        science[field] = wrong
+    report.write_text(json.dumps(observation))
+    assert load_report_json(generation, require_consumable_success=True) is None
+
+
+def test_uncertain_science_is_a_valid_report_but_not_consumable_success(tmp_path: Path) -> None:
+    selected = tmp_path / "sample.inp"
+    selected.write_text("! HF STO-3G SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
+    state = dict(new_state(tmp_path, selected))
+    generation = bind_report_generation(tmp_path, state)
+    output = generation / "sample.out"
+    output.write_text("ORCA TERMINATED NORMALLY\n")
+    state.update(
+        status="completed",
+        final_result={
+            "status": "completed",
+            "analyzer_status": "completed",
+            "reason": "normal_termination",
+            "last_out_path": str(output),
+        },
+    )
+    save_state(tmp_path, state)
+    report = write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state))
+    assert report is not None
+    observation = json.loads(report.read_text())
+    assert observation["lifecycle"]["outcome"] == "uncertain"
+    assert observation["handoff"]["status"] == "blocked"
+    assert load_report_json(generation) is not None
     assert load_report_json(generation, require_consumable_success=True) is None

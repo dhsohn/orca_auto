@@ -269,6 +269,16 @@
         },
         {
           "options": [
+            "--input"
+          ],
+          "action": "_StoreAction",
+          "nargs": null,
+          "choices": null,
+          "default": null,
+          "required": false
+        },
+        {
+          "options": [
             "--force"
           ],
           "action": "_StoreTrueAction",
@@ -645,7 +655,7 @@
               "nargs": null,
               "choices": null,
               "default": null,
-              "required": true
+              "required": false
             },
             {
               "options": [

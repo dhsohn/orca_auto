@@ -77,7 +77,7 @@ def provenance_report(submitted_snapshot: dict[str, Any]) -> tuple[Path, dict[st
     (generation.parent / "geometry.xyz").unlink()
     selected = Path(snapshot["selected_inp"])
     output = selected.with_suffix(".out")
-    output.write_text("****ORCA TERMINATED NORMALLY****\n")
+    output.write_text("FINAL SINGLE POINT ENERGY -1.1\n****ORCA TERMINATED NORMALLY****\n")
     state = dict(new_state(generation.parent, selected))
     state.update(
         status="completed",

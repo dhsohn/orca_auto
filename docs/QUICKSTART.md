@@ -28,8 +28,8 @@ orca_auto init --config ~/orca_auto.yaml
 Register and start the systemd worker service so calculations continue in the background after the terminal session closes:
 
 ```bash
-# Install and enable systemd units for the current user (provide repo or runtime path)
-orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
+# Install from the activated package virtual environment
+orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
 
 # Check worker and runtime status
 orca_auto service status
