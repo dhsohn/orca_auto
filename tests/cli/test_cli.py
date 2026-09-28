@@ -10,7 +10,9 @@ import pytest
 from orca_auto import (
     cli,
     cli_handlers,
+    cli_index,
     cli_queue,
+    cli_run_dir,
     cli_systemd_apply,
     cli_systemd_restart,
     cli_systemd_status,
@@ -144,7 +146,7 @@ def test_build_parser_parses_index_prune() -> None:
     assert args.config == "/tmp/orca_auto.yaml"
     assert args.apply is True
     assert args.json is True
-    assert args.func is cli_handlers.cmd_index_prune
+    assert args.func is cli_index.cmd_index_prune
 
     dry_args = parser.parse_args(["index", "prune"])
     assert dry_args.apply is False
@@ -284,7 +286,7 @@ def test_build_parser_parses_index_rebuild() -> None:
     assert args.config == "/tmp/orca_auto.yaml"
     assert args.dry_run is True
     assert args.json is True
-    assert args.func is cli_handlers.cmd_index_rebuild
+    assert args.func is cli_index.cmd_index_rebuild
 
     apply_args = parser.parse_args(["index", "rebuild"])
     assert apply_args.dry_run is False
@@ -471,7 +473,7 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
     assert orca_args.config == "/tmp/orca_auto.yaml"
     assert orca_args.priority == 4
     assert orca_args.force is True
-    assert orca_args.func is cli_handlers.cmd_run_dir
+    assert orca_args.func is cli_run_dir.cmd_run_dir
 
 
 def test_run_dir_help_renders_engine_directives(capsys: pytest.CaptureFixture[str]) -> None:
@@ -599,16 +601,18 @@ def test_main_dispatches_unified_queue_cancel(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.parametrize(
-    ("argv", "attr_name", "expected_attrs", "expected_result"),
+    ("argv", "module", "attr_name", "expected_attrs", "expected_result"),
     [
         (
             ["run-dir", "/tmp/rxn", "--orca_auto-config", "/tmp/orca_auto.yaml", "--priority", "3"],
+            cli_run_dir,
             "cmd_run_dir",
             {"command": "run-dir", "path": "/tmp/rxn", "priority": 3},
             21,
         ),
         (
             ["init", "--orca_auto-config", "/tmp/orca_auto.yaml", "--force"],
+            cli_handlers,
             "cmd_init",
             {"command": "init", "force": True},
             22,
@@ -618,6 +622,7 @@ def test_main_dispatches_unified_queue_cancel(monkeypatch: pytest.MonkeyPatch) -
 def test_main_dispatches_unified_engine_commands(
     monkeypatch: pytest.MonkeyPatch,
     argv: list[str],
+    module: Any,
     attr_name: str,
     expected_attrs: dict[str, Any],
     expected_result: int,
@@ -628,7 +633,7 @@ def test_main_dispatches_unified_engine_commands(
         seen.append(args)
         return expected_result
 
-    monkeypatch.setattr(cli_handlers, attr_name, fake_cmd)
+    monkeypatch.setattr(module, attr_name, fake_cmd)
 
     result = cli.main(argv)
 

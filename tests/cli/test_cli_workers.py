@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from orca_auto import cli_handlers, cli_workers
+from orca_auto import cli_run_dir, cli_workers
 from orca_auto import cli_worker_supervision as worker_supervision
 from orca_auto.core.config.schema import SchedulerConfig
 from orca_auto.core.queue.processes import worker_shutdown_budget_seconds
@@ -110,10 +110,10 @@ def test_cmd_run_dir_uses_discovered_shared_config(
     (target / "job.inp").write_text("! Opt\n", encoding="utf-8")
     captured: list[tuple[str | None, str]] = []
 
-    monkeypatch.setattr(cli_handlers, "_configure_orca_logging", lambda args: None)
+    monkeypatch.setattr(cli_run_dir, "_configure_orca_logging", lambda args: None)
     discovered = tmp_path / "orca_auto.yaml"
     monkeypatch.setattr(
-        cli_handlers, "discover_shared_config_path", lambda explicit: str(discovered)
+        cli_run_dir, "discover_shared_config_path", lambda explicit: str(discovered)
     )
 
     import orca_auto.orca.commands.run_inp as run_inp_cmd
@@ -128,7 +128,7 @@ def test_cmd_run_dir_uses_discovered_shared_config(
         _fake_cmd_run_inp,
     )
 
-    result = cli_handlers.cmd_run_dir(
+    result = cli_run_dir.cmd_run_dir(
         argparse.Namespace(
             path=str(target),
             config=None,

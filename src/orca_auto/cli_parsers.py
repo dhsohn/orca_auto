@@ -17,7 +17,7 @@ import difflib
 import re
 from typing import NoReturn, cast
 
-from orca_auto import cli_handlers, cli_queue, cli_scratch, cli_workers
+from orca_auto import cli_handlers, cli_index, cli_queue, cli_run_dir, cli_scratch, cli_workers
 from orca_auto._version import package_version
 from orca_auto.cli_systemd_apply import cmd_systemd_install
 from orca_auto.cli_systemd_restart import cmd_service_restart
@@ -113,7 +113,7 @@ def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="Queue priority when submission is enqueued (lower = higher)",
     )
     add_json_argument(run_dir_parser, help_text="Print JSON submission output")
-    run_dir_parser.set_defaults(func=cli_handlers.cmd_run_dir)
+    run_dir_parser.set_defaults(func=cli_run_dir.cmd_run_dir)
 
 
 def add_init_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -207,7 +207,7 @@ def add_index_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help="Rewrite the index without the listed rows; nothing is written without it",
     )
     add_json_argument(prune_parser)
-    prune_parser.set_defaults(func=cli_handlers.cmd_index_prune)
+    prune_parser.set_defaults(func=cli_index.cmd_index_prune)
 
     rebuild_parser = index_subparsers.add_parser(
         "rebuild",
@@ -223,7 +223,7 @@ def add_index_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help="Report the rows that would be added or updated without writing the index",
     )
     add_json_argument(rebuild_parser)
-    rebuild_parser.set_defaults(func=cli_handlers.cmd_index_rebuild)
+    rebuild_parser.set_defaults(func=cli_index.cmd_index_rebuild)
 
 
 def add_scratch_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
