@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import logging.handlers
@@ -563,7 +564,11 @@ def test_resume_crash_recovered_failure_keeps_run_id_and_continues(
     def _fake_run(_self: OrcaRunner, inp_path: Path) -> RunResult:
         seen.append(inp_path.name)
         out = inp_path.with_suffix(".out")
-        out.write_text(_NORMAL_TERMINATION, encoding="utf-8")
+        out.write_text(
+            "FINAL SINGLE POINT ENERGY -1.117\n"
+            "THE OPTIMIZATION HAS CONVERGED\n" + _NORMAL_TERMINATION,
+            encoding="utf-8",
+        )
         return RunResult(out_path=str(out), return_code=0)
 
     fake_run(_fake_run)
@@ -1034,3 +1039,57 @@ def test_run_dir_keeps_loaded_config_when_file_changes_before_submission(
     entries = queue_adapter.list_queue(runs_root)
     assert len(entries) == 1
     assert entries[0].metadata["reaction_dir"] == str(job)
+
+
+def test_run_dir_explicit_input_wins_over_newer_file_and_binds_snapshot(tmp_path: Path) -> None:
+    runs_root, job, config = _run_dir_fixture(tmp_path)
+    selected = job / "older.inp"
+    source = "! HF STO-3G SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.75\n*\n"
+    selected.write_text(source, encoding="utf-8")
+    os.utime(selected, (1_700_000_000, 1_700_000_000))
+    os.utime(job / "job.inp", (1_700_000_100, 1_700_000_100))
+
+    assert main(["run-dir", str(job), "--config", str(config), "--input", selected.name]) == 0
+
+    [entry] = queue_adapter.list_queue(runs_root)
+    assert entry.metadata["source_selected_inp"] == str(selected)
+    snapshot = entry.metadata["execution_snapshot"]
+    queued_input = Path(entry.metadata["selected_inp"])
+    assert queued_input == Path(snapshot["selected_inp"])
+    assert queued_input != selected
+    assert queued_input.parent.parent == job
+    assert queued_input.name == selected.name
+    assert (
+        snapshot["source_inputs"]["selected_source"]["sha256"]
+        == hashlib.sha256(source.encode()).hexdigest()
+    )
+    frozen = queued_input.read_bytes()
+    assert b"H 0 0 0.75" in frozen
+    selected.write_text("changed after submission\n")
+    assert queued_input.read_bytes() == frozen
+
+
+@pytest.mark.parametrize(
+    "selection",
+    ["../outside.inp", "nested/input.inp", "missing.inp", "wrong.xyz", "alias.inp", "absolute"],
+)
+def test_run_dir_explicit_input_refuses_invalid_selection_without_queue_publication(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], selection: str
+) -> None:
+    runs_root, job, config = _run_dir_fixture(tmp_path)
+    (job / "wrong.xyz").write_text("not an ORCA input\n")
+    (job / "alias.inp").symlink_to(job / "job.inp")
+    (job / "nested").mkdir()
+    (job / "nested" / "input.inp").write_text((job / "job.inp").read_text())
+    if selection == "absolute":
+        selection = str(job / "job.inp")
+
+    assert main(["run-dir", str(job), "--config", str(config), "--input", selection, "--json"]) == 1
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert payload["error"]
+    assert "Traceback" not in captured.err
+    assert queue_adapter.list_queue(runs_root) == []
+    assert [path.name for path in job.iterdir() if path.is_dir()] == ["nested"]

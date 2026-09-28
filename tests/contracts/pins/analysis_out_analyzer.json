@@ -19,7 +19,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "disk_io_error.out|opt|padded": {
@@ -42,7 +47,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "disk_io_error.out|ts|as_is": {
@@ -65,7 +75,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "disk_io_error.out|ts|padded": {
@@ -88,7 +103,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "disk_io_error.out|ts_irc|as_is": {
@@ -111,7 +131,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "disk_io_error.out|ts_irc|padded": {
@@ -134,7 +159,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "error_termination.out|opt|as_is": {
@@ -157,7 +187,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "error_termination.out|opt|padded": {
@@ -180,7 +215,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "error_termination.out|ts|as_is": {
@@ -203,7 +243,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "error_termination.out|ts|padded": {
@@ -226,7 +271,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "error_termination.out|ts_irc|as_is": {
@@ -249,7 +299,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "error_termination.out|ts_irc|padded": {
@@ -272,7 +327,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "input_echo_and_comment_diagnostics.out|opt|as_is": {
@@ -295,7 +355,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 31,
+      "optimization_line": 34,
+      "scf_line": null
     }
   },
   "input_echo_and_comment_diagnostics.out|opt|padded": {
@@ -318,12 +383,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 288,
+      "optimization_line": 291,
+      "scf_line": null
     }
   },
   "input_echo_and_comment_diagnostics.out|ts|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "input_echo_and_comment_diagnostics.out",
       "terminated_normally": true,
@@ -341,12 +411,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 31,
+      "optimization_line": 34,
+      "scf_line": null
     }
   },
   "input_echo_and_comment_diagnostics.out|ts|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "input_echo_and_comment_diagnostics.out",
       "terminated_normally": true,
@@ -364,12 +439,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 288,
+      "optimization_line": 291,
+      "scf_line": null
     }
   },
   "input_echo_and_comment_diagnostics.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "input_echo_and_comment_diagnostics.out",
       "terminated_normally": true,
@@ -387,12 +467,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 31,
+      "optimization_line": 34,
+      "scf_line": null
     }
   },
   "input_echo_and_comment_diagnostics.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "input_echo_and_comment_diagnostics.out",
       "terminated_normally": true,
@@ -410,7 +495,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 288,
+      "optimization_line": 291,
+      "scf_line": null
     }
   },
   "input_syntax_abort.out|opt|as_is": {
@@ -433,7 +523,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "input_syntax_abort.out|opt|padded": {
@@ -456,7 +551,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "input_syntax_abort.out|ts|as_is": {
@@ -479,7 +579,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "input_syntax_abort.out|ts|padded": {
@@ -502,7 +607,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "input_syntax_abort.out|ts_irc|as_is": {
@@ -525,7 +635,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "input_syntax_abort.out|ts_irc|padded": {
@@ -548,7 +663,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "memory_advisory_completed.out|opt|as_is": {
@@ -571,7 +691,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 33,
+      "optimization_line": 36,
+      "scf_line": null
     }
   },
   "memory_advisory_completed.out|opt|padded": {
@@ -594,12 +719,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 290,
+      "optimization_line": 293,
+      "scf_line": null
     }
   },
   "memory_advisory_completed.out|ts|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "memory_advisory_completed.out",
       "terminated_normally": true,
@@ -617,12 +747,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 33,
+      "optimization_line": 36,
+      "scf_line": null
     }
   },
   "memory_advisory_completed.out|ts|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "memory_advisory_completed.out",
       "terminated_normally": true,
@@ -640,12 +775,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 290,
+      "optimization_line": 293,
+      "scf_line": null
     }
   },
   "memory_advisory_completed.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "memory_advisory_completed.out",
       "terminated_normally": true,
@@ -663,12 +803,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 33,
+      "optimization_line": 36,
+      "scf_line": null
     }
   },
   "memory_advisory_completed.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "memory_advisory_completed.out",
       "terminated_normally": true,
@@ -686,7 +831,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 290,
+      "optimization_line": 293,
+      "scf_line": null
     }
   },
   "memory_error.out|opt|as_is": {
@@ -709,7 +859,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "memory_error.out|opt|padded": {
@@ -732,7 +887,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "memory_error.out|ts|as_is": {
@@ -755,7 +915,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "memory_error.out|ts|padded": {
@@ -778,7 +943,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "memory_error.out|ts_irc|as_is": {
@@ -801,7 +971,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "memory_error.out|ts_irc|padded": {
@@ -824,7 +999,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "multiplicity_impossible.out|opt|as_is": {
@@ -847,7 +1027,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "multiplicity_impossible.out|opt|padded": {
@@ -870,7 +1055,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "multiplicity_impossible.out|ts|as_is": {
@@ -893,7 +1083,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "multiplicity_impossible.out|ts|padded": {
@@ -916,7 +1111,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "multiplicity_impossible.out|ts_irc|as_is": {
@@ -939,7 +1139,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "multiplicity_impossible.out|ts_irc|padded": {
@@ -962,7 +1167,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "opt_completed.out|opt|as_is": {
@@ -985,7 +1195,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "opt_completed.out|opt|padded": {
@@ -1008,12 +1223,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "opt_completed.out|ts|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_completed.out",
       "terminated_normally": true,
@@ -1031,12 +1251,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "opt_completed.out|ts|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_completed.out",
       "terminated_normally": true,
@@ -1054,12 +1279,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "opt_completed.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_completed.out",
       "terminated_normally": true,
@@ -1077,12 +1307,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "opt_completed.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_completed.out",
       "terminated_normally": true,
@@ -1100,7 +1335,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "opt_completed_crlf.out|opt|as_is": {
@@ -1123,7 +1363,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "opt_completed_crlf.out|opt|padded": {
@@ -1146,12 +1391,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "opt_completed_crlf.out|ts|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_completed_crlf.out",
       "terminated_normally": true,
@@ -1169,12 +1419,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "opt_completed_crlf.out|ts|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_completed_crlf.out",
       "terminated_normally": true,
@@ -1192,12 +1447,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "opt_completed_crlf.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_completed_crlf.out",
       "terminated_normally": true,
@@ -1215,12 +1475,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "opt_completed_crlf.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_completed_crlf.out",
       "terminated_normally": true,
@@ -1238,7 +1503,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "opt_converged_after_not_yet.out|opt|as_is": {
@@ -1261,7 +1531,12 @@
       "geom_not_converged": true,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 36,
+      "optimization_line": 39,
+      "scf_line": null
     }
   },
   "opt_converged_after_not_yet.out|opt|padded": {
@@ -1284,12 +1559,17 @@
       "geom_not_converged": true,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 293,
+      "optimization_line": 296,
+      "scf_line": null
     }
   },
   "opt_converged_after_not_yet.out|ts|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_converged_after_not_yet.out",
       "terminated_normally": true,
@@ -1307,12 +1587,17 @@
       "geom_not_converged": true,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 36,
+      "optimization_line": 39,
+      "scf_line": null
     }
   },
   "opt_converged_after_not_yet.out|ts|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_converged_after_not_yet.out",
       "terminated_normally": true,
@@ -1330,12 +1615,17 @@
       "geom_not_converged": true,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 293,
+      "optimization_line": 296,
+      "scf_line": null
     }
   },
   "opt_converged_after_not_yet.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_converged_after_not_yet.out",
       "terminated_normally": true,
@@ -1353,12 +1643,17 @@
       "geom_not_converged": true,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 36,
+      "optimization_line": 39,
+      "scf_line": null
     }
   },
   "opt_converged_after_not_yet.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "opt_converged_after_not_yet.out",
       "terminated_normally": true,
@@ -1376,7 +1671,12 @@
       "geom_not_converged": true,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.2,
+      "scf_converged": null,
+      "energy_line": 293,
+      "optimization_line": 296,
+      "scf_line": null
     }
   },
   "opt_incomplete.out|opt|as_is": {
@@ -1399,7 +1699,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.17,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "opt_incomplete.out|opt|padded": {
@@ -1422,7 +1727,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.17,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "opt_incomplete.out|ts|as_is": {
@@ -1445,7 +1755,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.17,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "opt_incomplete.out|ts|padded": {
@@ -1468,7 +1783,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.17,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "opt_incomplete.out|ts_irc|as_is": {
@@ -1491,7 +1811,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.17,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "opt_incomplete.out|ts_irc|padded": {
@@ -1514,7 +1839,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.17,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "opt_not_converged.out|opt|as_is": {
@@ -1537,7 +1867,12 @@
       "geom_not_converged": true,
       "last_opt_converged": false,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.15,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 32,
+      "scf_line": null
     }
   },
   "opt_not_converged.out|opt|padded": {
@@ -1560,7 +1895,12 @@
       "geom_not_converged": true,
       "last_opt_converged": false,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.15,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 289,
+      "scf_line": null
     }
   },
   "opt_not_converged.out|ts|as_is": {
@@ -1583,7 +1923,12 @@
       "geom_not_converged": true,
       "last_opt_converged": false,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.15,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 32,
+      "scf_line": null
     }
   },
   "opt_not_converged.out|ts|padded": {
@@ -1606,7 +1951,12 @@
       "geom_not_converged": true,
       "last_opt_converged": false,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.15,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 289,
+      "scf_line": null
     }
   },
   "opt_not_converged.out|ts_irc|as_is": {
@@ -1629,7 +1979,12 @@
       "geom_not_converged": true,
       "last_opt_converged": false,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.15,
+      "scf_converged": null,
+      "energy_line": 30,
+      "optimization_line": 32,
+      "scf_line": null
     }
   },
   "opt_not_converged.out|ts_irc|padded": {
@@ -1652,7 +2007,12 @@
       "geom_not_converged": true,
       "last_opt_converged": false,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.15,
+      "scf_converged": null,
+      "energy_line": 287,
+      "optimization_line": 289,
+      "scf_line": null
     }
   },
   "scf_gradient_abort.out|opt|as_is": {
@@ -1675,7 +2035,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "scf_gradient_abort.out|opt|padded": {
@@ -1698,7 +2063,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "scf_gradient_abort.out|ts|as_is": {
@@ -1721,7 +2091,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "scf_gradient_abort.out|ts|padded": {
@@ -1744,7 +2119,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "scf_gradient_abort.out|ts_irc|as_is": {
@@ -1767,7 +2147,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "scf_gradient_abort.out|ts_irc|padded": {
@@ -1790,7 +2175,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -76.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "scf_not_converged.out|opt|as_is": {
@@ -1813,7 +2203,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": false,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": 24
     }
   },
   "scf_not_converged.out|opt|padded": {
@@ -1836,7 +2231,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": false,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": 281
     }
   },
   "scf_not_converged.out|ts|as_is": {
@@ -1859,7 +2259,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": false,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": 24
     }
   },
   "scf_not_converged.out|ts|padded": {
@@ -1882,7 +2287,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": false,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": 281
     }
   },
   "scf_not_converged.out|ts_irc|as_is": {
@@ -1905,7 +2315,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": false,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": 24
     }
   },
   "scf_not_converged.out|ts_irc|padded": {
@@ -1928,7 +2343,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": false,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": 281
     }
   },
   "ts_failure_marker.out|opt|as_is": {
@@ -1951,7 +2371,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_failure_marker.out|opt|padded": {
@@ -1974,7 +2399,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_failure_marker.out|ts|as_is": {
@@ -1997,7 +2427,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_failure_marker.out|ts|padded": {
@@ -2020,7 +2455,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_failure_marker.out|ts_irc|as_is": {
@@ -2043,7 +2483,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_failure_marker.out|ts_irc|padded": {
@@ -2066,12 +2511,17 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_headerless_count.out|opt|as_is": {
-    "status": "completed",
-    "reason": "normal_termination",
+    "status": "incomplete",
+    "reason": "optimization_evidence_missing",
     "markers": {
       "out_path": "ts_headerless_count.out",
       "terminated_normally": true,
@@ -2089,12 +2539,17 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_headerless_count.out|opt|padded": {
-    "status": "completed",
-    "reason": "normal_termination",
+    "status": "incomplete",
+    "reason": "optimization_evidence_missing",
     "markers": {
       "out_path": "ts_headerless_count.out",
       "terminated_normally": true,
@@ -2112,16 +2567,21 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_headerless_count.out|ts|as_is": {
-    "status": "completed",
-    "reason": "ts_criteria_met",
+    "status": "incomplete",
+    "reason": "optimization_evidence_missing",
     "markers": {
       "out_path": "ts_headerless_count.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 1,
+      "imaginary_frequency_count": 0,
       "irc_marker_found": false,
       "opt_converged": false,
       "scf_error": false,
@@ -2135,16 +2595,21 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_headerless_count.out|ts|padded": {
-    "status": "completed",
-    "reason": "ts_criteria_met",
+    "status": "incomplete",
+    "reason": "optimization_evidence_missing",
     "markers": {
       "out_path": "ts_headerless_count.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 1,
+      "imaginary_frequency_count": 0,
       "irc_marker_found": false,
       "opt_converged": false,
       "scf_error": false,
@@ -2158,16 +2623,21 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_headerless_count.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "optimization_evidence_missing",
     "markers": {
       "out_path": "ts_headerless_count.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 1,
+      "imaginary_frequency_count": 0,
       "irc_marker_found": false,
       "opt_converged": false,
       "scf_error": false,
@@ -2181,16 +2651,21 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 25,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_headerless_count.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "optimization_evidence_missing",
     "markers": {
       "out_path": "ts_headerless_count.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 1,
+      "imaginary_frequency_count": 0,
       "irc_marker_found": false,
       "opt_converged": false,
       "scf_error": false,
@@ -2204,7 +2679,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.1,
+      "scf_converged": null,
+      "energy_line": 282,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "ts_irc.out|opt|as_is": {
@@ -2213,7 +2693,7 @@
     "markers": {
       "out_path": "ts_irc.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 0,
+      "imaginary_frequency_count": 1,
       "irc_marker_found": true,
       "opt_converged": true,
       "scf_error": false,
@@ -2227,7 +2707,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_irc.out|opt|padded": {
@@ -2236,7 +2721,7 @@
     "markers": {
       "out_path": "ts_irc.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 0,
+      "imaginary_frequency_count": 1,
       "irc_marker_found": true,
       "opt_converged": true,
       "scf_error": false,
@@ -2250,7 +2735,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_irc.out|ts|as_is": {
@@ -2273,7 +2763,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_irc.out|ts|padded": {
@@ -2296,7 +2791,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_irc.out|ts_irc|as_is": {
@@ -2319,7 +2819,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_irc.out|ts_irc|padded": {
@@ -2342,7 +2847,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_one_imaginary.out|opt|as_is": {
@@ -2351,7 +2861,7 @@
     "markers": {
       "out_path": "ts_one_imaginary.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 0,
+      "imaginary_frequency_count": 1,
       "irc_marker_found": false,
       "opt_converged": true,
       "scf_error": false,
@@ -2365,7 +2875,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_one_imaginary.out|opt|padded": {
@@ -2374,7 +2889,7 @@
     "markers": {
       "out_path": "ts_one_imaginary.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 0,
+      "imaginary_frequency_count": 1,
       "irc_marker_found": false,
       "opt_converged": true,
       "scf_error": false,
@@ -2388,7 +2903,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_one_imaginary.out|ts|as_is": {
@@ -2411,7 +2931,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_one_imaginary.out|ts|padded": {
@@ -2434,12 +2959,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_one_imaginary.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "irc_evidence_missing",
     "markers": {
       "out_path": "ts_one_imaginary.out",
       "terminated_normally": true,
@@ -2457,12 +2987,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_one_imaginary.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "irc_evidence_missing",
     "markers": {
       "out_path": "ts_one_imaginary.out",
       "terminated_normally": true,
@@ -2480,7 +3015,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_superseded_section.out|opt|as_is": {
@@ -2503,7 +3043,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 42,
+      "optimization_line": 40,
+      "scf_line": null
     }
   },
   "ts_superseded_section.out|opt|padded": {
@@ -2526,12 +3071,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 299,
+      "optimization_line": 297,
+      "scf_line": null
     }
   },
   "ts_superseded_section.out|ts|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "ts_superseded_section.out",
       "terminated_normally": true,
@@ -2549,12 +3099,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 42,
+      "optimization_line": 40,
+      "scf_line": null
     }
   },
   "ts_superseded_section.out|ts|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "ts_superseded_section.out",
       "terminated_normally": true,
@@ -2572,12 +3127,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 299,
+      "optimization_line": 297,
+      "scf_line": null
     }
   },
   "ts_superseded_section.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "ts_superseded_section.out",
       "terminated_normally": true,
@@ -2595,12 +3155,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 42,
+      "optimization_line": 40,
+      "scf_line": null
     }
   },
   "ts_superseded_section.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "frequency_evidence_missing",
     "markers": {
       "out_path": "ts_superseded_section.out",
       "terminated_normally": true,
@@ -2618,7 +3183,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 299,
+      "optimization_line": 297,
+      "scf_line": null
     }
   },
   "ts_tiny_negative_modes.out|opt|as_is": {
@@ -2627,7 +3197,7 @@
     "markers": {
       "out_path": "ts_tiny_negative_modes.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 0,
+      "imaginary_frequency_count": 1,
       "irc_marker_found": false,
       "opt_converged": true,
       "scf_error": false,
@@ -2641,7 +3211,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_tiny_negative_modes.out|opt|padded": {
@@ -2650,7 +3225,7 @@
     "markers": {
       "out_path": "ts_tiny_negative_modes.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 0,
+      "imaginary_frequency_count": 1,
       "irc_marker_found": false,
       "opt_converged": true,
       "scf_error": false,
@@ -2664,7 +3239,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_tiny_negative_modes.out|ts|as_is": {
@@ -2687,7 +3267,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_tiny_negative_modes.out|ts|padded": {
@@ -2710,12 +3295,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_tiny_negative_modes.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "irc_evidence_missing",
     "markers": {
       "out_path": "ts_tiny_negative_modes.out",
       "terminated_normally": true,
@@ -2733,12 +3323,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_tiny_negative_modes.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "irc_evidence_missing",
     "markers": {
       "out_path": "ts_tiny_negative_modes.out",
       "terminated_normally": true,
@@ -2756,7 +3351,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_two_imaginary.out|opt|as_is": {
@@ -2765,7 +3365,7 @@
     "markers": {
       "out_path": "ts_two_imaginary.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 0,
+      "imaginary_frequency_count": 2,
       "irc_marker_found": false,
       "opt_converged": true,
       "scf_error": false,
@@ -2779,7 +3379,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_two_imaginary.out|opt|padded": {
@@ -2788,7 +3393,7 @@
     "markers": {
       "out_path": "ts_two_imaginary.out",
       "terminated_normally": true,
-      "imaginary_frequency_count": 0,
+      "imaginary_frequency_count": 2,
       "irc_marker_found": false,
       "opt_converged": true,
       "scf_error": false,
@@ -2802,7 +3407,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": false
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_two_imaginary.out|ts|as_is": {
@@ -2825,7 +3435,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_two_imaginary.out|ts|padded": {
@@ -2848,12 +3463,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "ts_two_imaginary.out|ts_irc|as_is": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "irc_evidence_missing",
     "markers": {
       "out_path": "ts_two_imaginary.out",
       "terminated_normally": true,
@@ -2871,12 +3491,17 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 35,
+      "optimization_line": 33,
+      "scf_line": null
     }
   },
   "ts_two_imaginary.out|ts_irc|padded": {
-    "status": "ts_not_found",
-    "reason": "ts_criteria_failed",
+    "status": "incomplete",
+    "reason": "irc_evidence_missing",
     "markers": {
       "out_path": "ts_two_imaginary.out",
       "terminated_normally": true,
@@ -2894,7 +3519,12 @@
       "geom_not_converged": false,
       "last_opt_converged": true,
       "total_run_time_seen": true,
-      "final_frequency_section": true
+      "final_frequency_section": true,
+      "energy_hartree": -150.12,
+      "scf_converged": null,
+      "energy_line": 292,
+      "optimization_line": 290,
+      "scf_line": null
     }
   },
   "zero_distance.out|opt|as_is": {
@@ -2917,7 +3547,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "zero_distance.out|opt|padded": {
@@ -2940,7 +3575,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "zero_distance.out|ts|as_is": {
@@ -2963,7 +3603,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "zero_distance.out|ts|padded": {
@@ -2986,7 +3631,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "zero_distance.out|ts_irc|as_is": {
@@ -3009,7 +3659,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   },
   "zero_distance.out|ts_irc|padded": {
@@ -3032,7 +3687,12 @@
       "geom_not_converged": false,
       "last_opt_converged": null,
       "total_run_time_seen": false,
-      "final_frequency_section": false
+      "final_frequency_section": false,
+      "energy_hartree": null,
+      "scf_converged": null,
+      "energy_line": null,
+      "optimization_line": null,
+      "scf_line": null
     }
   }
 }

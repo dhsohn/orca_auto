@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import codecs
 import io
+from collections.abc import Callable
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 # Bytes inspected to choose the codec. A BOM sits in the first bytes; the
 # UTF-16 heuristic needs a sample, not the file, so a multi-gigabyte output is
@@ -74,7 +75,32 @@ def read_orca_text(file_path: str | Path) -> str:
     return raw.decode(detect_orca_encoding(raw[:ENCODING_SNIFF_BYTES]), errors="replace")
 
 
-def open_orca_text(file_path: str | Path) -> TextIO:
+class _ObservedReader(io.RawIOBase):
+    """Hash the bytes actually decoded, including codec BOMs and line endings."""
+
+    def __init__(self, stream: io.BufferedReader, observe: Callable[[bytes], None]) -> None:
+        self.stream = stream
+        self.observe = observe
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        chunk = self.stream.read(len(buffer))
+        self.observe(chunk)
+        buffer[: len(chunk)] = chunk
+        return len(chunk)
+
+    def close(self) -> None:
+        try:
+            self.stream.close()
+        finally:
+            super().close()
+
+
+def open_orca_text(
+    file_path: str | Path, *, byte_observer: Callable[[bytes], None] | None = None
+) -> TextIO:
     """Line-streaming handle over an ORCA output, decoded like :func:`read_orca_text`.
 
     Only :data:`ENCODING_SNIFF_BYTES` are read to choose the codec; the rest
@@ -86,6 +112,9 @@ def open_orca_text(file_path: str | Path) -> TextIO:
     try:
         encoding = detect_orca_encoding(binary.read(ENCODING_SNIFF_BYTES))
         binary.seek(0)
+        if byte_observer is not None:
+            observed = io.BufferedReader(_ObservedReader(binary, byte_observer))
+            return io.TextIOWrapper(observed, encoding=encoding, errors="replace")
         return io.TextIOWrapper(binary, encoding=encoding, errors="replace")
     except BaseException:
         binary.close()

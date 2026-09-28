@@ -1,0 +1,64 @@
+{
+  "engine": "ORCA 6.1.1",
+  "source_revision": null,
+  "source_revision_note": "The retained acceptance outputs do not record a source revision.",
+  "origin": "Bounded repository acceptance calculations, 2026-09-22; test-generated H2, water and planar ammonia, HF/STO-3G, one process. Original bytes retained.",
+  "cases": {
+    "h2_sp": {
+      "original_case": "test_real_orca_h2_single_point0",
+      "original_generation": "20260922-184902-44e7b0f1",
+      "files": {
+        "h2_sp.inp": {
+          "sha256": "746277088de44193f8065ccc8c79ae444827060abd63386f1a1933dcc1276b97",
+          "bytes": 80
+        },
+        "h2_sp.out": {
+          "sha256": "48de821fc019751cbd4478c0b04f3eab23f187d4cdc4b90af0f4dbc212b028ae",
+          "bytes": 41084
+        }
+      }
+    },
+    "water_opt_freq": {
+      "original_case": "test_real_orca_water_optimizat0",
+      "original_generation": "20260922-184907-039ddcfb",
+      "files": {
+        "water_opt_freq.inp": {
+          "sha256": "caff54b036220ab4aa3ef842ee91e1d4f09e13de26ca518eef1dda591a7fe89e",
+          "bytes": 126
+        },
+        "water_opt_freq.out": {
+          "sha256": "53b5518e6cf04ff59a997b4e43b5cc6f45011dd456338a9fc3cbcf7432a120f4",
+          "bytes": 137141
+        }
+      }
+    },
+    "water_not_converged": {
+      "original_case": "test_real_orca_water_optimizat1",
+      "original_generation": "20260922-184911-33aed00f",
+      "files": {
+        "water_not_converged.inp": {
+          "sha256": "486f2c80221b7d9884fc97ceff33744cd6a561d65172f3758c72a37e23729d03",
+          "bytes": 120
+        },
+        "water_not_converged.out": {
+          "sha256": "cc2afba3d357174adbd3ab2d903dcee3e21edd00151bb0ec26fcb8482ed7f813",
+          "bytes": 46374
+        }
+      }
+    },
+    "nh3_ts_irc": {
+      "original_case": "test_real_orca_ammonia_ts_irc_0",
+      "original_generation": "20260922-184913-5e22d8ae",
+      "files": {
+        "nh3_ts_irc.inp": {
+          "sha256": "91237c4ab400d3bc2af01ebf960bde16254f76edfc34e54d54db9300925d05a6",
+          "bytes": 363
+        },
+        "nh3_ts_irc.out": {
+          "sha256": "cf52f1272009aa6650475b210572122d2e5b58cb042664173d9777ade8aeda90",
+          "bytes": 135515
+        }
+      }
+    }
+  }
+}

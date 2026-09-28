@@ -12,6 +12,8 @@ from orca_auto.orca.parser.io import read_orca_text
 
 NORMAL = "****ORCA TERMINATED NORMALLY****"
 ERROR = "ORCA FINISHED BY ERROR TERMINATION in Startup"
+ENERGY = "FINAL SINGLE POINT ENERGY -1.1\n"
+OPT_EVIDENCE = ENERGY + "THE OPTIMIZATION HAS CONVERGED\n"
 
 
 @pytest.mark.parametrize("kind", ["opt", "ts"])
@@ -47,7 +49,9 @@ def test_quoted_termination_markers_are_not_execution_evidence(
     out.write_bytes(text.encode())
     mode = CompletionMode("opt", False)
     assert analyze_output(out, mode).status == "incomplete"
-    out.write_bytes((text + newline + NORMAL + newline).encode())
+    out.write_bytes(
+        (text + newline + OPT_EVIDENCE.replace("\n", newline) + NORMAL + newline).encode()
+    )
     assert analyze_output(out, mode).status == "completed"
 
 
@@ -59,7 +63,7 @@ def test_tail_cut_inside_input_echo_does_not_create_termination_evidence(
     # The tail starts inside this echo, without its identifying line prefix.
     text = "|  1> # " + "x" * 300000 + quoted + "\n"
     if quoted == ERROR:
-        text += "VIBRATIONAL FREQUENCIES\n -150.0 cm**-1\n" + NORMAL + "\n"
+        text += OPT_EVIDENCE + "VIBRATIONAL FREQUENCIES\n -150.0 cm**-1\n" + NORMAL + "\n"
     out = tmp_path / "long_echo.out"
     out.write_text(text)
     result = analyze_output(out, CompletionMode("ts" if kind == "ts" else "opt", False))
@@ -100,7 +104,12 @@ def test_specific_ts_failure_reason_survives_generic_termination(tmp_path: Path)
 def test_termination_fix_does_not_promote_quoted_ts_failure(tmp_path: Path, quoted: str) -> None:
     out = tmp_path / "normal_ts.out"
     out.write_text(
-        "| 1> # " + quoted + "\nVIBRATIONAL FREQUENCIES\n -150.0 cm**-1\n" + NORMAL + "\n"
+        OPT_EVIDENCE
+        + "| 1> # "
+        + quoted
+        + "\nVIBRATIONAL FREQUENCIES\n -150.0 cm**-1\n"
+        + NORMAL
+        + "\n"
     )
     result = analyze_output(out, CompletionMode("ts", False))
     assert result.status == "completed"
@@ -125,9 +134,9 @@ def test_quoted_diagnostics_do_not_fail_successful_execution(
 ) -> None:
     out = tmp_path / "commented_diagnostic.out"
     filler = "ordinary output\n" * (22000 if large else 1)
-    out.write_text(prefix + diagnostic + "\n" + filler + NORMAL + "\n")
+    out.write_text(ENERGY + prefix + diagnostic + "\n" + filler + NORMAL + "\n")
 
-    result = analyze_output(out, CompletionMode("opt", False))
+    result = analyze_output(out, CompletionMode("sp", False))
 
     assert result.status == "completed"
     assert result.markers["last_opt_converged"] is None
@@ -163,7 +172,7 @@ def test_partial_tail_of_long_input_echo_is_not_diagnostic_evidence(
     tmp_path: Path, diagnostic: str
 ) -> None:
     out = tmp_path / "long_diagnostic_echo.out"
-    out.write_text("| 1> # " + "x" * 300000 + diagnostic + "\n" + NORMAL + "\n")
+    out.write_text(OPT_EVIDENCE + "| 1> # " + "x" * 300000 + diagnostic + "\n" + NORMAL + "\n")
 
     assert analyze_output(out, CompletionMode("opt", False)).status == "completed"
 
@@ -181,6 +190,6 @@ def test_ts_verification_ignores_echoed_frequency_and_irc_evidence(
 
     result = analyze_output(out, CompletionMode("ts", True))
 
-    assert result.status == "ts_not_found"
+    assert result.status == "incomplete"
     assert result.markers["imaginary_frequency_count"] == 0
     assert result.markers["irc_marker_found"] is False

@@ -4,6 +4,7 @@ import math
 import os
 import pwd
 import re
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,7 @@ class RenderedUnit:
 class SystemdInstallPlan:
     target_user: str
     repo: Path
+    python_path: Path
     config: Path
     unit_dir: Path
     units: tuple[RenderedUnit, ...]
@@ -76,7 +78,9 @@ def _needs_sudo(unit_dir: Path, *, is_root: Callable[[], bool] = running_as_root
 
 
 def _template_dir(repo_root: Path) -> Path:
-    return repo_root / "systemd"
+    if (repo_root / RUNTIME_MANIFEST_NAME).exists():
+        return repo_root / "systemd"
+    return repo_root / "src" / "orca_auto" / "systemd_templates"
 
 
 def _read_unit_template(template_root: Path, name: str) -> str:
@@ -152,8 +156,10 @@ def _render_unit_template(
     read_write_paths: str,
     stop_timeout_seconds: int | None,
     runtime_build: str,
+    python_command: str,
 ) -> str:
-    rendered = template.replace("/home/%i/orca_auto", repo_text)
+    rendered = template.replace("/home/%i/orca_auto/.venv/bin/python", python_command)
+    rendered = rendered.replace("/home/%i/orca_auto", repo_text)
     lines = []
     config_environment_prefix = f"Environment={ORCA_AUTO_CONFIG_ENV_VAR}="
     for line in rendered.splitlines():
@@ -166,7 +172,7 @@ def _render_unit_template(
                     "Environment=PYTHONPATH=",
                     "Environment=PYTHONNOUSERSITE=1",
                     f"ReadOnlyPaths={repo_text}",
-                    line.replace("/bin/python -m ", "/bin/python -I -m "),
+                    line,
                 ]
             )
         elif line.strip() == _SYSTEMD_READ_WRITE_PLACEHOLDER:
@@ -284,13 +290,13 @@ def _collect_warnings(
     *,
     no_enable: bool,
     no_start: bool,
+    python_path: Path,
 ) -> tuple[str, ...]:
     warnings: list[str] = []
     if not repo.exists():
         warnings.append(f"repo path does not exist yet: {repo}")
     elif not repo.is_dir():
         warnings.append(f"repo path is not a directory: {repo}")
-    python_path = repo / ".venv" / "bin" / "python"
     if not python_path.is_file() or not os.access(python_path, os.X_OK):
         warnings.append(
             f"service Python is missing or not executable: {python_path}; run `make venv`"
@@ -328,16 +334,19 @@ def build_systemd_install_plan(
     user_text = _validate_target_user(user_text)
 
     repo_text = normalize_text(repo)
-    if not repo_text:
-        raise ValueError("--repo is required")
-
-    repo_path = _normalize_path(repo_text)
+    installed_environment = not repo_text
+    if installed_environment and sys.prefix == sys.base_prefix:
+        raise ValueError("systemd install without --repo requires an isolated virtual environment")
+    repo_path = _normalize_path(repo_text or sys.prefix)
+    python_path = Path(sys.executable) if installed_environment else repo_path / ".venv/bin/python"
     config_path = _normalize_path(config or _default_config_for_user(user_text))
     unit_dir_path = _normalize_path(unit_dir)
-    # ``--repo`` is a required public argument and names the checkout whose
-    # service code will run. Its versioned unit files are therefore the sole
-    # template source, including when this installer itself came from a wheel.
-    template_root = _template_dir(repo_path)
+    # Packaged templates for source/pip; pinned copies for prepared bundles.
+    template_root = (
+        Path(__file__).parent / "systemd_templates"
+        if installed_environment
+        else _template_dir(repo_path)
+    )
     runtime_build = ""
     if (repo_path / RUNTIME_MANIFEST_NAME).exists():
         runtime_build = verify_runtime_bundle(repo_path)["build_id"]
@@ -347,7 +356,7 @@ def build_systemd_install_plan(
             )
     if not template_root.is_dir():
         raise ValueError(
-            f"--repo must name a checkout that contains a systemd/ template directory: {repo_path}"
+            f"--repo must name a checkout that contains src/orca_auto/systemd_templates or a prepared runtime: {repo_path}"
         )
     # A config that exists but cannot be loaded fails the install: units
     # rendered without ReadWritePaths would start a worker that cannot write.
@@ -355,6 +364,9 @@ def build_systemd_install_plan(
     shared = loaded[1] if loaded is not None else None
     repo_unit_text = _systemd_path_text(repo_path, label="--repo")
     config_unit_text = _systemd_path_text(config_path, label="--config")
+    python_command = _systemd_path_text(python_path, label="Python")
+    if installed_environment or runtime_build:
+        python_command += " -I"
     read_write_paths = _render_read_write_paths(_configured_read_write_path(shared))
     stop_timeout_seconds = _configured_stop_timeout_seconds(shared)
     units = tuple(
@@ -368,6 +380,7 @@ def build_systemd_install_plan(
                 read_write_paths=read_write_paths,
                 stop_timeout_seconds=stop_timeout_seconds,
                 runtime_build=runtime_build,
+                python_command=python_command,
             ),
         )
         for name in SYSTEMD_UNIT_NAMES
@@ -394,7 +407,14 @@ def build_systemd_install_plan(
         commands=commands,
         enabled_unit=enabled_unit,
         use_sudo=False if no_sudo else _needs_sudo(unit_dir_path, is_root=is_root),
-        warnings=_collect_warnings(repo_path, config_path, no_enable=no_enable, no_start=no_start),
+        python_path=python_path,
+        warnings=_collect_warnings(
+            repo_path,
+            config_path,
+            no_enable=no_enable,
+            no_start=no_start,
+            python_path=python_path,
+        ),
     )
 
 

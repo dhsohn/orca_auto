@@ -174,6 +174,8 @@ One rule decides what kind of job the selected input is. `completion_rules.route
 
 Geometry constraints, fixed or rigid fragments, hydrogen-only or frozen-hydrogen settings, and `RigidBodyOpt` restrict the optimized coordinates. A non-TS optimization with these restrictions is partial and does not claim a full-surface minimum. Empty constraint blocks and explicitly false hydrogen flags do not impose a restriction.
 
+The completion analyzer distinguishes only sp/opt/ts requirements. IRC and frequency requirements are separate flags; RouteFacts retains scan, path and dynamics classifications for reports. The systemd installation plan resolves the service Python once; rendering, warnings and application use that same path.
+
 | Job kind | HTML report facets (page kind) | SI block (completed jobs) |
 | :--- | :--- | :--- |
 | NEB-TS, ZOOM-NEB-TS | NEB-TS (`NEB-TS`) | TS structure |
@@ -366,3 +368,7 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0009: Resume only by rebinding into a fresh generation](adr/0009-resume-only-by-rebind.md)
 - [ADR 0010: Queue commands read queue rows directly](adr/0010-queue-commands-read-queue-rows.md)
 - [ADR 0011: Read-only PID lookups](adr/0011-read-only-pid-lookups.md)
+
+[ADR 0012: Positive scientific completion evidence](adr/0012-positive-scientific-completion-evidence.md)
+
+[ADR 0013: Installed services and explicit input](adr/0013-installed-service-and-explicit-input.md)

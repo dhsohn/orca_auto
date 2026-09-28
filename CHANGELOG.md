@@ -6,6 +6,29 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [Unreleased]
+
+### Fixed
+
+- Require positive final energy, optimization and requested frequency evidence
+  before completing an ORCA job; accept explicitly recovered SCF convergence.
+- Publish scientific facts bound to the same artifact bytes in machine.json,
+  preserving null for missing measurements and historical terminal observations.
+- Restrict stationary-point claims to unconstrained optimizations with harmonic
+  frequency evidence. Add authentic ORCA 6.1.1 output regressions.
+
+### Added
+
+- run-dir --input NAME.inp selects an explicit input in the job directory.
+- Ship systemd templates in the wheel; systemd install without --repo uses the
+  current isolated virtual environment without a source clone.
+
+### Changed
+
+- Declare Beta maturity and distinguish tested ORCA 6.1.1 from unverified versions.
+- Align the GitHub description with standalone queue execution; remove the
+  unsupported agent-ready workflow-engine claim.
+
 ## [9.0.0] - 2026-09-28
 
 Version 9.0 is a major release. The entries marked *public contract*

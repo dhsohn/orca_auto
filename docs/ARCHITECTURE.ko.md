@@ -174,6 +174,8 @@ graph TD
 
 기하 제약, 고정·강체 fragment, 수소만 최적화하거나 수소를 고정하는 설정, `RigidBodyOpt`는 최적화 좌표를 제한합니다. 이런 제약이 있는 비-TS 최적화는 부분 최적화로 분류하고 전체 표면의 최소점이라고 주장하지 않습니다. 빈 제약 블록과 명시적으로 false인 수소 설정은 제약으로 보지 않습니다. 릴리스 smoke의 테스트 검증기는 생성기와 독립적으로 SHA-256과 바이트 수를 계산합니다.
 
+완료 분석기의 모드는 실제 판정 조건이 다른 sp/opt/ts만 구분합니다. IRC·진동수 요구는 별도 플래그이며, scan·경로·동역학 등 보고용 분류는 RouteFacts에 남습니다. 서비스 Python 경로는 systemd 설치 계획을 만들 때 한 번 결정하고, 렌더링·경고·적용 단계가 같은 값을 사용합니다.
+
 | 작업 종류 | HTML 보고서 구성 요소(페이지 종류) | SI 블록(완료된 작업) |
 | :--- | :--- | :--- |
 | NEB-TS, ZOOM-NEB-TS | NEB-TS (`NEB-TS`) | TS 구조 |
@@ -347,3 +349,7 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0009: 재개는 새 generation으로의 재바인딩으로만 한다](adr/0009-resume-only-by-rebind.md)
 - [ADR 0010: 큐 명령은 큐 행을 직접 읽는다](adr/0010-queue-commands-read-queue-rows.md)
 - [ADR 0011: PID 조회는 읽기 전용](adr/0011-read-only-pid-lookups.md)
+
+[ADR 0012: 명시적 과학 완료 근거](adr/0012-positive-scientific-completion-evidence.md)
+
+[ADR 0013: 설치 환경 서비스와 입력 명시](adr/0013-installed-service-and-explicit-input.md)

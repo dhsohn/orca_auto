@@ -429,7 +429,8 @@ def test_write_report_files_json_fields(tmp_path: Path) -> None:
     validate_common_machine(report_json_path)
     assert observation["contract"] == {"name": "factory/machine-observation", "version": 1}
     assert observation["operation"]["kind"] == "chemistry/orca-run"
-    assert observation["lifecycle"]["outcome"] == "succeeded"
+    # A completed state without output bytes cannot prove scientific success.
+    assert observation["lifecycle"]["outcome"] == "uncertain"
     assert observation["handoff"]["status"] == "blocked"
     assert observation["delivery"]["status"] == "incomplete"
     report = load_report_json(generation)

@@ -11,7 +11,7 @@ ORCA_auto는 Linux 및 WSL2 환경에서 실행되는 백그라운드 큐 러너
 - **운영체제**: Linux 또는 WSL2 (Ubuntu 20.04 LTS 이상 권장)
 - **Python**: 3.11 이상
 - **서비스 관리**: `systemd` (백그라운드 워커 데몬 감독용)
-- **ORCA 엔진**: 별도 설치된 ORCA 실행 바이너리 (버전 5.x ~ 6.x 호환)
+- **ORCA 엔진**: 별도 설치된 ORCA 실행 바이너리 (ORCA 6.1.1 acceptance 검증 완료; 다른 버전은 미검증)
 
 > **업그레이드 참고**: 이전 버전(6.x 이하)에서 마이그레이션하는 경우 [7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)를 참고하세요.
 
@@ -45,16 +45,14 @@ orca_auto --version
 orca_auto init --config ~/orca_auto.yaml
 ```
 
-### systemd 백그라운드 워커 등록
-백그라운드에서 계산을 감독하려면 systemd 유닛을 등록합니다. 설치 명령어(`systemd install`)는 `.venv`가 포함된 소스 체크아웃 경로 또는 빌드된 런타임 경로(`--repo`)를 필요로 합니다:
+### systemd 백그라운드 실행
 
-```bash
-# 현재 사용자 기준으로 systemd 워커 등록 (체크아웃 또는 런타임 경로 지정)
-orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
+설치한 가상환경에는 서비스 템플릿도 포함됩니다. 활성화한 환경에서 아래 명령을 실행하면 저장소 clone 없이 그 환경의 Python으로 서비스를 구성합니다. 소스 체크아웃 또는 준비된 런타임을 선택하려면 기존처럼 --repo 경로를 지정합니다.
 
-# 워커 및 런타임 상태 확인
+~~~bash
+orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
 orca_auto service status
-```
+~~~
 
 > **참고**: systemd 없이 대화형 세션이나 스크립트로 직접 실행하려면, `orca_auto run-dir`로 작업을 제출하고 포그라운드 워커(`orca_auto queue worker`)를 직접 실행합니다.
 

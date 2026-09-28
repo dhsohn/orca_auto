@@ -27,11 +27,7 @@ orca_auto-runtime@USER.target          # Top-level runtime target
 ## 2. Service Management Commands
 
 ### Install Units
-The installer renders template units into `/etc/systemd/system/`. It requires `--user` and `--repo` (pointing to a repository checkout containing `.venv` or a prepared runtime root). `--config` defaults to the target user's `~/orca_auto/config/orca_auto.yaml`; the unit binds that path through `ORCA_AUTO_CONFIG`, its `ExecStart` runs `queue worker` without engine options, and `TimeoutStopSec` is rendered from the configured `scheduler.max_active_simulations` (see below). A config that exists but does not load fails the install before any unit is written:
-```bash
-# Render and install systemd templates for the current user
-orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
-```
+The installer renders packaged src/orca_auto/systemd_templates into /etc/systemd/system/. It requires --user. Omit --repo to use the current isolated Python virtual environment, without a repository clone. An explicit --repo still selects a source checkout (with .venv) or a prepared runtime. --config defaults to the target user's ~/orca_auto/config/orca_auto.yaml. Units bind ORCA_AUTO_CONFIG and queue worker; TimeoutStopSec follows scheduler.max_active_simulations. An existing invalid config fails before any write:
 
 ### Check Service Status
 Verifies unit health and that running worker processes match the checkout HEAD or the installed runtime build. Returns non-zero when a unit is unhealthy or a worker is stale or undetermined:

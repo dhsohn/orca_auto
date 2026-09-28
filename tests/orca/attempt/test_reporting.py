@@ -159,7 +159,8 @@ def test_exit_with_result_publishes_state_and_reports_and_prints_the_summary(
         f"run_state: {reaction_dir / 'job_state.json'}",
         f"report_json: {generation / 'machine.json'}",
     ]
-    assert machine["lifecycle"]["outcome"] == "succeeded"
+    # A completed state without output bytes cannot prove scientific success.
+    assert machine["lifecycle"]["outcome"] == "uncertain"
     assert machine["payload"]["data"]["summary"]["status"] == "completed"
     assert "finished_notification_sent_at" not in saved["final_result"]
     assert "finished_notification_claimed_at" not in saved["final_result"]

@@ -80,3 +80,15 @@ def iter_output_lines(text: str) -> Iterator[str]:
         start = match.end()
     if start < len(text):
         yield text[start:]
+
+
+def scf_convergence_line(line: str) -> bool | None:
+    """Explicit SCF verdict, excluding input echoes and advisory text."""
+    if not is_execution_output_line(line):
+        return None
+    upper = line.upper()
+    if "SCF NOT CONVERGED" in upper or "SCF CONVERGENCE FAILED" in upper:
+        return False
+    if re.search(r"\bSCF CONVERGED AFTER\s+\d+\s+CYCLES?\b", upper):
+        return True
+    return None

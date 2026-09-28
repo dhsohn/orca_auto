@@ -78,6 +78,19 @@
         "resumed": "bool",
         "run_id": "str",
         "runner_error": "str",
+        "science": {
+          "energy_hartree": "NoneType",
+          "evidence_lines": {},
+          "frequencies_available": "bool",
+          "geometry_scope": "NoneType",
+          "imaginary_frequency_count": "NoneType",
+          "optimization_converged": "NoneType",
+          "output_artifact": "NoneType",
+          "reason": "str",
+          "scf_converged": "NoneType",
+          "stationary_point": "str",
+          "status": "str"
+        },
         "skipped_execution": "bool"
       },
       "summary": {

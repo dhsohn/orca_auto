@@ -28,8 +28,8 @@ orca_auto init --config ~/orca_auto.yaml
 터미널 세션이 종료되어도 계산이 백그라운드에서 이어지도록 systemd 서비스를 등록하고 상태를 확인합니다.
 
 ```bash
-# systemd 유닛 등록 (현재 사용자 기준, 소스 체크아웃 또는 런타임 경로 지정)
-orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
+# 패키지를 설치한 가상환경을 활성화한 뒤 systemd 유닛 등록
+orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
 
 # 워커 및 런타임 서비스 상태 확인
 orca_auto service status

@@ -68,7 +68,8 @@ def _installed_config(
     if (
         len(argv) not in {5, 6}
         or not Path(argv[0]).is_absolute()
-        or not argv[0].endswith("/.venv/bin/python")
+        or Path(argv[0]).parent.name != "bin"
+        or re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(argv[0]).name) is None
         or executable_matches[0] != argv[0]
         or argv[1:] not in (worker_args, ["-I", *worker_args])
     ):

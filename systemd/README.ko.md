@@ -27,11 +27,7 @@ orca_auto-runtime@USER.target          # 런타임 최상위 관리 타깃
 ## 2. 유닛 등록 및 서비스 관리
 
 ### 유닛 등록 (설치)
-설치기는 `/etc/systemd/system/`에 템플릿 유닛을 렌더링합니다. `.venv`가 포함된 소스 체크아웃 경로 또는 빌드된 런타임 루트(`--repo`)와 대상 사용자(`--user`)가 필요합니다. `--config`의 기본값은 대상 사용자의 `~/orca_auto/config/orca_auto.yaml`이며, 유닛은 이 경로를 `ORCA_AUTO_CONFIG`로 바인딩하고 `ExecStart`는 엔진 옵션 없이 `queue worker`를 실행하며, `TimeoutStopSec`은 설정된 `scheduler.max_active_simulations`에서 계산해 렌더링합니다(아래 참고). 설정 파일이 존재하지만 읽을 수 없으면 유닛을 하나도 쓰지 않고 설치가 실패합니다:
-```bash
-# 현재 사용자 기준으로 systemd 유닛 등록 및 활성화
-orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
-```
+설치기는 패키지에 포함된 src/orca_auto/systemd_templates의 유닛을 /etc/systemd/system/에 렌더링합니다. --user는 필수입니다. --repo를 생략하면 현재의 격리된 Python 가상환경을 사용하므로 저장소 clone이 필요 없습니다. --repo로 소스 체크아웃(.venv 포함) 또는 준비된 런타임을 지정할 수도 있습니다. --config는 대상 사용자의 ~/orca_auto/config/orca_auto.yaml이 기본값입니다. 유닛은 ORCA_AUTO_CONFIG와 queue worker를 사용하며 TimeoutStopSec은 scheduler.max_active_simulations에 따라 정해집니다. 존재하는 설정이 잘못되면 쓰기 전에 실패합니다:
 
 ### 서비스 상태 확인
 유닛 상태와, 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 0이 아닌 종료 코드를 반환합니다:
