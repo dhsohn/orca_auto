@@ -16,7 +16,7 @@ ORCA_auto를 변경할 때 아래 책임 표를 기준으로 동작을 따라갑
 | :--- | :--- | :--- | :--- |
 | 제출 | 선택한 `.inp`, 참조 파일, 자원 지시어 | `submission.py`와 입력 스냅샷 바인딩 | generation에 연결된 입력과 디스크 큐 항목 |
 | 실행권 할당 | 큐 항목과 실행권 기록 | 부모 큐 워커가 admission 저장소를 통해 변경 | 예약된 슬롯과 해당 작업에 연결된 자식 프로세스 |
-| 계산 | generation에 고정된 입력과 ORCA 실행 파일 | 자식 워커의 attempt 엔진 | 출력 파일과 기록된 실행 근거 |
+| 계산 | generation에 고정된 입력과 ORCA 실행 파일 | 자식 워커의 단일 시도(`attempt/run.py`) | 출력 파일과 기록된 실행 근거 |
 | 결과 발행 | 실행 근거와 종료 판정 | 정상 종료는 attempt 보고 계층, 중단·취소 뒤에는 실시간이든 재시작 재처리든 부모의 종료 정리(`queue/settlement.py`) | 종료 상태와 `machine.json`을 포함한 generation 보고서 |
 | 완료 알림 | 작업·실행 ID가 일치하는 루트의 종료 `job_state.json`과 최종 결과 | 부모 큐 워커가 실행 잠금 안에서 상태 저장 계층을 통해 한 번 전송권을 기록하고, 전송기는 확보한 메시지만 전달 | 루트의 알림 처리 기록; generation 실행 상태와 보고서는 변경하지 않음 |
 | 조회 | 큐·상태 파일과 작업 위치 기록 | 인덱스 발행자가 조회용 파생 데이터를 갱신 | CLI 목록과 activity 화면 |
@@ -168,13 +168,44 @@ fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 �
 죽은 행만 복구한다.
 
 ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행권 인계 대기,
-해당 generation 실행을 직접 수행한다. 성공·중단·예외 모두 최종 슬롯 해제는
-부모가 소유한다. 검증한 입력·자원·큐 식별자는 `RunExecutionContext` 한 개로
-구성해 실행 단계로 전달하며, CLI 인자를 다시 만들거나 빈 생명주기 콜백을
-등록하지 않는다.
+해당 generation 실행을 직접 수행한다. 검증한 입력, 제출된 자원 요청, 실행 스냅샷,
+큐 식별자는 인수한 행에서 한 번 만든 `RunExecutionContext` 하나로 실행 단계에 바로
+전달되며, RAM scratch 크기도 그 요청으로 정한다. `execute_locked_run`은 이를 한 흐름으로
+실행한다: `run.lock`, `recover_crashed_state`, 아래의 슬롯 규칙, 그다음 generation의
+완료 출력 채택 또는 실행마다 하나뿐인 `OrcaRunner`. 그 생성자가 실행에 쓰는 것을 모두
+밝힌다: 스냅샷의 실행 파일과 그 식별자, generation 디렉터리와 그 식별자, 중지 요청,
+RAM scratch 정책, 슬롯의 엔진 프로세스 준비·등록 함수, 그리고 실행 전후마다 부르는
+스냅샷 검증 함수. runner는 첫 상태 기록 전에 RAM scratch를 예약하고, 실행은 시도를
+한 번만 한다([ADR 0002](adr/0002-no-automatic-retry-of-failed-calculations.md)).
+`attempt/run.run_attempt`는 재개한 상태를 기록된 시도로 마무리하거나, 그렇지 않으면
+실행 시작을 기록하고 시작 알림을 보낸 뒤 고정된 입력으로 ORCA를 한 번 실행하고, 종료
+코드와 맞춘 분석 판정(`out_analyzer.apply_exit_code`)과 함께 시도를 기록한 다음 종료
+결과, 보고서, 실행 요약을 발행한다(`attempt/reporting.exit_with_result`). 재개는 새
+generation으로의 재바인딩으로만 일어난다([ADR 0009](adr/0009-resume-only-by-rebind.md)):
+실행 시작 근거가 있는 generation의 인수는 완료 출력으로 마무리되지 않는 한 실행 전에
+재바인딩되므로, 한 generation에서 ORCA가 두 번 실행되지 않는다. Ctrl-C를 포함한 워커
+종료나 취소는 시도를 `WorkerShutdownInterrupt`로 멈춘다.
 
-`recover_crashed_state`는 중단된 실행이 `running`으로 남긴 루트 `job_state.json`을
-닫으며, 두 곳에서 각각 `run.lock` 아래에서 실행된다. 중단 복구 재바인딩
+자식이 실행권 슬롯을 바꾸는 일은 모두 `execution._child_admission_slot` 규칙 하나를
+거친다. 자식은 슬롯을 활성화하고, 실행이 정상 반환하면 엔진 프로세스를 완료 처리하며,
+예외가 나면 슬롯을 그대로 둔다. 자식이 해제하는 슬롯은 활성화 시점에 살아 있지 않은
+슬롯뿐이다. 성공·중단·예외 모두 슬롯 해제는 자식이 끝난 뒤 부모가 한다.
+`tests/core/queue/test_ownership_guards.py`는 `release_slot`과
+`complete_slot_engine_process`를 이 소유자만 호출하도록 제한한다. 슬롯 하나의 생명주기:
+
+| 단계 | 기록 주체 | `state` | `engine_process_state` |
+|---|---|---|---|
+| 인수 전에 예약 | 부모 | `reserved` | `idle` |
+| 자식 연결(소유 pid, 큐 ID) | 부모 | `active` | `idle` |
+| 실행 디렉터리로 활성화 | 자식 | `active` | `idle` |
+| 엔진 실행 한 번을 fence | 자식의 runner | `active` | `pending` |
+| 실행한 프로세스 그룹 기록 | 자식의 runner | `active` | `active` |
+| 종료된 그룹 기록 정리 | 자식의 runner | `active` | `idle` |
+| 실행 반환 뒤 완료 처리 | 자식 | `active` | `idle` |
+| 엔진 기록 복구 후 해제 | 부모 | 삭제 | 삭제 |
+
+`recover_crashed_state`(`attempt/resume.py`)는 중단된 실행이 `running`으로 남긴 루트
+`job_state.json`을 닫으며, 두 곳에서 각각 `run.lock` 아래에서 실행된다. 중단 복구 재바인딩
 (`recovery_rebind.py`, 자식이 이미 읽은 설정을 사용)은 대체 generation을 만들기 전에
 호출해, 새 generation이 생기기 전에 고정된 시도를 중단으로 기록한다.
 `execute_locked_run`은 실행 직전에 다시 호출해 재바인딩하지 않은 인수(실행 시작 근거가
@@ -204,3 +235,4 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0006: 저장되는 토큰과 모든 큐 행 fence가 하나의 generation 식별을 쓴다](adr/0006-one-generation-identity-for-token-and-fences.md)
 - [ADR 0007: 설치마다 `<runs_root>/.admission` 하나의 실행권 저장소](adr/0007-one-admission-store-under-runs-root.md)
 - [ADR 0008: 취소 결과는 워커 부모만 쓴다](adr/0008-parent-writes-the-cancelled-result.md)
+- [ADR 0009: 재개는 새 generation으로의 재바인딩으로만 한다](adr/0009-resume-only-by-rebind.md)

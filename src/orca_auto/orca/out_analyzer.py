@@ -328,3 +328,21 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
         # but does not characterize a stationary point.
         markers["final_frequency_section"] = False
     return analysis
+
+
+def apply_exit_code(analysis: OutAnalysis, return_code: int) -> OutAnalysis:
+    """Reconcile the verdict with the ORCA process exit code.
+
+    A specific analyzer failure stands, but success is never published over a
+    failed process: a completed-looking output of a nonzero exit becomes
+    ``nonzero_exit_code``, and its frequencies no longer verify the geometry.
+    """
+    if analysis.status != AnalyzerStatus.COMPLETED or return_code == 0:
+        return analysis
+    markers = analysis.markers.copy()
+    markers["final_frequency_section"] = False
+    return OutAnalysis(
+        status=AnalyzerStatus.UNKNOWN_FAILURE,
+        reason="nonzero_exit_code",
+        markers=markers,
+    )

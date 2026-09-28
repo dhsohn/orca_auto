@@ -18,6 +18,7 @@ import pytest
 from orca_auto.core.engine_scratch import (
     EngineScratchError,
     EngineScratchWorkspace,
+    attach_scratch_provenance_mapping_to_exception,
     scratch_provenance_from_exception,
 )
 from orca_auto.core.engine_scratch import _workspace as workspace_mod
@@ -30,6 +31,7 @@ from orca_auto.orca.orca_runner import (
     WorkerShutdownInterrupt,
 )
 from orca_auto.orca.scratch import OrcaScratchPolicy
+from tests.conftest import make_orca_runner
 from tests.process_helpers import patch_missing_process_group
 
 _TEST_EXECUTABLE = "/opt/orca/orca"
@@ -44,12 +46,6 @@ def _installed_signal_handler(
         if signal_call.args[0] == signum and callable(handler):
             return handler
     raise AssertionError(f"no installed handler found for signal {signum}")
-
-
-def _managed_runner(executable: str = _TEST_EXECUTABLE) -> OrcaRunner:
-    runner = OrcaRunner(executable)
-    runner.set_running_job_registrar(lambda _running: None, prepare=lambda: None)
-    return runner
 
 
 def _mock_process(*, pid: int = 99999, poll: int | None = None, wait: int | None = None) -> Any:
@@ -70,19 +66,13 @@ def _admission_events(events: list[str]) -> Callable[[object | None], None]:
 
 @pytest.fixture(autouse=True)
 def pinned_test_executable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Let ``/opt/orca/orca`` resolve to ``/bin/true`` without touching real paths."""
+    """Let ``/opt/orca/orca`` pin ``/bin/true`` without touching real paths."""
 
     original_open = OrcaRunner._open_pinned_executable
 
-    def open_test_executable(runner: OrcaRunner) -> Any:
+    def open_test_executable(runner: OrcaRunner) -> int:
         if runner.orca_executable == _TEST_EXECUTABLE:
-            descriptor = os.open("/bin/true", os.O_RDONLY)
-            details = os.fstat(descriptor)
-            return descriptor, {
-                "path": runner.orca_executable,
-                "sha256": "test-double",
-                "size_bytes": int(details.st_size),
-            }
+            return os.open("/bin/true", os.O_RDONLY)
         return original_open(runner)
 
     monkeypatch.setattr(OrcaRunner, "_open_pinned_executable", open_test_executable)
@@ -142,15 +132,30 @@ def test_open_pinned_executable_rejects_fifo_without_blocking(tmp_path: Path) ->
     executable = tmp_path / "fake-orca"
     os.mkfifo(executable)
 
-    runner = _managed_runner(str(executable))
+    runner = make_orca_runner(executable, tmp_path)
     with pytest.raises(ValueError, match="not a regular file"):
+        runner._open_pinned_executable()
+
+
+@pytest.mark.parametrize("bound", ["changed", "empty"])
+def test_open_pinned_executable_refuses_an_executable_that_is_not_the_bound_one(
+    tmp_path: Path, make_fake_orca: Callable[..., Path], bound: str
+) -> None:
+    executable = make_fake_orca()
+    runner = make_orca_runner(
+        executable, tmp_path, **({"executable_identity": {}} if bound == "empty" else {})
+    )
+    if bound == "changed":
+        executable.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no longer matches its queued identity"):
         runner._open_pinned_executable()
 
 
 def test_command_uses_linux_binary(mock_popen: MagicMock, inp: Path) -> None:
     mock_popen.return_value = _mock_process(wait=0)
 
-    result = _managed_runner().run(inp)
+    result = make_orca_runner(_TEST_EXECUTABLE, inp.parent).run(inp)
 
     args, kwargs = mock_popen.call_args
     command = args[0]
@@ -178,7 +183,7 @@ def test_launch_pins_thread_env_to_one(mock_popen: MagicMock, inp: Path) -> None
     # discipline the other engines apply and preventing N^2 oversubscription.
     mock_popen.return_value = _mock_process(wait=0)
 
-    _managed_runner().run(inp)
+    make_orca_runner(_TEST_EXECUTABLE, inp.parent).run(inp)
 
     _, kwargs = mock_popen.call_args
     env = kwargs["env"]
@@ -205,8 +210,7 @@ def test_ram_scratch_publishes_results(
     )
     durable = durable_inp.parent
 
-    runner = _managed_runner(str(executable))
-    runner.set_scratch_policy(_scratch_policy(ram_scratch))
+    runner = make_orca_runner(executable, durable, scratch_policy=_scratch_policy(ram_scratch))
     result = runner.run(durable_inp)
 
     assert result.out_path == str(durable / "test.out")
@@ -227,8 +231,9 @@ def test_ram_scratch_normalizes_only_the_private_input_copy(
     )
     durable_inp.write_bytes(b"! SP")
 
-    runner = _managed_runner(str(executable))
-    runner.set_scratch_policy(_scratch_policy(ram_scratch))
+    runner = make_orca_runner(
+        executable, durable_inp.parent, scratch_policy=_scratch_policy(ram_scratch)
+    )
     result = runner.run(durable_inp)
 
     assert result.return_code == 0
@@ -258,9 +263,12 @@ def test_ram_scratch_publishes_checkpoint_before_shutdown_propagates(
         time.sleep(0.1)
         return True
 
-    runner = _managed_runner(str(executable))
-    runner.set_shutdown_requested(shutdown_requested)
-    runner.set_scratch_policy(_scratch_policy(ram_scratch))
+    runner = make_orca_runner(
+        executable,
+        durable,
+        stop_requested=shutdown_requested,
+        scratch_policy=_scratch_policy(ram_scratch),
+    )
     with pytest.raises(WorkerShutdownInterrupt) as caught:
         runner.run(durable_inp)
 
@@ -286,7 +294,7 @@ def test_ram_scratch_executes_through_pinned_workspace_after_root_replacement(
     durable = durable_inp.parent
     moved_root = ram_scratch / "orca_auto-moved"
 
-    runner = _managed_runner(str(executable))
+    runner = make_orca_runner(executable, durable, scratch_policy=_scratch_policy(ram_scratch))
     original_create = EngineScratchWorkspace.create
 
     def replace_root_after_create(*args: Any, **kwargs: Any) -> Any:
@@ -299,7 +307,6 @@ def test_ram_scratch_executes_through_pinned_workspace_after_root_replacement(
         return workspace
 
     monkeypatch.setattr(EngineScratchWorkspace, "create", replace_root_after_create)
-    runner.set_scratch_policy(_scratch_policy(ram_scratch))
     with pytest.raises(EngineScratchError, match="workspace pathname identity changed"):
         runner.run(durable_inp)
 
@@ -312,11 +319,101 @@ def test_ram_scratch_executes_through_pinned_workspace_after_root_replacement(
     assert not (durable / "test.out").exists()
 
 
+# -- snapshot verification --------------------------------------------------
+
+
+def test_run_accepts_only_a_private_inp_in_its_generation(
+    mock_popen: MagicMock, inp: Path, tmp_path: Path
+) -> None:
+    generation = tmp_path / "generation"
+    generation.mkdir()
+    other = generation / "test.xyz"
+    other.write_text("1\n\nH 0 0 0\n", encoding="utf-8")
+    runner = make_orca_runner(_TEST_EXECUTABLE, generation)
+
+    with pytest.raises(ValueError, match="must stay inside its root"):
+        runner.run(inp)
+    with pytest.raises(ValueError, match="private .inp file"):
+        runner.run(other)
+
+    mock_popen.assert_not_called()
+
+
+def test_run_verifies_the_snapshot_around_the_launch(mock_popen: MagicMock, inp: Path) -> None:
+    mock_popen.return_value = _mock_process(wait=0)
+    checks: list[bool] = []
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        verify_snapshot=lambda *, allow_runtime_outputs: checks.append(allow_runtime_outputs),
+    )
+
+    runner.run(inp)
+
+    # Pristine before the launch; runtime outputs allowed after it.
+    assert checks == [False, True]
+
+
+@pytest.mark.parametrize("launch", ["returned", "raised"])
+def test_failed_verification_after_the_launch_keeps_its_scratch_provenance(
+    inp: Path, monkeypatch: pytest.MonkeyPatch, launch: str
+) -> None:
+    provenance = {"used": True, "publication_status": "committed", "published_files": ["test.out"]}
+
+    def verify(*, allow_runtime_outputs: bool) -> None:
+        if allow_runtime_outputs:
+            raise RuntimeError("post-run verification failed")
+
+    def run_with_scratch(_inp: Path) -> orca_runner.RunResult:
+        if launch == "raised":
+            failure = OSError("launch failed")
+            attach_scratch_provenance_mapping_to_exception(failure, provenance)
+            raise failure
+        return orca_runner.RunResult(
+            out_path="test.out", return_code=0, scratch_provenance=provenance
+        )
+
+    runner = make_orca_runner(_TEST_EXECUTABLE, inp.parent, verify_snapshot=verify)
+    monkeypatch.setattr(runner, "_run_with_scratch", run_with_scratch)
+    with pytest.raises(RuntimeError, match="post-run verification failed") as caught:
+        runner.run(inp)
+
+    assert scratch_provenance_from_exception(caught.value) == provenance
+
+
+def test_prepare_verifies_the_snapshot_before_staging(
+    ram_scratch: Path, durable_inp: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created: list[object] = []
+    monkeypatch.setattr(
+        EngineScratchWorkspace, "create", lambda *args, **_kwargs: created.append(args)
+    )
+
+    def changed(*, allow_runtime_outputs: bool) -> None:
+        raise ValueError("Queued ORCA generation directory identity changed")
+
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        durable_inp.parent,
+        scratch_policy=_scratch_policy(ram_scratch),
+        verify_snapshot=changed,
+    )
+    runner.prepare(durable_inp)
+    runner.release_prepared()
+
+    # The failure is left for run() to report as a failed attempt.
+    assert created == []
+    with pytest.raises(ValueError, match="identity changed"):
+        runner.run(durable_inp)
+
+
 # -- termination ------------------------------------------------------------
 
 
-def test_terminate_noop_when_process_already_exited(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = _managed_runner()
+def test_terminate_noop_when_process_already_exited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = make_orca_runner(_TEST_EXECUTABLE, tmp_path)
     killpg = MagicMock()
     monkeypatch.setattr(orca_runner.os, "killpg", killpg)
     monkeypatch.setattr(process_utils, "process_group_exists", lambda *_args, **_kwargs: False)
@@ -325,8 +422,10 @@ def test_terminate_noop_when_process_already_exited(monkeypatch: pytest.MonkeyPa
     killpg.assert_not_called()
 
 
-def test_terminate_sends_sigterm_and_sigkill_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = _managed_runner()
+def test_terminate_sends_sigterm_and_sigkill_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = make_orca_runner(_TEST_EXECUTABLE, tmp_path)
     killpg = MagicMock()
     monkeypatch.setattr(orca_runner.os, "killpg", killpg)
     mock_proc = _mock_process()
@@ -358,7 +457,7 @@ def test_run_sigterm_terminates_orca_tree(
         terminated.append(proc)
         return True
 
-    runner = _managed_runner()
+    runner = make_orca_runner(_TEST_EXECUTABLE, inp.parent)
     monkeypatch.setattr(runner, "_terminate_subprocess_tree", _terminate)
     with pytest.raises(WorkerShutdownInterrupt):
         runner.run(inp)
@@ -372,15 +471,6 @@ def test_run_sigterm_terminates_orca_tree(
 # -- admission lifecycle ----------------------------------------------------
 
 
-def test_unmanaged_runner_refuses_before_process_start(mock_popen: MagicMock, inp: Path) -> None:
-    runner = OrcaRunner(_TEST_EXECUTABLE)
-
-    with pytest.raises(RuntimeError, match="requires managed admission callbacks"):
-        runner.run(inp)
-
-    mock_popen.assert_not_called()
-
-
 def test_admission_identity_is_published_before_gate_release(
     mock_popen: MagicMock, inp: Path
 ) -> None:
@@ -389,9 +479,11 @@ def test_admission_identity_is_published_before_gate_release(
     mock_proc.stdin.write.side_effect = lambda _value: events.append("gate_released")
     mock_popen.return_value = mock_proc
 
-    runner = OrcaRunner(_TEST_EXECUTABLE)
-    runner.set_running_job_registrar(
-        _admission_events(events), prepare=lambda: events.append("admission_prepared")
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=_admission_events(events),
+        prepare_running_job=lambda: events.append("admission_prepared"),
     )
     runner.run(inp)
 
@@ -411,9 +503,11 @@ def test_gate_release_failure_cleans_process_before_admission(
     mock_proc.stdin.write.side_effect = OSError("release failed")
     mock_popen.return_value = mock_proc
 
-    runner = OrcaRunner(_TEST_EXECUTABLE)
-    runner.set_running_job_registrar(
-        _admission_events(events), prepare=lambda: events.append("admission_prepared")
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=_admission_events(events),
+        prepare_running_job=lambda: events.append("admission_prepared"),
     )
 
     def terminate(_proc: object) -> bool:
@@ -444,8 +538,12 @@ def test_admission_publish_failure_retains_fence_when_cleanup_is_unconfirmed(
             raise RuntimeError("publish failed")
         events.append("admission_cleared")
 
-    runner = OrcaRunner(_TEST_EXECUTABLE)
-    runner.set_running_job_registrar(registrar, prepare=lambda: events.append("prepared"))
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=registrar,
+        prepare_running_job=lambda: events.append("prepared"),
+    )
     monkeypatch.setattr(runner, "_terminate_subprocess_tree", lambda _proc: False)
     monkeypatch.setattr(
         orca_runner,
@@ -514,7 +612,7 @@ def test_sigterm_during_cleanup_does_not_abort_process_tree_termination(
         _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
         cleanup_completed.append(True)
 
-    runner = _managed_runner()
+    runner = make_orca_runner(_TEST_EXECUTABLE, inp.parent)
     monkeypatch.setattr(runner, "_retain_until_subprocess_tree_exits", _cleanup)
     with pytest.raises(WorkerShutdownInterrupt):
         runner.run(inp)
@@ -535,8 +633,11 @@ def test_sigterm_during_post_exit_retention_is_raised_after_bookkeeping(
         _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
         events.append("process_tree_reaped")
 
-    runner = _managed_runner()
-    runner.set_running_job_registrar(_admission_events(events), prepare=lambda: None)
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=_admission_events(events),
+    )
     monkeypatch.setattr(
         orca_runner, "managed_process_group_has_exited", lambda *_args, **_kwargs: False
     )
@@ -557,8 +658,9 @@ def test_polled_shutdown_keeps_signals_state_only_during_cleanup(
         _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
         cleanup_completed.append(True)
 
-    runner = _managed_runner()
-    runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE, inp.parent, stop_requested=MagicMock(side_effect=[False, True])
+    )
     monkeypatch.setattr(runner, "_retain_until_subprocess_tree_exits", _cleanup)
     with pytest.raises(WorkerShutdownInterrupt):
         runner.run(inp)
@@ -566,7 +668,7 @@ def test_polled_shutdown_keeps_signals_state_only_during_cleanup(
     assert cleanup_completed == [True]
 
 
-def test_repeated_sigint_during_cleanup_preserves_keyboard_interrupt(
+def test_repeated_sigint_during_cleanup_is_one_worker_shutdown(
     mock_popen: MagicMock, mock_signal: MagicMock, inp: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mock_proc = _mock_process()
@@ -583,12 +685,11 @@ def test_repeated_sigint_during_cleanup_preserves_keyboard_interrupt(
         _installed_signal_handler(mock_signal, signal.SIGINT)(signal.SIGINT, None)
         cleanup_completed.append(True)
 
-    runner = _managed_runner()
+    runner = make_orca_runner(_TEST_EXECUTABLE, inp.parent)
     monkeypatch.setattr(runner, "_retain_until_subprocess_tree_exits", _cleanup)
-    with pytest.raises(KeyboardInterrupt) as caught:
+    with pytest.raises(WorkerShutdownInterrupt):
         runner.run(inp)
 
-    assert type(caught.value) is KeyboardInterrupt
     assert cleanup_completed == [True]
 
 
@@ -607,8 +708,11 @@ def test_signal_delivered_during_handler_install_prevents_process_start(
     mock_signal.side_effect = _install
     events: list[str] = []
 
-    runner = _managed_runner()
-    runner.set_running_job_registrar(_admission_events(events), prepare=lambda: None)
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=_admission_events(events),
+    )
     monkeypatch.setattr(
         runner,
         "_retain_until_subprocess_tree_exits",
@@ -634,8 +738,11 @@ def test_sigterm_during_bookkeeping_is_raised_after_admission_release(
         else:
             events.append("admission_registered")
 
-    runner = _managed_runner()
-    runner.set_running_job_registrar(_registrar, prepare=lambda: None)
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=_registrar,
+    )
     with pytest.raises(WorkerShutdownInterrupt):
         runner.run(inp)
 
@@ -654,8 +761,9 @@ def test_interrupt_notice_failure_cannot_preempt_process_cleanup(
         OrcaRunner._write_interrupt_notice(failing_handle, message)
         events.append("notice_attempted")
 
-    runner = _managed_runner()
-    runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE, inp.parent, stop_requested=MagicMock(side_effect=[False, True])
+    )
     monkeypatch.setattr(
         runner,
         "_retain_until_subprocess_tree_exits",
@@ -715,9 +823,12 @@ def test_callback_failure_terminates_live_process_before_bookkeeping(
     mock_popen.return_value = _mock_process(poll=0)
     events: list[str] = []
 
-    runner = _managed_runner()
-    runner.set_running_job_registrar(_admission_events(events), prepare=lambda: None)
-    runner.set_shutdown_requested(MagicMock(side_effect=[False, RuntimeError("poll failed")]))
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=_admission_events(events),
+        stop_requested=MagicMock(side_effect=[False, RuntimeError("poll failed")]),
+    )
     monkeypatch.setattr(
         orca_runner, "managed_process_group_has_exited", lambda *_args, **_kwargs: False
     )
@@ -771,9 +882,12 @@ def test_signal_handlers_remain_active_through_cleanup_and_bookkeeping(
         _dispatch_sigint()
         events.append("process_tree_reaped")
 
-    runner = _managed_runner()
-    runner.set_running_job_registrar(_registrar, prepare=lambda: None)
-    runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=_registrar,
+        stop_requested=MagicMock(side_effect=[False, True]),
+    )
     monkeypatch.setattr(orca_runner.signal, "getsignal", _getsignal)
     monkeypatch.setattr(orca_runner.signal, "signal", _signal)
     monkeypatch.setattr(runner, "_retain_until_subprocess_tree_exits", _cleanup)
@@ -803,8 +917,11 @@ def test_sigint_cannot_reenter_admission_initialization_cleanup(
         events.append("process_tree_reaped")
         return True
 
-    runner = _managed_runner()
-    runner.set_running_job_registrar(_registrar, prepare=lambda: None)
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        register_running_job=_registrar,
+    )
     monkeypatch.setattr(runner, "_terminate_subprocess_tree", _terminate)
     with pytest.raises(RuntimeError, match="record failed"):
         runner.run(inp)
@@ -813,7 +930,7 @@ def test_sigint_cannot_reenter_admission_initialization_cleanup(
 
 
 def test_ensure_trailing_newline_only_appends_when_needed(tmp_path: Path) -> None:
-    runner = OrcaRunner("/opt/orca/orca")
+    runner = make_orca_runner("/opt/orca/orca", tmp_path)
 
     empty_inp = tmp_path / "empty.inp"
     empty_inp.write_bytes(b"")
@@ -831,8 +948,10 @@ def test_ensure_trailing_newline_only_appends_when_needed(tmp_path: Path) -> Non
     assert missing_newline_inp.read_bytes() == b"! Opt\n"
 
 
-def test_terminate_subprocess_tree_falls_back_to_terminate_when_sigterm_group_kill_fails() -> None:
-    runner = OrcaRunner("/opt/orca/orca")
+def test_terminate_subprocess_tree_falls_back_to_terminate_when_sigterm_group_kill_fails(
+    tmp_path: Path,
+) -> None:
+    runner = make_orca_runner("/opt/orca/orca", tmp_path)
     proc = MagicMock()
     proc.poll.return_value = None
     proc.pid = 4242
@@ -847,8 +966,10 @@ def test_terminate_subprocess_tree_falls_back_to_terminate_when_sigterm_group_ki
     proc.terminate.assert_called_once()
 
 
-def test_terminate_subprocess_tree_falls_back_to_proc_kill_when_sigkill_group_kill_fails() -> None:
-    runner = OrcaRunner("/opt/orca/orca")
+def test_terminate_subprocess_tree_falls_back_to_proc_kill_when_sigkill_group_kill_fails(
+    tmp_path: Path,
+) -> None:
+    runner = make_orca_runner("/opt/orca/orca", tmp_path)
     proc = MagicMock()
     proc.poll.return_value = None
     proc.pid = 4343
@@ -869,8 +990,8 @@ def test_terminate_subprocess_tree_falls_back_to_proc_kill_when_sigkill_group_ki
     proc.kill.assert_called_once()
 
 
-def test_terminate_subprocess_tree_waits_after_sigkill() -> None:
-    runner = OrcaRunner("/opt/orca/orca")
+def test_terminate_subprocess_tree_waits_after_sigkill(tmp_path: Path) -> None:
+    runner = make_orca_runner("/opt/orca/orca", tmp_path)
     proc = MagicMock()
     proc.poll.return_value = None
     proc.pid = 4646
@@ -894,10 +1015,10 @@ def test_terminate_subprocess_tree_waits_after_sigkill() -> None:
     )
 
 
-def test_terminate_subprocess_tree_ignores_terminate_failure_when_sigterm_group_kill_fails() -> (
-    None
-):
-    runner = OrcaRunner("/opt/orca/orca")
+def test_terminate_subprocess_tree_ignores_terminate_failure_when_sigterm_group_kill_fails(
+    tmp_path: Path,
+) -> None:
+    runner = make_orca_runner("/opt/orca/orca", tmp_path)
     proc = MagicMock()
     proc.poll.return_value = None
     proc.pid = 4444
@@ -913,10 +1034,10 @@ def test_terminate_subprocess_tree_ignores_terminate_failure_when_sigterm_group_
     proc.terminate.assert_called_once()
 
 
-def test_terminate_subprocess_tree_ignores_proc_kill_failure_when_sigkill_group_kill_fails() -> (
-    None
-):
-    runner = OrcaRunner("/opt/orca/orca")
+def test_terminate_subprocess_tree_ignores_proc_kill_failure_when_sigkill_group_kill_fails(
+    tmp_path: Path,
+) -> None:
+    runner = make_orca_runner("/opt/orca/orca", tmp_path)
     proc = MagicMock()
     proc.poll.return_value = None
     proc.pid = 4545
@@ -954,7 +1075,7 @@ def test_run_handles_signal_install_value_error(
         executable = Path(td) / "fake-orca"
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)
-        runner = _managed_runner(str(executable))
+        runner = make_orca_runner(executable, Path(td))
         inp = Path(td) / "test.inp"
         inp.write_text("! Opt\n", encoding="utf-8")
         result = runner.run(inp)
@@ -986,7 +1107,7 @@ def test_run_ignores_restore_signal_value_error(
             executable = Path(td) / "fake-orca"
             executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             executable.chmod(0o755)
-            runner = _managed_runner(str(executable))
+            runner = make_orca_runner(executable, Path(td))
             inp = Path(td) / "test.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
             result = runner.run(inp)

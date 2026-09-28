@@ -5,14 +5,10 @@ reading of "which files does this input pull in": the semantic ``MOInp``
 occurrences (top-level ``%moinp`` and ``%scf MOInp``) that
 :func:`set_moinp` rewrites and :func:`orca_input_requests_moread` reads,
 whether a referenced ``.gbw`` checkpoint is intact enough to seed from, and
-the fail-closed :func:`scan_orca_file_references` scanner that execution
-binding and restart rematerialization share. Consumers above it
-(``execution_binding``, ``scratch``, ``inp_rewriter``) never re-derive a
-reference set themselves.
-
-The syntax and block helpers are looked up through their owning modules at
-call time (``_input_syntax.orca_line_tokens``), which keeps the reference
-scanner patchable at its owners in tests.
+the fail-closed :func:`scan_orca_file_references` scanner. Execution binding
+binds every reference the scanner returns into the generation, and claim-time
+verification compares the bound input's references with the snapshot; neither
+derives a reference set itself.
 """
 
 from __future__ import annotations
@@ -21,8 +17,21 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import input_blocks as _input_blocks
-from . import input_syntax as _input_syntax
+from .input_blocks import (
+    find_geometry_start,
+    iter_blocks,
+    percent_directive_header,
+    xyzfile_reference_token,
+)
+from .input_syntax import (
+    OrcaLineToken,
+    active_orca_directive_text,
+    format_relative_or_absolute,
+    orca_line_tokens,
+    orca_route_tokens,
+    quote_orca_path,
+    value_token_index,
+)
 
 MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
 MAX_ORCA_INPUT_REFERENCES = 128
@@ -167,26 +176,25 @@ def checkpoint_file_looks_intact(path: Path) -> bool:
     return any(head)
 
 
-def _scf_body_token_rows(lines: list[str]) -> list[tuple[int, list[_input_syntax.OrcaLineToken]]]:
+def _scf_body_token_rows(lines: list[str]) -> list[tuple[int, list[OrcaLineToken]]]:
     """Return active ``%scf`` body tokens per row (see :func:`input_blocks.iter_blocks`)."""
 
     return [
         (row.line_index, list(row.tokens))
-        for block in _input_blocks.iter_blocks(lines, "scf")
+        for block in iter_blocks(lines, "scf")
         for row in block.rows
     ]
 
 
-def _reference_after_keyword(
-    *,
+def _value_reference(
     line_index: int,
     line: str,
-    tokens: list[_input_syntax.OrcaLineToken],
-    keyword_index: int,
+    tokens: list[OrcaLineToken],
+    value_index: int,
+    kind: str,
 ) -> OrcaFileReference:
-    value_index = keyword_index + 1
-    if value_index < len(tokens) and tokens[value_index].value == "=":
-        value_index += 1
+    """The file reference held by ``tokens[value_index]``, or ``ValueError`` without a file name."""
+
     if value_index >= len(tokens):
         raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
     value_token = tokens[value_index]
@@ -198,7 +206,7 @@ def _reference_after_keyword(
         value=value,
         start=value_token.start,
         end=value_token.end,
-        kind="auxiliary",
+        kind=kind,
     )
 
 
@@ -207,28 +215,20 @@ def orca_moinp_references(lines: list[str]) -> list[OrcaFileReference]:
 
     references: list[OrcaFileReference] = []
     for line_index, line in enumerate(lines):
-        tokens = _input_syntax.orca_line_tokens(line)
-        header = _input_blocks.percent_directive_header(tokens)
+        tokens = orca_line_tokens(line)
+        header = percent_directive_header(tokens)
         if header is None or header[0] != "moinp":
             continue
-        references.append(
-            _reference_after_keyword(
-                line_index=line_index,
-                line=line,
-                tokens=tokens,
-                keyword_index=header[1] - 1,
-            )
-        )
+        value_index = value_token_index(tokens, header[1] - 1)
+        references.append(_value_reference(line_index, line, tokens, value_index, "auxiliary"))
     for line_index, body_tokens in _scf_body_token_rows(lines):
         for token_index, token in enumerate(body_tokens):
             if token.quoted or token.value.lower() != "moinp":
                 continue
+            value_index = value_token_index(body_tokens, token_index)
             references.append(
-                _reference_after_keyword(
-                    line_index=line_index,
-                    line=lines[line_index],
-                    tokens=body_tokens,
-                    keyword_index=token_index,
+                _value_reference(
+                    line_index, lines[line_index], body_tokens, value_index, "auxiliary"
                 )
             )
     return sorted(references, key=lambda reference: (reference.line_index, reference.start))
@@ -242,7 +242,7 @@ def orca_input_requests_moread(lines: list[str]) -> bool:
     if any(
         not token.quoted and token.value.lower() == "moread"
         for line in lines
-        for token in _input_syntax.orca_route_tokens(line)
+        for token in orca_route_tokens(line)
     ):
         return True
     return any(
@@ -253,14 +253,10 @@ def orca_input_requests_moread(lines: list[str]) -> bool:
 
 
 def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:
-    ref = _input_syntax.quote_orca_path(
-        _input_syntax.format_relative_or_absolute(checkpoint, base_dir)
-    )
+    ref = quote_orca_path(format_relative_or_absolute(checkpoint, base_dir))
     new_line = f"%moinp {ref}"
     matches = [
-        idx
-        for idx, line in enumerate(lines)
-        if MOINP_RE.match(_input_syntax.active_orca_directive_text(line))
+        idx for idx, line in enumerate(lines) if MOINP_RE.match(active_orca_directive_text(line))
     ]
     semantic_references = orca_moinp_references(lines)
     noncanonical_references = [
@@ -284,7 +280,7 @@ def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:
             del lines[idx]
         return changed
 
-    insert_at = _input_blocks.find_geometry_start(lines)
+    insert_at = find_geometry_start(lines)
     if insert_at is None:
         insert_at = len(lines)
     lines.insert(insert_at, new_line)
@@ -292,35 +288,21 @@ def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:
 
 
 def neb_file_reference_context(
-    tokens: list[_input_syntax.OrcaLineToken],
+    tokens: list[OrcaLineToken],
     *,
     in_neb_block: bool,
 ) -> tuple[set[int], bool]:
     """Return official ``%neb`` file-key indices and the next block state."""
 
-    body_start = 0
-    block_name = ""
-    if (
-        tokens
-        and not tokens[0].quoted
-        and tokens[0].value.startswith("%")
-        and tokens[0].value != "%"
-    ):
-        block_name = tokens[0].value[1:].lower()
-        body_start = 1
-    elif (
-        len(tokens) >= 2
-        and not tokens[0].quoted
-        and tokens[0].value == "%"
-        and not tokens[1].quoted
-    ):
-        block_name = tokens[1].value.lower()
-        body_start = 2
-    if block_name:
+    header = percent_directive_header(tokens)
+    if header is not None:
+        block_name, body_start = header
         if block_name != "neb":
             return set(), False
     elif not in_neb_block:
         return set(), False
+    else:
+        body_start = 0
 
     end_index = next(
         (
@@ -355,7 +337,7 @@ def _output_file_name_spans(lines: list[str]) -> set[tuple[int, int, int]]:
     """
 
     spans: set[tuple[int, int, int]] = set()
-    for block in _input_blocks.iter_blocks(lines, "plots"):
+    for block in iter_blocks(lines, "plots"):
         for row in block.rows:
             line = lines[row.line_index]
             for token in row.tokens:
@@ -369,44 +351,61 @@ def _output_file_name_spans(lines: list[str]) -> set[tuple[int, int, int]]:
                     raise ValueError(
                         f"ORCA output file name must be a plain basename: {line.strip()}"
                     )
-    for block in _input_blocks.iter_blocks(lines, "md"):
+    for block in iter_blocks(lines, "md"):
         for row in block.rows:
             tokens = row.tokens
-            for index, token in enumerate(tokens):
-                key_index = (
-                    index - 2 if index >= 2 and tokens[index - 1].value == "=" else index - 1
-                )
-                if (
-                    token.quoted
-                    and key_index >= 0
-                    and not tokens[key_index].quoted
-                    and tokens[key_index].value.lower() == "filename"
-                ):
-                    _require_output_basename(token.value, lines[row.line_index])
-                    spans.add((row.line_index, token.start, token.end))
+            for key_index, key in enumerate(tokens):
+                if key.quoted or key.value.lower() != "filename":
+                    continue
+                value_index = value_token_index(tokens, key_index)
+                if value_index < len(tokens) and tokens[value_index].quoted:
+                    value = tokens[value_index]
+                    _require_output_basename(value.value, lines[row.line_index])
+                    spans.add((row.line_index, value.start, value.end))
     return spans
 
 
-def scan_orca_file_references(
-    lines: list[str],
+def _classify_token(
+    tokens: list[OrcaLineToken],
+    token_index: int,
     *,
-    include_geometry: bool = True,
-) -> list[OrcaFileReference]:
+    neb_keyword_indices: set[int],
+    reference_value_indices: set[int],
+) -> tuple[str, str | None]:
+    """``(keyword, reference kind)`` of one unquoted token, for both scanner passes.
+
+    ``keyword`` is the lowercased token, with ``% name`` read as ``%name``. The
+    kind is that of the file named by the token's value, or ``None`` when the
+    token names no file: a leading ``%moinp``/``%pointcharges``, a block file
+    key, or an official ``%neb`` file key that is not itself a reference value.
+    """
+
+    word = tokens[token_index].value.lower()
+    spaced = token_index == 1 and tokens[0].value == "%"
+    keyword = f"%{word}" if spaced else word
+    if keyword in _SIMPLE_FILE_REFERENCE_KEYS and (token_index == 0 or spaced):
+        return keyword, "auxiliary"
+    if word in _BLOCK_FILE_REFERENCE_KEYS:
+        return keyword, "auxiliary"
+    if token_index in neb_keyword_indices and token_index not in reference_value_indices:
+        return keyword, "neb_geometry"
+    return keyword, None
+
+
+def scan_orca_file_references(lines: list[str]) -> list[OrcaFileReference]:
     """Every external file reference of an ORCA input, or a fail-closed error.
 
-    This is the single scanner shared by execution binding (which binds every
-    reference into the generation) and restart rematerialization (which copies
-    and rewrites the auxiliary references; it passes ``include_geometry=False``
-    because the ``* xyzfile`` geometry line is rewritten separately). Both
-    consumers must see the same reference set, or an input accepted at
-    execution time silently loses references on restart. The geometry
-    reference always counts toward ``MAX_ORCA_INPUT_REFERENCES`` — filtering
-    it out of the returned set must not loosen the cap.
+    Execution binding materializes each returned reference in the generation
+    and rewrites it to the private copy; claim-time verification rescans the
+    bound input and compares. The ``* xyzfile`` geometry counts as a reference.
 
-    Raises ``ValueError`` for unsupported auxiliary/external-program
-    directives, quoted file-path values of keywords it does not bind,
-    ``%plots``/``%md`` output names that are not plain basenames,
-    malformed references, and more than
+    Each line is read in two passes that classify tokens with one rule
+    (:func:`_classify_token`). The first marks the value token of every file
+    directive, so the second never reads a file name as a directive, and it
+    appends each reference and rejects the rest. Raises ``ValueError`` for
+    unsupported auxiliary/external-program directives, quoted file-path values
+    of keywords it does not bind, ``%plots``/``%md`` output names that are not
+    plain basenames, malformed references, and more than
     ``MAX_ORCA_INPUT_REFERENCES`` references.
     """
     moinp_references = orca_moinp_references(lines)
@@ -417,7 +416,7 @@ def scan_orca_file_references(
     references: list[OrcaFileReference] = []
     in_neb_block = False
     for line_index, line in enumerate(lines):
-        tokens = _input_syntax.orca_line_tokens(line)
+        tokens = orca_line_tokens(line)
         semantic_moinp_value_indices = {
             token_index
             for token_index, token in enumerate(tokens)
@@ -434,46 +433,31 @@ def scan_orca_file_references(
             raise ValueError("Unsupported ORCA auxiliary or external program directive: GCP(FILE)")
         reference_value_indices: set[int] = set()
         reference_value_indices.update(semantic_moinp_value_indices)
-        if len(tokens) >= 5 and tokens[0].value == "*" and tokens[1].value.lower() == "xyzfile":
-            value_token = tokens[4]
-            # Always mark the filename so the second pass never misreads it as
-            # a directive (e.g. a geometry file named ``progress.xyz``), and
-            # always collect the reference so the cap below counts it even for
-            # callers that filter geometry out of the returned set.
+        geometry_token = xyzfile_reference_token(tokens)
+        if geometry_token is not None:
+            # Marked so the second pass never misreads a geometry file named
+            # like a directive (``progress.xyz``).
             reference_value_indices.add(4)
             references.append(
                 OrcaFileReference(
                     line_index=line_index,
-                    value=value_token.value,
-                    start=value_token.start,
-                    end=value_token.end,
+                    value=geometry_token.value,
+                    start=geometry_token.start,
+                    end=geometry_token.end,
                     kind="geometry",
                 )
             )
         for token_index, token in enumerate(tokens):
             if token.quoted:
                 continue
-            keyword = token.value.lower()
-            spaced_percent_keyword = (
-                f"%{keyword}" if token_index == 1 and tokens[0].value == "%" else ""
+            _keyword, kind = _classify_token(
+                tokens,
+                token_index,
+                neb_keyword_indices=neb_keyword_indices,
+                reference_value_indices=reference_value_indices,
             )
-            effective_keyword = spaced_percent_keyword or keyword
-            is_simple = effective_keyword in _SIMPLE_FILE_REFERENCE_KEYS and (
-                token_index == 0 or bool(spaced_percent_keyword)
-            )
-            is_neb_file_directive = (
-                token_index in neb_keyword_indices and token_index not in reference_value_indices
-            )
-            is_value_directive = (
-                is_simple or keyword in _BLOCK_FILE_REFERENCE_KEYS or is_neb_file_directive
-            )
-            is_value_directive = is_value_directive or effective_keyword == "%base"
-            if not is_value_directive:
-                continue
-            value_index = token_index + 1
-            if value_index < len(tokens) and tokens[value_index].value == "=":
-                value_index += 1
-            if value_index < len(tokens):
+            value_index = value_token_index(tokens, token_index)
+            if kind is not None and value_index < len(tokens):
                 reference_value_indices.add(value_index)
         for token_index, token in enumerate(tokens):
             if token.quoted:
@@ -484,70 +468,38 @@ def scan_orca_file_references(
                 ):
                     raise ValueError(f"Unsupported ORCA file reference: {line.strip()}")
                 continue
-            keyword = token.value.lower()
-            spaced_percent_keyword = (
-                f"%{keyword}" if token_index == 1 and tokens[0].value == "%" else ""
+            keyword, kind = _classify_token(
+                tokens,
+                token_index,
+                neb_keyword_indices=neb_keyword_indices,
+                reference_value_indices=reference_value_indices,
             )
-            effective_keyword = spaced_percent_keyword or keyword
-            normalized_keyword = effective_keyword.lstrip("%!")
-            if normalized_keyword == "gcpmethod":
-                value_index = token_index + 1
-                if value_index < len(tokens) and tokens[value_index].value == "=":
-                    value_index += 1
-                if (
-                    value_index < len(tokens)
-                    and tokens[value_index].value.strip().lower() == "file"
-                ):
-                    raise ValueError(
-                        "Unsupported ORCA auxiliary or external program directive: GCPMETHOD file"
-                    )
+            normalized_keyword = keyword.lstrip("%!")
+            value_index = value_token_index(tokens, token_index)
+            if (
+                normalized_keyword == "gcpmethod"
+                and value_index < len(tokens)
+                and tokens[value_index].value.strip().lower() == "file"
+            ):
+                raise ValueError(
+                    "Unsupported ORCA auxiliary or external program directive: GCPMETHOD file"
+                )
             if token_index not in reference_value_indices and (
                 normalized_keyword in _UNSUPPORTED_EXTERNAL_HOOK_KEYS
                 or normalized_keyword.startswith("prog")
             ):
                 raise ValueError(
-                    f"Unsupported ORCA auxiliary or external program directive: {effective_keyword}"
+                    f"Unsupported ORCA auxiliary or external program directive: {keyword}"
                 )
-            if effective_keyword in _UNSUPPORTED_FILE_REFERENCE_KEYS:
-                raise ValueError(f"Unsupported ORCA auxiliary file directive: {effective_keyword}")
-            is_simple = effective_keyword in _SIMPLE_FILE_REFERENCE_KEYS and (
-                token_index == 0 or bool(spaced_percent_keyword)
-            )
-            is_neb_file_directive = (
-                token_index in neb_keyword_indices and token_index not in reference_value_indices
-            )
-            if (
-                not is_simple
-                and keyword not in _BLOCK_FILE_REFERENCE_KEYS
-                and not is_neb_file_directive
-            ):
+            if keyword in _UNSUPPORTED_FILE_REFERENCE_KEYS:
+                raise ValueError(f"Unsupported ORCA auxiliary file directive: {keyword}")
+            if kind is None or value_index in semantic_moinp_value_indices:
                 continue
-            value_index = token_index + 1
-            if value_index < len(tokens) and tokens[value_index].value == "=":
-                value_index += 1
-            if value_index in semantic_moinp_value_indices:
-                continue
-            if value_index >= len(tokens):
-                raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
-            value_token = tokens[value_index]
-            value = value_token.value.strip()
-            if not value or (not value_token.quoted and value.lower() == "end"):
-                raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
-            references.append(
-                OrcaFileReference(
-                    line_index=line_index,
-                    value=value,
-                    start=value_token.start,
-                    end=value_token.end,
-                    kind="neb_geometry" if is_neb_file_directive else "auxiliary",
-                )
-            )
+            references.append(_value_reference(line_index, line, tokens, value_index, kind))
     if len(references) > MAX_ORCA_INPUT_REFERENCES:
         raise ValueError(
             f"ORCA input has more than {MAX_ORCA_INPUT_REFERENCES} external file references"
         )
-    if not include_geometry:
-        return [reference for reference in references if reference.kind != "geometry"]
     return references
 
 

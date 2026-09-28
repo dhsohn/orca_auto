@@ -44,6 +44,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `ORCA_AUTO_ORCA_ADMISSION_TASK_ID` environment variables. Nothing set them:
   the worker passes the slot token as `--admission-token`, and the app name and
   task ID come from the claimed queue row.
+- Attempt-level checkpoint resume is removed
+  ([ADR 0009](docs/adr/0009-resume-only-by-rebind.md)). A queued job whose
+  generation had started is always rebound into a fresh generation before it
+  runs again, so its `<stem>.resume.inp` restart input (`MORead` from the
+  generation's own `.gbw`) was never written. Ctrl-C in a worker child still
+  stops ORCA as a worker shutdown and requeues the job; the unreachable
+  `interrupted_by_user` result with exit code 130 is gone. A `job_state.json`
+  whose final reason is `interrupted_by_user` or `worker_shutdown` stays
+  readable but is no longer resumed; only `crashed_recovery` is.
+- Binding no longer reserves the `<stem>.resume.*` names, so a referenced file
+  may use them, and crash recovery no longer seeds `MORead` from a crashed
+  generation's `<stem>.resume.gbw`; it seeds only from its `<stem>.gbw`
+  ([ADR 0009](docs/adr/0009-resume-only-by-rebind.md)). Only the removed
+  attempt-level resume wrote these files, and it could not run.
 - `orca_auto.orca.state_reading.load_report_json` and
   `load_report_json_with_output_receipt` leave the package for the repository
   test tree (`tests/contracts/report_verifier.py`). ORCA_auto never reads
@@ -137,6 +151,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - `systemd install` exits 1 with an `error:` line naming the failed command
   instead of passing through raw `sudo`/`systemctl` exit codes.
 - The queue table no longer truncates elapsed times of 100 hours or more.
+- Submission no longer accepts a quoted file path after a `%base` that is
+  itself the value of a file key (`%moinp %base "x.gbw"`). The reference
+  scanner exempted that path from its checks although `%base` binds no file;
+  both of its passes now read file keys by one rule.
 
 ### Changed
 
@@ -246,6 +264,24 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   mixed-form duplicate `nprocs`. An input queued with `nprocs = N` was already
   rewritten to the configured default at submission and runs with that core
   count; resubmit it to use `N`.
+- A worker child that cannot read `admission_slots.json` while it activates or
+  completes its slot logs the error from `orca_auto.orca.execution` and exits
+  with 1, as before. It used to end with an uncaught
+  `AdmissionStoreCorruptError` traceback from a second slot lookup whose
+  release could never apply. A RAM scratch reservation skipped because the
+  queued snapshot no longer verifies now leaves the debug line
+  `ORCA scratch preparation failed; run will retry it`; the run still reports
+  the verification failure as before.
+- The worker child's attempt log lines (`Attempt N starting: …`,
+  `Attempt N finished: …`, `ORCA runner crashed during attempt N: …` and
+  `Interrupted by worker shutdown during attempt N`) keep their text but come
+  from `orca_auto.orca.attempt.run` instead of `orca_auto.orca.attempt.engine`.
+  The `Detected crashed run in … Recovering state.` warning keeps its text but
+  comes from `orca_auto.orca.attempt.resume` instead of
+  `orca_auto.orca.execution` or `orca_auto.orca.recovery_rebind`.
+  A failed content hash of an input or output file reads
+  `File changed while it was hashed: …` or `File is not a regular file: …`
+  instead of naming the file an `Engine executable`.
 
 ## [8.0.1] - 2026-09-26
 

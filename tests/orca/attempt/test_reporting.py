@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+
+import pytest
 
 from orca_auto.core.queue.generation_owner import bind_direct_generation_owner
 from orca_auto.orca.attempt.reporting import (
+    AttemptDecision,
+    _print_run_summary,
     build_final_result,
+    decide_attempt_outcome,
     exit_with_result,
     last_out_path_from_state,
+    parse_analyzer_status,
 )
-from orca_auto.orca.engine_runner import executable_identity
+from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.notifications import finished_notification_already_sent
 from orca_auto.orca.state import new_state
 from orca_auto.orca.state_reading import load_state
@@ -67,8 +72,35 @@ def test_build_final_result_keeps_supported_extra_fields_only() -> None:
     assert "ignored" not in result
 
 
-def test_exit_with_result_publishes_state_and_reports_before_emitting_completion(
-    tmp_path: Path,
+def test_parse_analyzer_status_accepts_members_and_values_only() -> None:
+    assert parse_analyzer_status(AnalyzerStatus.COMPLETED) is AnalyzerStatus.COMPLETED
+    assert parse_analyzer_status("completed") is AnalyzerStatus.COMPLETED
+    assert parse_analyzer_status("invalid") is None
+
+
+@pytest.mark.parametrize(
+    ("analyzer_status", "reason", "expected"),
+    [
+        (AnalyzerStatus.COMPLETED, "normal_termination", (RunStatus.COMPLETED, 0)),
+        ("completed", "ts_criteria_met", (RunStatus.COMPLETED, 0)),
+        (AnalyzerStatus.ERROR_MULTIPLICITY_IMPOSSIBLE.value, "bad_spin", (RunStatus.FAILED, 1)),
+        (AnalyzerStatus.UNKNOWN_FAILURE.value, "error_termination", (RunStatus.FAILED, 1)),
+        (AnalyzerStatus.INCOMPLETE.value, "run_incomplete", (RunStatus.FAILED, 1)),
+        (AnalyzerStatus.ERROR_MEMORY, "out_of_memory", (RunStatus.FAILED, 1)),
+        (AnalyzerStatus.GEOM_NOT_CONVERGED, "geometry_not_converged", (RunStatus.FAILED, 1)),
+        ("invalid", "still_running", (RunStatus.FAILED, 1)),
+    ],
+)
+def test_decide_attempt_outcome_completes_only_an_analyzer_completed_attempt(
+    analyzer_status: AnalyzerStatus | str, reason: str, expected: tuple[RunStatus, int]
+) -> None:
+    assert decide_attempt_outcome(
+        analyzer_status=analyzer_status, analyzer_reason=reason
+    ) == AttemptDecision(run_status=expected[0], reason=reason, exit_code=expected[1])
+
+
+def test_exit_with_result_publishes_state_and_reports_and_prints_the_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     reaction_dir = tmp_path
     generation = reaction_dir / "20260714-224054-959479f2"
@@ -93,19 +125,8 @@ def test_exit_with_result_publishes_state_and_reports_before_emitting_completion
             "inode": generation_status.st_ino,
         },
         "generation_owner_token": owner_token,
-        "bound_selected_identity": executable_identity(selected_inp),
+        "bound_selected_identity": file_content_identity(selected_inp),
     }
-    emitted_payloads: list[dict[str, Any]] = []
-
-    def emit(payload: dict[str, Any]) -> None:
-        persisted = load_state(reaction_dir)
-        assert persisted is not None
-        assert persisted["run_id"] == state["run_id"]
-        assert persisted["status"] == "completed"
-        assert persisted["final_result"] == state["final_result"]
-        assert (generation / "machine.json").is_file()
-        emitted_payloads.append(payload)
-
     rc = exit_with_result(
         reaction_dir,
         state,
@@ -116,7 +137,6 @@ def test_exit_with_result_publishes_state_and_reports_before_emitting_completion
         last_out_path=str(reaction_dir / "rxn.out"),
         resumed=True,
         exit_code=0,
-        emit=emit,
         extra={"skipped_execution": True},
     )
 
@@ -130,13 +150,58 @@ def test_exit_with_result_publishes_state_and_reports_before_emitting_completion
     assert saved["final_result"] is not None
     assert saved["final_result"]["reason"] == "normal_termination"
     assert saved["final_result"]["last_out_path"] == str(reaction_dir / "rxn.out")
-    assert len(emitted_payloads) == 1
-    assert emitted_payloads[0]["status"] == "completed"
-    assert emitted_payloads[0]["run_state"] == str(reaction_dir / "job_state.json")
-    assert emitted_payloads[0]["report_json"] == str(generation / "machine.json")
+    assert capsys.readouterr().out.splitlines() == [
+        "status: completed",
+        f"job_dir: {reaction_dir}",
+        f"selected_inp: {selected_inp}",
+        "attempt_count: 0",
+        "reason: normal_termination",
+        f"run_state: {reaction_dir / 'job_state.json'}",
+        f"report_json: {generation / 'machine.json'}",
+    ]
     assert machine["lifecycle"]["outcome"] == "succeeded"
     assert machine["payload"]["data"]["summary"]["status"] == "completed"
     assert "finished_notification_sent_at" not in saved["final_result"]
     assert "finished_notification_claimed_at" not in saved["final_result"]
     assert saved["final_result"]["resumed"]
     assert saved["final_result"]["skipped_execution"]
+
+
+def test_run_summary_prints_known_keys_only(capsys: pytest.CaptureFixture[str]) -> None:
+    payload = {
+        "status": "completed",
+        "reaction_dir": "/tmp/rxn",
+        "selected_inp": "/tmp/rxn/rxn.inp",
+        "attempt_count": 1,
+        "reason": "normal_termination",
+        "run_state": "/tmp/rxn/job_state.json",
+        "extra_unknown_key": "ignored",
+    }
+    _print_run_summary(payload)
+    output = capsys.readouterr().out
+    assert "status: completed" in output
+    assert "attempt_count: 1" in output
+    assert "extra_unknown_key" not in output
+
+
+def test_run_summary_labels_reaction_dir_as_job_dir(capsys: pytest.CaptureFixture[str]) -> None:
+    payload = {
+        "status": "completed",
+        "reaction_dir": "/tmp/rxn",
+        "selected_inp": "rxn.inp",
+        "attempt_count": 2,
+        "reason": "normal_termination",
+        "report_json": "/tmp/report.json",
+        "ignored": "value",
+    }
+
+    _print_run_summary(payload)
+
+    output = capsys.readouterr().out
+    assert "status: completed" in output
+    assert "job_dir: /tmp/rxn" in output
+    assert "report_json: /tmp/report.json" in output
+    assert "ignored" not in output
+
+
+# -- logging ----------------------------------------------------------------

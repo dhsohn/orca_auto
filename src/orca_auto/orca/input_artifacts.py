@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .input_syntax import orca_line_tokens
+from .input_blocks import find_geometry_block
 
 
 @dataclass(frozen=True)
@@ -32,11 +32,10 @@ def derive_selected_input_xyz(selected_inp: str | Path | None) -> str:
 
 def xyzfile_input_path(lines: list[str], inp_dir: Path) -> str:
     """The resolved ``* xyzfile`` geometry path an input's ``lines`` name, or ``""``."""
-    for line in lines:
-        xyz_ref = _xyzfile_reference(line)
-        if xyz_ref:
-            return _resolve_artifact_path(xyz_ref, inp_dir)
-    return ""
+    block = find_geometry_block(lines)
+    if block is None or not block.reference:
+        return ""
+    return _resolve_artifact_path(block.reference, inp_dir)
 
 
 def _path_text(value: str | Path | None) -> str:
@@ -69,12 +68,3 @@ def _resolve_artifact_path(path_value: str, base_dir: Path | None) -> str:
         return str(candidate.resolve())
     except OSError:
         return str(candidate)
-
-
-def _xyzfile_reference(line: str) -> str:
-    tokens = orca_line_tokens(line)
-    if len(tokens) < 5:
-        return ""
-    if tokens[0].value != "*" or tokens[1].value.lower() != "xyzfile":
-        return ""
-    return tokens[4].value

@@ -3,7 +3,8 @@
 Tests take the fixtures. Where a fixture does not fit (a helper module, a
 builder called with test-specific arguments, a second root in one test) they
 import the plain builders (``make_app_cfg``, ``write_fake_orca``,
-``build_submitted_snapshot``, ``write_config_file``, ``make_queue_entry``,
+``build_submitted_snapshot``, ``write_config_file``, ``make_run_context``,
+``bound_run_context``, ``make_orca_runner``, ``make_queue_entry``,
 ``enqueue_entry``, ``claim_next_entry``, ``write_run_state``) directly from
 this module.
 
@@ -25,6 +26,7 @@ from typing import Any
 import pytest
 import yaml
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import CommonResourceConfig, MessengerConfig
 from orca_auto.core.config.schema import DiscordConfig
@@ -39,17 +41,21 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca import scratch_config as _scratch_config
+from orca_auto.orca import worker_execution
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution_binding import build_orca_execution_snapshot
+from orca_auto.orca.file_identity import file_content_identity
+from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import worker_log_path
 from orca_auto.orca.queue.entries import entry_metadata
 from orca_auto.orca.queue.roots import dequeue_next_entry
 from orca_auto.orca.resource_directives import prepare_submission_resource_request
+from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
-from orca_auto.orca.state import finalize_state, new_state, write_state
+from orca_auto.orca.state import finalize_state, new_state, save_state
 from orca_auto.orca.statuses import (
     TERMINAL_RUN_STATUSES,
     AnalyzerStatus,
@@ -291,6 +297,136 @@ def config_path(tmp_path: Path, app_cfg: Callable[..., AppConfig]) -> Callable[.
 
 
 # ---------------------------------------------------------------------------
+# Run execution context
+# ---------------------------------------------------------------------------
+
+
+def _test_executable_identity(orca_executable: str | Path) -> dict[str, Any]:
+    """The content identity a snapshot would pin for a test's ORCA executable.
+
+    A test that never launches may name an executable that does not exist;
+    it gets no identity, which the runner refuses to launch.
+    """
+
+    return file_content_identity(orca_executable) if Path(orca_executable).is_file() else {}
+
+
+def make_run_context(
+    cfg: AppConfig,
+    reaction_dir: Path,
+    selected_inp: Path,
+    **fields: Any,
+) -> RunExecutionContext:
+    """A ``RunExecutionContext`` for ``selected_inp`` without a submitted snapshot.
+
+    The snapshot names the input's directory as the generation and pins
+    ``cfg``'s executable by content, nothing else, so snapshot verification
+    fails; use it where the test replaces the runner, its ``run`` or its
+    launch. The request is ``cfg``'s resources and the admission token is empty
+    unless ``fields`` sets them.
+    """
+
+    execution_dir = Path(selected_inp).parent
+    details = execution_dir.stat() if execution_dir.is_dir() else None
+    values: dict[str, Any] = {
+        "cfg": cfg,
+        "reaction_dir": reaction_dir,
+        "selected_inp": selected_inp,
+        "source_selected_inp": str(selected_inp),
+        "selected_input_xyz": "",
+        "resource_request": {
+            "max_cores": cfg.resources.max_cores_per_task,
+            "max_memory_gb": cfg.resources.max_memory_gb_per_task,
+        },
+        "execution_snapshot": {
+            "execution_dir": str(execution_dir),
+            "execution_dir_identity": {
+                "device": details.st_dev if details else 0,
+                "inode": details.st_ino if details else 1,
+            },
+            "executable_identities": {"orca": _test_executable_identity(cfg.paths.orca_executable)},
+        },
+        "execution_provenance": {},
+        "orca_executable": cfg.paths.orca_executable,
+        "admission_root": admission_dir(cfg.runtime.allowed_root),
+        "admission_token": "",
+        "admission_app_name": None,
+        "admission_task_id": None,
+        "queue_id": None,
+        "queue_generation": None,
+    }
+    values.update(fields)
+    return RunExecutionContext(**values)
+
+
+def bound_run_context(
+    cfg: AppConfig,
+    selected_inp: Path,
+    *,
+    admission_token: str = "",
+    task_id: str = "task-1",
+) -> RunExecutionContext:
+    """The worker child's ``RunExecutionContext`` for ``selected_inp`` as ``run-dir`` binds it.
+
+    The input's directory is the job directory, which must lie under ``cfg``'s
+    runs root. The context names the bound copy in a new generation and
+    verifies against the real snapshot, pinned to ``cfg``'s executable.
+    """
+
+    job_dir = Path(selected_inp).parent
+    snapshot = build_submitted_snapshot(
+        job_dir,
+        selected_inp,
+        orca_executable=cfg.paths.orca_executable,
+        resource_request={
+            "max_cores": cfg.resources.max_cores_per_task,
+            "max_memory_gb": cfg.resources.max_memory_gb_per_task,
+        },
+    )
+    entry = make_queue_entry(
+        task_id=task_id,
+        reaction_dir=job_dir,
+        status=QueueStatus.RUNNING,
+        metadata={
+            "source_selected_inp": str(selected_inp),
+            "selected_inp": snapshot["selected_inp"],
+            "selected_input_xyz": "",
+            "resource_request": snapshot["resource_request"],
+            "execution_snapshot": snapshot,
+        },
+    )
+    return worker_execution._build_execution_context(cfg, entry, admission_token=admission_token)
+
+
+def make_orca_runner(
+    orca_executable: str | Path,
+    execution_dir: Path,
+    **fields: Any,
+) -> OrcaRunner:
+    """An ``OrcaRunner`` for inputs in ``execution_dir`` outside a queued snapshot.
+
+    The executable is pinned by its content identity. Snapshot verification and
+    the admission callbacks do nothing, stop is never requested and there is no
+    RAM scratch policy unless ``fields`` sets them.
+    """
+
+    details = execution_dir.stat()
+    values: dict[str, Any] = {
+        "execution_dir": execution_dir,
+        "execution_dir_identity": {"device": details.st_dev, "inode": details.st_ino},
+        "verify_snapshot": lambda **_kwargs: None,
+        "stop_requested": lambda: False,
+        "scratch_policy": None,
+        "prepare_running_job": lambda: None,
+        "register_running_job": lambda _running: None,
+    }
+    values.update(fields)
+    if "executable_identity" not in values:
+        values["executable_identity"] = _test_executable_identity(orca_executable)
+    return OrcaRunner(str(orca_executable), **values)
+
+
+# ---------------------------------------------------------------------------
 # RAM scratch
 # ---------------------------------------------------------------------------
 
@@ -409,7 +545,7 @@ def write_run_state(
     """Persist a ``job_state.json`` for ``reaction_dir`` through the real state writers.
 
     Terminal statuses go through ``finalize_state`` (with a matching
-    ``build_final_result`` default); other statuses through ``write_state``.
+    ``build_final_result`` default); other statuses through ``save_state``.
     The selected input file is created when missing.
     """
 
@@ -444,7 +580,7 @@ def write_run_state(
         state["status"] = run_status.value
         if final_result is not None:
             state["final_result"] = final_result
-        write_state(reaction_dir, state)
+        save_state(reaction_dir, state)
     return state
 
 

@@ -6,14 +6,19 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..file_identity import file_content_identity
 from ..input_blocks import geometry_header_match
 from ..input_references import OrcaFileReference, set_moinp
-from ..input_syntax import ensure_route_keywords, quote_orca_path, unquoted_orca_path
+from ..input_syntax import (
+    ensure_route_keywords,
+    quote_orca_path,
+    render_orca_input,
+    unquoted_orca_path,
+)
 from ..input_validation import validate_unambiguous_orca_directives
 from ._confinement import _confined_reference_path, _write_private_input
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 from ._models import _MaterializedSnapshotInputs, _SelectedSnapshotInput
-from ._snapshot_identity import _file_identity
 
 
 def _render_bound_reference(reference: OrcaFileReference, relative_path: str) -> str:
@@ -65,7 +70,7 @@ def _rewrite_bound_input(
         for start, end, replacement in sorted(line_replacements, reverse=True):
             updated = updated[:start] + replacement + updated[end:]
         rewritten[line_index] = updated
-    return ("\n".join(rewritten).rstrip() + "\n").encode("utf-8")
+    return render_orca_input(rewritten).encode("utf-8")
 
 
 def _write_bound_selected_snapshot(
@@ -92,7 +97,7 @@ def _write_bound_selected_snapshot(
             bound_lines,
             label="ORCA recovery bound input",
         )
-        bound_payload = ("\n".join(bound_lines).rstrip() + "\n").encode("utf-8")
+        bound_payload = render_orca_input(bound_lines).encode("utf-8")
     if materialized.consumed_bytes + len(bound_payload) > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
         raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
     bound_selected = execution_dir / source_selected.name
@@ -102,4 +107,4 @@ def _write_bound_selected_snapshot(
         bound_payload,
         label="ORCA bound selected input",
     )
-    return bound_selected, _file_identity(bound_selected)
+    return bound_selected, file_content_identity(bound_selected)

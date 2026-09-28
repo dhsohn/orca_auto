@@ -10,7 +10,7 @@ import pytest
 
 from orca_auto.core.queue.generation_owner import bind_direct_generation_owner
 from orca_auto.orca import state_reading
-from orca_auto.orca.engine_runner import executable_identity
+from orca_auto.orca.file_identity import file_content_identity
 
 CASES = [
     ("valid", True),
@@ -58,7 +58,7 @@ def _case_inputs(root: Path, case: str) -> tuple[Path, dict[str, Any]]:
         owner_token=token,
     )
     identity: dict[str, Any] = {"device": gen_stat.st_dev, "inode": gen_stat.st_ino}
-    bound = executable_identity(selected)
+    bound = file_content_identity(selected)
     provenance: dict[str, Any] = {
         "execution_dir": str(generation),
         "execution_dir_identity": identity,
@@ -107,7 +107,7 @@ def _case_inputs(root: Path, case: str) -> tuple[Path, dict[str, Any]]:
             bound["path"] = str(replacement)
         else:
             selected.rename(replacement)
-            bound.update(executable_identity(replacement))
+            bound.update(file_content_identity(replacement))
         payload["selected_inp"] = str(replacement)
     elif case == "hardlink_input":
         os.link(selected, generation / "second.inp")

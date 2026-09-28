@@ -1,241 +1,20 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
-from orca_auto.orca.inp_rewriter import _latest_geometry_file, prepare_checkpoint_restart_input
 from orca_auto.orca.input_blocks import (
     find_block_range,
     find_geometry_block,
     find_geometry_start,
-    geometry_range,
     iter_blocks,
-    replace_geometry_with_xyzfile,
     set_block_key_value,
 )
 from orca_auto.orca.input_references import set_moinp
 from orca_auto.orca.input_syntax import ensure_route_keywords
 from orca_auto.orca.input_validation import validate_unambiguous_orca_directives
-from orca_auto.orca.resource_directives import (
-    prepare_submission_resource_request,
-    read_maxcore,
-    read_nprocs,
-    resource_request_from_lines,
-)
-
-BASE_INP = """! OptTS Freq IRC
-
-%pal
-  nprocs 8
-end
-
-* xyz 0 1
-H 0 0 0
-H 0 0 0.74
-*
-"""
-
-
-def _write_inp(tmp_path: Path, text: str) -> Path:
-    inp = tmp_path / "rxn.inp"
-    inp.write_text(text, encoding="utf-8")
-    return inp
-
-
-def test_prepare_submission_resource_request_rejects_invalid_utf8(tmp_path: Path) -> None:
-    inp = tmp_path / "rxn.inp"
-    payload = b"! Opt\n%pal nprocs 2 end\n%maxcore 1024\n\xff\n"
-    inp.write_bytes(payload)
-
-    with pytest.raises(ValueError, match="UTF-8"):
-        prepare_submission_resource_request(
-            inp, inp.read_bytes(), default_max_cores=2, default_max_memory_gb=2
-        )
-
-    assert inp.read_bytes() == payload
-
-
-def test_prepare_submission_resource_request_injects_missing_directives(tmp_path: Path) -> None:
-    source = "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
-    inp = _write_inp(tmp_path, source)
-
-    prepared = prepare_submission_resource_request(
-        inp, inp.read_bytes(), default_max_cores=8, default_max_memory_gb=32
-    )
-    text = prepared.normalized_payload.decode("utf-8")
-
-    assert prepared.resource_request == {"max_cores": 8, "max_memory_gb": 32}
-    assert prepared.actions == ("pal_nprocs_injected", "maxcore_injected")
-    assert inp.read_text(encoding="utf-8") == source
-    assert "%pal" in text
-    assert "nprocs 8" in text
-    assert "%maxcore 4096" in text
-
-
-def test_prepare_submission_resource_request_preserves_existing_nprocs(tmp_path: Path) -> None:
-    inp = _write_inp(tmp_path, "! Opt\n%pal\n  nprocs 12\nend\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
-
-    prepared = prepare_submission_resource_request(
-        inp, inp.read_bytes(), default_max_cores=8, default_max_memory_gb=32
-    )
-    text = prepared.normalized_payload.decode("utf-8")
-
-    assert prepared.resource_request == {"max_cores": 12, "max_memory_gb": 32}
-    assert prepared.actions == ("maxcore_injected",)
-    assert "nprocs 12" in text
-    assert "%maxcore 2730" in text
-
-
-def test_prepare_submission_resource_request_honors_pal_route_shorthand(tmp_path: Path) -> None:
-    # "! Opt PAL4" already requests 4 processes via ORCA's route shorthand, so
-    # no conflicting %pal nprocs block should be injected and the resource
-    # request must reflect 4 cores (not the default_max_cores).
-    inp = _write_inp(tmp_path, "! Opt PAL4\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
-
-    prepared = prepare_submission_resource_request(
-        inp, inp.read_bytes(), default_max_cores=8, default_max_memory_gb=32
-    )
-    text = prepared.normalized_payload.decode("utf-8")
-
-    assert prepared.resource_request["max_cores"] == 4
-    assert "pal_nprocs_injected" not in prepared.actions
-    assert "%pal" not in text
-
-
-@pytest.mark.parametrize(
-    "pal",
-    [
-        "%pal nprocs = 16 end",
-        "%pal nprocs=16 end",
-        "%pal\n  nprocs = 16\nend",
-        "%pal\n  nprocs =16\nend",
-        "%pal\n  nprocs 16;\nend",
-    ],
-)
-def test_prepare_submission_resource_request_honors_nprocs_with_optional_equals(
-    tmp_path: Path, pal: str
-) -> None:
-    # ORCA accepts an optional "=" between a block key and its value; the
-    # directive must be honored, not overwritten with the configured default.
-    source = f"! Opt\n{pal}\n%maxcore 2000\n* xyzfile 0 1 g.xyz\n"
-    inp = _write_inp(tmp_path, source)
-
-    prepared = prepare_submission_resource_request(
-        inp, inp.read_bytes(), default_max_cores=4, default_max_memory_gb=8
-    )
-
-    assert read_nprocs(source.splitlines()) == 16
-    assert prepared.actions == ()
-    assert prepared.resource_request == {"max_cores": 16, "max_memory_gb": 32}
-    assert prepared.normalized_payload.decode("utf-8") == source
-
-
-def test_resource_request_from_lines_uses_inp_values() -> None:
-    lines = "! Opt\n%pal\n  nprocs 6\nend\n%maxcore 3072\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
-
-    assert resource_request_from_lines(lines.splitlines()) == {"max_cores": 6, "max_memory_gb": 18}
-
-
-def test_prepare_checkpoint_restart_input_keeps_original_input_untouched(tmp_path: Path) -> None:
-    src = _write_inp(tmp_path, BASE_INP)
-    dst = tmp_path / "rxn.resume.inp"
-    original = src.read_text(encoding="utf-8")
-    (tmp_path / "rxn.gbw").write_bytes(b"checkpoint")
-    (tmp_path / "rxn.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.75\n", encoding="utf-8")
-
-    prepared, actions = prepare_checkpoint_restart_input(src, dst, tmp_path)
-    out = dst.read_text(encoding="utf-8")
-
-    assert prepared == dst
-    assert src.read_text(encoding="utf-8") == original
-    assert "checkpoint_restart_from_rxn.gbw" in actions
-    assert "route_add_moread" in actions
-    assert "moinp_set" in actions
-    assert "geometry_restart_from_rxn.xyz" in actions
-    assert '%moinp "rxn.gbw"' in out
-    assert "* xyzfile 0 1 rxn.xyz" in out
-
-
-def test_prepare_checkpoint_restart_skips_a_zero_filled_checkpoint(tmp_path: Path) -> None:
-    src = _write_inp(tmp_path, BASE_INP)
-    dst = tmp_path / "rxn.resume.inp"
-    # A crash mid-write leaves the checkpoint's blocks unflushed and
-    # read back as zeros; seeding it would fail the restarted run.
-    (tmp_path / "rxn.gbw").write_bytes(b"\x00" * 4096)
-    (tmp_path / "rxn.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.75\n", encoding="utf-8")
-
-    prepared, actions = prepare_checkpoint_restart_input(src, dst, tmp_path)
-
-    # A torn checkpoint is treated like an absent one: no checkpoint
-    # restart input is prepared, so nothing seeds MORead from zeros.
-    assert prepared is None
-    assert actions == []
-    assert not dst.exists()
-
-
-def test_prepare_checkpoint_restart_falls_back_to_latest_geometry(tmp_path: Path) -> None:
-    src = _write_inp(tmp_path, BASE_INP)
-    dst = tmp_path / "rxn.resume.inp"
-    (tmp_path / "rxn.gbw").write_bytes(b"checkpoint")
-    older = tmp_path / "older.xyz"
-    latest = tmp_path / "latest_trj.xyz"
-    older.write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
-    latest.write_text("2\n\nH 0 0 0\nH 0 0 1.0\n", encoding="utf-8")
-    os.utime(older, ns=(1_000_000_000, 1_000_000_000))
-    os.utime(latest, ns=(2_000_000_000, 2_000_000_000))
-
-    prepared, actions = prepare_checkpoint_restart_input(src, dst, tmp_path)
-    out = dst.read_text(encoding="utf-8")
-
-    assert prepared == dst
-    assert "no_previous_xyz_file_found" in actions
-    assert "geometry_restart_from_latest_trj.xyz" in actions
-    assert "* xyzfile 0 1 latest_trj.xyz" in out
-
-
-def test_latest_geometry_file_breaks_an_exact_mtime_tie_by_name(tmp_path: Path) -> None:
-    # Every geometry carries the same nanosecond, so only the name rule can
-    # decide. Draining the directory one pick at a time turns a helper that
-    # returns a single path into an assertion about the whole ordering, so
-    # readdir order matching the name rule by accident would need all eight
-    # names to land in reverse-alphabetical order; both creation orders
-    # must agree.
-    stamp = (1_700_000_000_000_000_000, 1_700_000_000_000_000_000)
-    names = ["c.xyz", "h.xyz", "a.xyz", "m.xyz", "b.xyz", "z.xyz", "e.xyz", "q.xyz"]
-    for label, order in (("forward", names), ("reverse", list(reversed(names)))):
-        root = tmp_path / label
-        root.mkdir()
-        for name in order:
-            path = root / name
-            path.write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
-            os.utime(path, ns=stamp)
-
-        # Repeating the call on an unchanged directory must repeat the
-        # answer before anything is removed.
-        first = _latest_geometry_file(root)
-        assert first is not None
-        assert first == _latest_geometry_file(root)
-
-        picks: list[str] = []
-        while (pick := _latest_geometry_file(root)) is not None:
-            picks.append(pick.name)
-            pick.unlink()
-
-        assert picks == sorted(names, reverse=True)
-
-
-def test_prepare_checkpoint_restart_marks_missing_geometry(tmp_path: Path) -> None:
-    src = _write_inp(tmp_path, BASE_INP)
-    dst = tmp_path / "rxn.resume.inp"
-    (tmp_path / "rxn.gbw").write_bytes(b"checkpoint")
-
-    prepared, actions = prepare_checkpoint_restart_input(src, dst, tmp_path)
-
-    assert prepared == dst
-    assert "no_previous_xyz_file_found" in actions
-    assert "no_geometry_file_found" in actions
+from orca_auto.orca.resource_directives import read_maxcore, read_nprocs
 
 
 def test_mutators_replace_active_directives_after_closed_comments() -> None:
@@ -281,20 +60,6 @@ def test_set_moinp_updates_existing_scf_declaration_without_duplicate() -> None:
 
     assert 'MOInp "new.gbw"' in lines[1]
     assert not any(line.lower().startswith("%moinp") for line in lines)
-
-
-def test_resource_readers_use_maximum() -> None:
-    lines = [
-        "%maxcore 1000",
-        "# hidden # %maxcore 999999",
-        "! SP PAL4 PAL8",
-        "* xyz 0 1",
-        "H 0 0 0",
-        "*",
-    ]
-
-    assert read_maxcore(lines) == 999999
-    assert read_nprocs(lines) == 8
 
 
 def test_block_mutator_rejects_duplicate_blocks_and_keys() -> None:
@@ -436,9 +201,6 @@ def test_geometry_scanners_share_the_comment_tokenizer() -> None:
     assert block.atom_rows == ((3, "H 0 0 0"), (5, "H 0 0 0.74"))
     assert block.terminator_index == 6
     assert find_geometry_start(lines) == 1
-    assert geometry_range(lines) == (1, 7, 0, 1)
-    assert replace_geometry_with_xyzfile(lines, Path("/tmp/a.xyz"), Path("/tmp"))
-    assert lines == ["! Freq", "* xyzfile 0 1 a.xyz", "%maxcore 512"]
 
     quoted = find_geometry_block(['* xyzfile 0 1 "my mol.xyz" # reference'])
     assert quoted is not None

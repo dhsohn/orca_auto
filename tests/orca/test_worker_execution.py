@@ -87,6 +87,7 @@ def test_prelaunch_rejection_does_not_overwrite_a_changed_claim(
             cfg,
             running,
             queue_root=runs_root,
+            admission_token="",
         )
 
     current = adapter.get_entry_by_id(runs_root, running.queue_id)
@@ -110,7 +111,7 @@ def test_child_cancellation_probe_skips_contended_queue_lock(
     flock_calls: list[int] = []
     original_file_lock = queue_store.file_lock
 
-    def fake_run_orca_job(*_args: object, **kwargs: Any) -> int:
+    def fake_execute(*_args: object, **kwargs: Any) -> int:
         captured.update(kwargs)
         return 4
 
@@ -128,23 +129,19 @@ def test_child_cancellation_probe_skips_contended_queue_lock(
         flock_calls.append(operation)
         raise BlockingIOError
 
-    monkeypatch.setattr(
-        worker_execution,
-        "_run_orca_job_for_entry",
-        fake_run_orca_job,
-    )
+    monkeypatch.setattr(worker_execution, "execute_orca_run", fake_execute)
     monkeypatch.setattr(queue_store, "file_lock", recording_file_lock)
     monkeypatch.setattr(lock_utils.fcntl, "flock", contended_flock)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=tmp_path,
+        admission_token="",
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.entry is entry
-    assert captured["should_cancel"]() is False
+    assert exit_code == 4
+    assert captured["stop_requested"]() is False
     assert lock_calls == [(tmp_path.resolve() / queue_store.QUEUE_LOCK_NAME, 0.0)]
     assert flock_calls == [fcntl.LOCK_EX | fcntl.LOCK_NB]
 
@@ -156,30 +153,26 @@ def test_child_cancellation_probe_propagates_non_lock_timeout(
     cfg, _config_path, entry, _executable = queued_submission(tmp_path)
     captured: dict[str, Any] = {}
 
-    def fake_run_orca_job(*_args: object, **kwargs: Any) -> int:
+    def fake_execute(*_args: object, **kwargs: Any) -> int:
         captured.update(kwargs)
         return 4
 
     def timed_out_loader(_root: Path) -> list[object]:
         raise TimeoutError("simulated queue payload timeout")
 
-    monkeypatch.setattr(
-        worker_execution,
-        "_run_orca_job_for_entry",
-        fake_run_orca_job,
-    )
+    monkeypatch.setattr(worker_execution, "execute_orca_run", fake_execute)
     monkeypatch.setattr(queue_store, "load_entries", timed_out_loader)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=tmp_path,
+        admission_token="",
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.entry is entry
+    assert exit_code == 4
     with pytest.raises(TimeoutError, match="simulated queue payload timeout"):
-        captured["should_cancel"]()
+        captured["stop_requested"]()
 
 
 def test_child_cancellation_probe_propagates_post_acquire_payload_timeout(
@@ -189,7 +182,7 @@ def test_child_cancellation_probe_propagates_post_acquire_payload_timeout(
     cfg, _config_path, entry, _executable = queued_submission(tmp_path)
     captured: dict[str, Any] = {}
 
-    def fake_run_orca_job(*_args: object, **kwargs: Any) -> int:
+    def fake_execute(*_args: object, **kwargs: Any) -> int:
         captured.update(kwargs)
         return 4
 
@@ -198,23 +191,19 @@ def test_child_cancellation_probe_propagates_post_acquire_payload_timeout(
     def timed_out_payload_clock() -> str:
         raise TimeoutError("simulated lock payload timeout")
 
-    monkeypatch.setattr(
-        worker_execution,
-        "_run_orca_job_for_entry",
-        fake_run_orca_job,
-    )
+    monkeypatch.setattr(worker_execution, "execute_orca_run", fake_execute)
     monkeypatch.setattr(lock_utils, "now_utc_iso", timed_out_payload_clock)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=tmp_path,
+        admission_token="",
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.entry is entry
+    assert exit_code == 4
     with pytest.raises(TimeoutError, match="simulated lock payload timeout"):
-        captured["should_cancel"]()
+        captured["stop_requested"]()
 
 
 def test_child_cancellation_probe_propagates_post_acquire_timeout_with_lock_message(
@@ -225,30 +214,26 @@ def test_child_cancellation_probe_propagates_post_acquire_timeout_with_lock_mess
     captured: dict[str, Any] = {}
     message = f"Timed out acquiring lock: {tmp_path.resolve() / queue_store.QUEUE_LOCK_NAME}"
 
-    def fake_run_orca_job(*_args: object, **kwargs: Any) -> int:
+    def fake_execute(*_args: object, **kwargs: Any) -> int:
         captured.update(kwargs)
         return 4
 
     def timed_out_payload_clock() -> str:
         raise TimeoutError(message)
 
-    monkeypatch.setattr(
-        worker_execution,
-        "_run_orca_job_for_entry",
-        fake_run_orca_job,
-    )
+    monkeypatch.setattr(worker_execution, "execute_orca_run", fake_execute)
     monkeypatch.setattr(lock_utils, "now_utc_iso", timed_out_payload_clock)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=tmp_path,
+        admission_token="",
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.entry is entry
+    assert exit_code == 4
     with pytest.raises(TimeoutError, match="Timed out acquiring lock"):
-        captured["should_cancel"]()
+        captured["stop_requested"]()
 
 
 @pytest.mark.parametrize("boundary", ["handoff", "shutdown", "cancel", "exception"])

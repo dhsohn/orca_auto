@@ -15,7 +15,7 @@ from orca_auto.orca.queue.entries import (
     TERMINAL_REPLAY_METADATA_KEY,
     queue_entry_generation_token,
 )
-from orca_auto.orca.state import new_state, write_state
+from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.submission import create_queued_submission
 from tests.conftest import claim_next_entry
 
@@ -63,7 +63,7 @@ def test_activity_borrows_state_only_from_its_queue_generation(
         "analyzer_status": "completed",
         "last_out_path": "",
     }
-    write_state(job_dir, state)
+    save_state(job_dir, state)
     assert adapter.mark_completed(runs_root, previous.queue_id, run_id=state["run_id"])
     assert adapter.update_metadata(
         runs_root, previous.queue_id, {TERMINAL_REPLAY_METADATA_KEY: None}
@@ -81,7 +81,7 @@ def test_activity_borrows_state_only_from_its_queue_generation(
         state["execution_provenance"] = orca_execution_provenance(
             current.metadata["execution_snapshot"]
         )
-        write_state(job_dir, state)
+        save_state(job_dir, state)
 
     rows = (
         list(query_listing(runs_root, ActivityListRequest(indexed=True)).records)

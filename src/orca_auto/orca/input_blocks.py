@@ -3,10 +3,9 @@
 Sits on :mod:`.input_syntax` (tokens, comments, route lines) and provides the
 two primitives every input rewriter and scanner shares: locating the single
 ``* xyz`` / ``* xyzfile`` geometry block, and walking ``%name ... end`` blocks
-under the package-wide block-termination rule of :class:`OrcaBlock`. Editing
-helpers here (``set_block_key_value``, ``replace_geometry_with_xyzfile``)
-change one block at a time and never look at external file references; that
-is :mod:`.input_references`.
+under the package-wide block-termination rule of :class:`OrcaBlock`. The
+editing helper here (``set_block_key_value``) changes one block at a time and
+never looks at external file references; that is :mod:`.input_references`.
 """
 
 from __future__ import annotations
@@ -14,13 +13,13 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 from .input_syntax import (
     OrcaLineToken,
     active_orca_directive_text,
     active_orca_line_text,
     orca_line_tokens,
+    value_token_index,
 )
 
 GEOM_HEADER_RE = re.compile(
@@ -52,6 +51,14 @@ class OrcaGeometryBlock:
     terminator_index: int | None
 
 
+def xyzfile_reference_token(tokens: Sequence[OrcaLineToken]) -> OrcaLineToken | None:
+    """The file token of a ``* xyzfile charge multiplicity file`` line, else ``None``."""
+
+    if len(tokens) < 5 or tokens[0].value != "*" or tokens[1].value.lower() != "xyzfile":
+        return None
+    return tokens[4]
+
+
 def geometry_header_match(line: str) -> re.Match[str] | None:
     """Match ``GEOM_HEADER_RE`` against the active (comment-free) text of ``line``."""
 
@@ -69,10 +76,8 @@ def find_geometry_block(lines: Sequence[str]) -> OrcaGeometryBlock | None:
         charge = int(match.group(2))
         multiplicity = int(match.group(3))
         if kind == "xyzfile":
-            # Same token position as input_references' geometry reference, so a
-            # quoted or comment-suffixed filename resolves identically.
-            tokens = orca_line_tokens(line)
-            reference = tokens[4].value if len(tokens) >= 5 else None
+            file_token = xyzfile_reference_token(orca_line_tokens(line))
+            reference = file_token.value if file_token is not None else None
             return OrcaGeometryBlock(header_index, kind, charge, multiplicity, reference, (), None)
         atom_rows: list[tuple[int, str]] = []
         for index in range(header_index + 1, len(lines)):
@@ -93,39 +98,6 @@ def find_geometry_block(lines: Sequence[str]) -> OrcaGeometryBlock | None:
 def find_geometry_start(lines: list[str]) -> int | None:
     block = find_geometry_block(lines)
     return None if block is None else block.header_index
-
-
-def geometry_range(lines: list[str]) -> tuple[int, int, int, int] | None:
-    """Return ``(start, end, charge, multiplicity)`` of the first geometry block."""
-
-    block = find_geometry_block(lines)
-    if block is None:
-        return None
-    if block.kind == "xyzfile":
-        end = block.header_index + 1
-    elif block.terminator_index is not None:
-        end = block.terminator_index + 1
-    else:
-        end = len(lines)
-    return block.header_index, end, block.charge, block.multiplicity
-
-
-def replace_geometry_with_xyzfile(lines: list[str], geom_file: Path, base_dir: Path) -> bool:
-    geo = geometry_range(lines)
-    if geo is None:
-        return False
-    start, end, charge, mult = geo
-    geom_resolved = geom_file.resolve()
-    base_resolved = base_dir.resolve()
-    try:
-        rel = geom_resolved.relative_to(base_resolved)
-    except ValueError:
-        rel = geom_resolved
-    ref = str(rel).replace("\\", "/")
-    if " " in ref:
-        ref = f'"{ref}"'
-    lines[start:end] = [f"* xyzfile {charge} {mult} {ref}"]
-    return True
 
 
 @dataclass(frozen=True)
@@ -373,9 +345,7 @@ def _set_inline_block_key_value(
             None,
         )
         if key_index is not None:
-            value_index = key_index + 1
-            if value_index < len(body_tokens) and body_tokens[value_index].value == "=":
-                value_index += 1
+            value_index = value_token_index(body_tokens, key_index)
             if value_index >= len(body_tokens):
                 return None
             key_token = body_tokens[key_index]

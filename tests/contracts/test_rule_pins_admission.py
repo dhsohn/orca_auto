@@ -37,8 +37,7 @@ from orca_auto.orca.config import load_config
 from orca_auto.orca.engine_runtime import engine_runtime_paths
 from orca_auto.orca.queue import worker as queue_worker
 from orca_auto.orca.queue.worker import OrcaQueueWorker
-from orca_auto.orca.run_context import RunExecutionContext
-from tests.conftest import make_app_cfg
+from tests.conftest import make_app_cfg, make_run_context
 from tests.contracts.normalize import Normalizer, assert_pin, read_json
 
 # ``{runs}`` and ``{tmp}`` are filled per test; ``{orca}`` names the fake ORCA.
@@ -175,17 +174,19 @@ def test_child_slot_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
                 "existing_completed_exit",
                 _settle_in_admission_context(admission, token, engine_state, raised),
             )
-            context = RunExecutionContext(
-                cfg=cfg,
-                reaction_dir=job,
-                selected_inp=selected_inp,
+            context = make_run_context(
+                cfg,
+                job,
+                selected_inp,
                 admission_root=admission,
-                reservation_token=token,
+                admission_token=token,
                 admission_app_name="orca_auto",
                 admission_task_id="orca-pin",
                 queue_id="q-pin",
             )
-            result = _answer(partial(execution.execute_orca_run, context))
+            result = _answer(
+                partial(execution.execute_orca_run, context, stop_requested=lambda: False)
+            )
             slots_path = admission / "admission_slots.json"
             n = Normalizer({tmp_path: "<tmp>"})
             table[f"{exc_name}|{engine_state}"] = n(

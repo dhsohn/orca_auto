@@ -303,7 +303,7 @@ def test_build_and_the_worker_child_accept_the_same_resource_requests(
 
     def claim() -> Any:
         return worker_execution._build_execution_context(
-            make_app_cfg(tmp_path), row, admission_token=None
+            make_app_cfg(tmp_path), row, admission_token=""
         )
 
     if accepted:

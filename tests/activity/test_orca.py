@@ -29,7 +29,7 @@ from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_generation_token
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.run_snapshot import RunSnapshot
-from orca_auto.orca.state import write_state
+from orca_auto.orca.state import save_state
 from orca_auto.orca.statuses import RunStatus
 from tests.conftest import make_queue_entry, write_run_state
 
@@ -556,7 +556,7 @@ def test_cancel_activity_by_state_run_id_of_running_job(
     state["queue_generation"] = (
         queue_entry_generation_token(entry) if current_generation else "q-previous"
     )
-    write_state(reaction_dir, state)
+    save_state(reaction_dir, state)
     queue_persistence.save_entries(allowed, [entry])
 
     with acquire_run_lock(reaction_dir):

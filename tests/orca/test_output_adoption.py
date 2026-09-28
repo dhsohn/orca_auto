@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 import os
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -11,22 +11,20 @@ from typing import Any, cast
 import pytest
 
 from orca_auto.orca import execution
+from orca_auto.orca.attempt.resume import recover_crashed_state
 from orca_auto.orca.config import AppConfig, PathsConfig
-from orca_auto.orca.run_context import RunExecutionContext
+from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.types import AttemptRecord
+from tests.conftest import make_run_context
 
 _COMPLETED_OUT = "****ORCA TERMINATED NORMALLY****\n"
 
 
-class _RunnerMustNotLaunch:
-    def __init__(self, _orca_executable: str) -> None:
-        pass
-
-    def run(self, inp_path: Path) -> Any:
-        raise AssertionError(f"ORCA must not be launched for {inp_path}")
+def _must_not_launch(_runner: OrcaRunner, inp_path: Path) -> Any:
+    raise AssertionError(f"ORCA must not be launched for {inp_path}")
 
 
 def _write_generation(
@@ -65,25 +63,22 @@ def _execute(
     inp: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    runner_cls: type[Any] = _RunnerMustNotLaunch,
+    run: Callable[[OrcaRunner, Path], Any] = _must_not_launch,
 ) -> int:
     @contextmanager
     def passthrough(*_args: object, **_kwargs: object):
         yield
 
     monkeypatch.setattr(execution, "acquire_run_lock", passthrough)
-    monkeypatch.setattr(execution, "_admission_context", passthrough)
-    monkeypatch.setattr(execution, "started_notification_callback", lambda _cfg: None)
-    context = RunExecutionContext(
-        reaction_dir=reaction_dir,
-        selected_inp=inp,
+    monkeypatch.setattr(execution, "_child_admission_slot", passthrough)
+    monkeypatch.setattr(OrcaRunner, "run", run)
+    context = make_run_context(
+        AppConfig(paths=PathsConfig(orca_executable="/bin/true"), scratch=ScratchConfig()),
+        reaction_dir,
+        inp,
         admission_root=reaction_dir.parent / ".admission",
-        reservation_token=None,
-        admission_app_name=None,
-        admission_task_id="",
-        cfg=AppConfig(paths=PathsConfig(orca_executable="/bin/true"), scratch=ScratchConfig()),
     )
-    return execution.execute_locked_run(context, runner_cls=runner_cls)
+    return execution.execute_locked_run(context, stop_requested=lambda: False)
 
 
 def test_recorded_nonzero_exit_outranks_completed_looking_output(
@@ -224,10 +219,7 @@ def test_output_without_a_recorded_attempt_is_still_adopted(
     reaction_dir = tmp_path / "rxn"
     inp = _write_generation(reaction_dir, status=status, attempt=None)
     if status == "running":
-        assert execution.recover_crashed_state(
-            reaction_dir,
-            logger=logging.getLogger(__name__),
-        )
+        assert recover_crashed_state(reaction_dir)
 
     exit_code = _execute(reaction_dir, inp, monkeypatch)
 
@@ -262,15 +254,11 @@ def test_fresh_generation_runs_despite_an_older_completed_generation(
     fresh_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
     launched: list[Path] = []
 
-    class _RecordingRunner:
-        def __init__(self, _orca_executable: str) -> None:
-            pass
+    def record_launch(_runner: OrcaRunner, inp_path: Path) -> Any:
+        launched.append(inp_path)
+        raise RuntimeError("launched")
 
-        def run(self, inp_path: Path) -> Any:
-            launched.append(inp_path)
-            raise RuntimeError("launched")
-
-    exit_code = _execute(job_dir, fresh_inp, monkeypatch, runner_cls=_RecordingRunner)
+    exit_code = _execute(job_dir, fresh_inp, monkeypatch, run=record_launch)
 
     assert exit_code != 0
     assert [path.parent for path in launched] == [fresh_dir]

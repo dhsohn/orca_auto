@@ -16,7 +16,7 @@ from orca_auto.core.utils.process_tracking import run_lock_is_held
 from orca_auto.orca import run_lock
 from orca_auto.orca import state as state_module
 from orca_auto.orca import state_reading as state_reading_module
-from orca_auto.orca.engine_runner import executable_identity
+from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.report import publication as publication_module
 from orca_auto.orca.report.publication import write_report_files, write_report_json
 from orca_auto.orca.run_lock import acquire_run_lock
@@ -24,7 +24,6 @@ from orca_auto.orca.state import (
     new_state,
     normalized_payload_from_state,
     save_state,
-    write_state,
 )
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.statuses import TERMINAL_RUN_STATUSES, RunStatus
@@ -56,7 +55,7 @@ def _bind_generation(reaction: Path, *, token: str) -> tuple[Path, dict]:
             "inode": generation_status.st_ino,
         },
         "generation_owner_token": token,
-        "bound_selected_identity": executable_identity(inp),
+        "bound_selected_identity": file_content_identity(inp),
     }
     return generation, provenance
 
@@ -265,7 +264,7 @@ def test_write_report_files_skips_publication_without_verified_generation(
     assert not (tmp_path / "job_report.json").exists()
 
 
-def test_write_state_fails_closed_when_pinned_reaction_directory_is_replaced(
+def test_save_state_fails_closed_when_pinned_reaction_directory_is_replaced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reaction = tmp_path / "reaction"
@@ -293,7 +292,7 @@ def test_write_state_fails_closed_when_pinned_reaction_directory_is_replaced(
 
     monkeypatch.setattr(state_module, "file_lock_at", _replace_after_pin)
     with pytest.raises(ValueError, match="parent directory identity changed"):
-        write_state(reaction, state)
+        save_state(reaction, state)
 
     assert not (reaction / "job_state.json").exists()
     assert not (displaced / "job_state.json").exists()
@@ -360,7 +359,7 @@ def test_state_module_keeps_write_helpers_available(tmp_path: Path) -> None:
     generation, state = _bound_state(tmp_path, token="state-helper-token-0001")
     inp = generation / "nebts.inp"
 
-    saved_path = write_state(tmp_path, state)
+    saved_path = save_state(tmp_path, state)
     assert saved_path == state_reading_module.state_path(tmp_path)
     assert state_reading_module.load_state(tmp_path) is not None
 
@@ -421,7 +420,7 @@ def test_write_report_files_json_fields(tmp_path: Path) -> None:
         "executable_identity": state["attempts"][0]["executable_identity"],
     }
     state["final_result"] = {**_COMPLETED_RESULT, "last_out_path": str(tmp_path / "rxn.out")}
-    write_state(tmp_path, state)
+    save_state(tmp_path, state)
     result = write_report_files(tmp_path, state)
     report_json_path = Path(result["report_json"])
 
@@ -449,7 +448,7 @@ def test_write_report_files_reentry_preserves_published_terminal_generation(
     _generation, state = _bound_state(tmp_path, token="reentry-terminal-tok-01")
     state["status"] = "completed"
     state["final_result"] = {**_COMPLETED_RESULT, "last_out_path": str(tmp_path / "rxn.out")}
-    write_state(tmp_path, state)
+    save_state(tmp_path, state)
     first = write_report_files(tmp_path, state)
     report_json_path = Path(first["report_json"])
     published = {
@@ -526,7 +525,7 @@ def test_terminal_machine_observation_is_immutable(tmp_path: Path) -> None:
         "reason": "runner_exception",
     }
     state["final_result"] = final_result
-    write_state(tmp_path, state)
+    save_state(tmp_path, state)
 
     path = write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state))
     assert path is not None
@@ -795,7 +794,7 @@ def test_historical_generation_notification_fields_are_not_rewritten(tmp_path: P
 
 def test_common_machine_validation_rejects_changed_input_receipt(tmp_path: Path) -> None:
     generation, state = _bound_state(tmp_path, token="receipt-validation-token-01")
-    write_state(tmp_path, state)
+    save_state(tmp_path, state)
     reports = write_report_files(tmp_path, state)
     machine = Path(reports["report_json"])
     validate_common_machine(machine)

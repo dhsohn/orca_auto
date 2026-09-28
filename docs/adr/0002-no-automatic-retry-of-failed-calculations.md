@@ -1,6 +1,6 @@
 # ADR 0002: No automatic retry of failed calculations
 
-- Status: Accepted
+- Status: Partly superseded by ADR 0009
 - Date: 2026-09-05
 - Recorded: 2026-09-26
 

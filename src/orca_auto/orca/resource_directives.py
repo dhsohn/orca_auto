@@ -1,4 +1,8 @@
-"""Read and inject ``%pal nprocs`` / ``%maxcore`` resource directives of an ORCA input."""
+"""Read and inject ``%pal nprocs`` / ``%maxcore`` resource directives of an ORCA input.
+
+Each directive has one pattern here; ``input_validation`` counts duplicates
+with the same patterns where the rules agree.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .input_blocks import iter_blocks, set_block_key_value
-from .input_syntax import active_orca_directive_text, find_route_idx, orca_route_line
+from .input_syntax import (
+    active_orca_directive_text,
+    find_route_idx,
+    orca_route_line,
+    render_orca_input,
+)
 
-MAXCORE_RE = re.compile(r"^\s*%maxcore\s+(\d+)", re.IGNORECASE)
+# A %maxcore directive; group 1 is its value when a number follows.
+MAXCORE_RE = re.compile(r"^\s*%maxcore\b(?:\s+(\d+))?", re.IGNORECASE)
 # ORCA block syntax accepts an optional "=" between key and value ("nprocs = 16").
 NPROCS_RE = re.compile(r"\bnprocs(?:\s*=\s*|\s+)(\d+)\b", re.IGNORECASE)
 # ORCA route-line shorthand "! PALn" (PAL2..PAL8) requests n parallel processes.
@@ -24,16 +34,13 @@ class PreparedSubmissionResourceInput:
     normalized_payload: bytes
 
 
+def _maxcore_value(line: str) -> int | None:
+    match = MAXCORE_RE.match(active_orca_directive_text(line))
+    return int(match.group(1)) if match is not None and match.group(1) is not None else None
+
+
 def read_maxcore(lines: list[str]) -> int | None:
-    values: list[int] = []
-    for line in lines:
-        active_line = active_orca_directive_text(line)
-        m = MAXCORE_RE.match(active_line)
-        if m:
-            try:
-                values.append(int(m.group(1)))
-            except ValueError:
-                continue
+    values = [value for line in lines if (value := _maxcore_value(line)) is not None]
     return max(values) if values else None
 
 
@@ -145,7 +152,7 @@ def prepare_submission_resource_request(
     resource_request = resource_request_from_lines(lines)
     if not resource_request:
         raise ValueError(f"Could not determine ORCA resource_request from input: {inp_path}")
-    normalized_payload = ("\n".join(lines).rstrip() + "\n").encode("utf-8")
+    normalized_payload = render_orca_input(lines).encode("utf-8")
     return PreparedSubmissionResourceInput(
         resource_request=resource_request,
         actions=tuple(actions),
@@ -154,9 +161,7 @@ def prepare_submission_resource_request(
 
 
 def set_maxcore(lines: list[str], value_mb: int) -> bool:
-    matches = [
-        i for i, line in enumerate(lines) if MAXCORE_RE.match(active_orca_directive_text(line))
-    ]
+    matches = [index for index, line in enumerate(lines) if _maxcore_value(line) is not None]
     if matches:
         new_line = f"%maxcore {value_mb}"
         first = matches[0]

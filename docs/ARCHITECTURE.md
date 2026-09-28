@@ -16,7 +16,7 @@ Use the following ownership map when changing ORCA_auto. Keep the job ID and run
 | :--- | :--- | :--- | :--- |
 | Submit | Selected `.inp`, referenced files and resource directives | `submission.py` and input snapshot binding | Generation-bound inputs and a durable queue entry |
 | Admit | Queue entry and admission records | Parent queue worker through the admission store | Reserved slot and a child bound to that job |
-| Execute | Bound generation inputs and ORCA executable | Worker child through the attempt engine | Output files and recorded attempt evidence |
+| Execute | Bound generation inputs and ORCA executable | Worker child through its one attempt (`attempt/run.py`) | Output files and recorded attempt evidence |
 | Publish | Attempt evidence and terminal decision | Attempt reporting on normal exit; the parent's settlement (`queue/settlement.py`) after an interruption or a cancellation, live or on restart replay | Terminal state and generation reports, including `machine.json` |
 | Notify completion | Matching terminal root `job_state.json` and final result | Parent queue worker claims once through the state writer under the run lock; sender only delivers the captured message | Root notification bookkeeping; generation execution state and reports remain unchanged |
 | Query | Queue/state files and job location records | Index publisher updates derived query data | CLI rows and activity views |
@@ -176,22 +176,60 @@ reconciliation is worker-owned: a submission never sweeps the queue and recovers
 only its own directory's dead row when no worker pid is live.
 
 The ORCA child directly resolves its queue entry, recovers a crashed generation,
-waits for parent admission handoff, and runs that generation. The parent retains
-final admission-release ownership on success, shutdown and exceptions. Validated
-inputs, resources and queue identity form one `RunExecutionContext`, which is
-passed directly into execution without reconstructing CLI arguments or installing
-empty lifecycle callbacks.
+waits for parent admission handoff, and runs that generation. Its validated
+inputs, submitted resource request, execution snapshot and queue identity form
+one `RunExecutionContext`, built once from the claimed row and passed directly
+into execution; RAM scratch is sized from that request. `execute_locked_run`
+runs it in one body: `run.lock`, `recover_crashed_state`, the slot rule below,
+then either adoption of the generation's completed output or the run's one
+`OrcaRunner`. Its constructor names everything a launch uses: the snapshot's
+executable and identity, the generation directory and its identity, the stop
+request, the RAM scratch policy, the slot's engine-process preparer and
+registrar, and the snapshot verifier it calls around each launch. The runner
+reserves RAM scratch before the first state write, and then the run makes its
+one attempt ([ADR 0002](adr/0002-no-automatic-retry-of-failed-calculations.md)).
+`attempt/run.run_attempt` settles a resumed state from its recorded attempt;
+otherwise it marks the run started, sends the started notification, runs ORCA
+once on the bound input, records the attempt with the analyzer verdict
+reconciled with the exit code (`out_analyzer.apply_exit_code`) and publishes the
+terminal result, reports and run summary (`attempt/reporting.exit_with_result`).
+A run resumes only by rebinding into a fresh generation
+([ADR 0009](adr/0009-resume-only-by-rebind.md)): a claim whose generation shows
+started execution is rebound before it runs, unless its completed output
+settles it, so ORCA never runs twice in one generation. A
+worker shutdown or cancel, Ctrl-C included, stops the attempt as
+`WorkerShutdownInterrupt`.
 
-`recover_crashed_state` closes a root `job_state.json` left `running` by a
-crashed run, and it runs in two places, each under `run.lock`. The crash
-rebind (`recovery_rebind.py`, with the config the child already loaded) calls
-it before it builds the replacement generation, so the frozen attempt is
-recorded as crashed before a new generation exists. `execute_locked_run` calls
-it again right before the launch, for claims that did not rebind (no
-started-execution evidence, or a completed output to adopt); after a rebind it
-finds nothing to recover and writes nothing. Both read, modify and write the
-root state, so each holds `run.lock` against a live ORCA instance and the
-parent's terminal state writers.
+Every admission slot mutation of the child goes through one rule,
+`execution._child_admission_slot`: the child activates the slot, completes its
+engine process when the run returns and leaves the slot as it is when the run
+raises. It releases only a slot that activation no longer finds live. The
+parent releases the slot after the child exits, on success, shutdown and
+exceptions alike. `tests/core/queue/test_ownership_guards.py` limits
+`release_slot` and `complete_slot_engine_process` to these owners. One slot's
+lifecycle:
+
+| Step | Writer | `state` | `engine_process_state` |
+|---|---|---|---|
+| Reserve before the claim | parent | `reserved` | `idle` |
+| Attach the child (owner pid, queue id) | parent | `active` | `idle` |
+| Activate for the run directory | child | `active` | `idle` |
+| Fence one engine launch | child's runner | `active` | `pending` |
+| Record the launched process group | child's runner | `active` | `active` |
+| Clear the exited group | child's runner | `active` | `idle` |
+| Complete after the run returns | child | `active` | `idle` |
+| Recover any engine record and release | parent | removed | removed |
+
+`recover_crashed_state` (`attempt/resume.py`) closes a root `job_state.json`
+left `running` by a crashed run, and it runs in two places, each under
+`run.lock`. The crash rebind (`recovery_rebind.py`, with the config the child
+already loaded) calls it before it builds the replacement generation, so the
+frozen attempt is recorded as crashed before a new generation exists.
+`execute_locked_run` calls it again right before the launch, for claims that
+did not rebind (no started-execution evidence, or a completed output to adopt);
+after a rebind it finds nothing to recover and writes nothing. Both read,
+modify and write the root state, so each holds `run.lock` against a live ORCA
+instance and the parent's terminal state writers.
 
 ---
 
@@ -215,3 +253,4 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0006: One generation identity for the persisted token and every queue-row fence](adr/0006-one-generation-identity-for-token-and-fences.md)
 - [ADR 0007: One admission store per installation under `<runs_root>/.admission`](adr/0007-one-admission-store-under-runs-root.md)
 - [ADR 0008: The worker parent is the one writer of a cancelled result](adr/0008-parent-writes-the-cancelled-result.md)
+- [ADR 0009: Resume only by rebinding into a fresh generation](adr/0009-resume-only-by-rebind.md)

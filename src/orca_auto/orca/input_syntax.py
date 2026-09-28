@@ -1,16 +1,18 @@
 """Line-level ORCA input syntax: tokens, comments, route lines, and path quoting.
 
 This is the bottom of the input-handling stack (``input_syntax`` <-
-``input_blocks`` <- ``input_references`` <- ``input_validation``). Nothing
-here knows about ``%block`` structure, geometry sections, or external file
-references; it only turns one input line into comment-free tokens with source
-spans and renders the two line forms every rewriter shares: the ``!`` route
-line and a quoted or bare file path.
+``input_blocks`` <- ``input_references`` and ``resource_directives`` <-
+``input_validation``). Nothing here knows about ``%block`` structure, geometry
+sections, or external file references; it turns one input line into
+comment-free tokens with source spans, finds the value token after a key, and
+renders what every rewriter shares: the ``!`` route line, a quoted or bare file
+path, and the text of a rewritten input.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,6 +81,25 @@ def orca_line_tokens(line: str, *, start: int = 0) -> list[OrcaLineToken]:
     return tokens
 
 
+def value_token_index(tokens: Sequence[OrcaLineToken], key_index: int) -> int:
+    """Index of the value token after ``tokens[key_index]``, past one optional ``=``.
+
+    ORCA accepts ``key value`` and ``key = value``. The result is
+    ``len(tokens)`` or more when the key has no value.
+    """
+
+    value_index = key_index + 1
+    if value_index < len(tokens) and tokens[value_index].value == "=":
+        value_index += 1
+    return value_index
+
+
+def render_orca_input(lines: Sequence[str]) -> str:
+    """The text of an input from its lines: trailing blank lines dropped, one final newline."""
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def active_orca_line_text(line: str) -> str:
     """Return active ORCA tokens with closed ``# ... #`` comments removed."""
 
@@ -104,7 +125,10 @@ def active_orca_directive_text(line: str) -> str:
 def orca_route_tokens(line: str) -> list[OrcaLineToken]:
     """Return tokens after the first active ORCA ``!`` route marker."""
 
-    tokens = orca_line_tokens(line)
+    return _route_tokens(orca_line_tokens(line))
+
+
+def _route_tokens(tokens: list[OrcaLineToken]) -> list[OrcaLineToken]:
     if not tokens:
         return []
     first = tokens[0]
@@ -129,11 +153,10 @@ def orca_route_tokens(line: str) -> list[OrcaLineToken]:
 def orca_route_line(line: str) -> str | None:
     """Return one canonical active route line, or ``None`` for a non-route line."""
 
-    tokens = orca_route_tokens(line)
-    active_tokens = orca_line_tokens(line)
-    if not active_tokens or not active_tokens[0].value.startswith("!"):
+    tokens = orca_line_tokens(line)
+    if not tokens or not tokens[0].value.startswith("!"):
         return None
-    suffix = " ".join(token.value for token in tokens)
+    suffix = " ".join(token.value for token in _route_tokens(tokens))
     return f"! {suffix}".rstrip()
 
 
@@ -142,10 +165,6 @@ def find_route_idx(lines: list[str]) -> int | None:
         if orca_route_line(line) is not None:
             return idx
     return None
-
-
-def route_line_indices(lines: list[str]) -> list[int]:
-    return [idx for idx, line in enumerate(lines) if orca_route_line(line) is not None]
 
 
 def orca_route_lines(lines: list[str]) -> list[str]:

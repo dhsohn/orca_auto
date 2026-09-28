@@ -14,10 +14,12 @@ import re
 from .input_blocks import GEOM_HEADER_RE, iter_blocks
 from .input_references import orca_moinp_references
 from .input_syntax import active_orca_directive_text, orca_line_tokens, orca_route_tokens
-from .resource_directives import NPROCS_RE
+from .resource_directives import MAXCORE_RE, NPROCS_RE
 
 COORDS_BLOCK_RE = re.compile(r"^\s*%\s*coords\b", re.IGNORECASE)
-MAXCORE_DIRECTIVE_RE = re.compile(r"^\s*%maxcore\b", re.IGNORECASE)
+# Counts whole unquoted route tokens, the PAL keywords ORCA parses. The reader
+# (resource_directives.PAL_ROUTE_RE) scans the route text for a core count, so
+# it also sees quoted or compound tokens; the two cannot share one pattern.
 PAL_ROUTE_TOKEN_RE = re.compile(r"\APAL\d+\Z", re.IGNORECASE)
 
 
@@ -106,7 +108,7 @@ def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> Non
     )
     pal_route_count = 0
     for line in lines:
-        if MAXCORE_DIRECTIVE_RE.match(active_orca_directive_text(line)):
+        if MAXCORE_RE.match(active_orca_directive_text(line)):
             maxcore_count += 1
         pal_route_count += sum(
             1

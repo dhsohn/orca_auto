@@ -22,7 +22,9 @@ from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
     EngineScratchWorkspace,
     ScratchPublication,
+    attach_scratch_provenance_mapping_to_exception,
     attach_scratch_provenance_to_exception,
+    scratch_provenance_from_exception,
     scratch_publication_provenance,
 )
 from orca_auto.core.queue.processes import (
@@ -32,12 +34,8 @@ from orca_auto.core.queue.processes import (
     terminate_process_group,
 )
 from orca_auto.core.utils.persistence import open_pinned_readonly
-from orca_auto.orca.engine_runner import (
-    confined_output_identity,
-    executable_identity,
-    open_pinned_executable,
-)
 
+from .file_identity import confined_output_identity, file_content_identity, open_pinned_executable
 from .scratch import OrcaScratchPolicy
 
 logger = logging.getLogger(__name__)
@@ -58,8 +56,7 @@ class ShutdownSignalGuard:
     until all process and bookkeeping cleanup has finished.
 
     Capturing SIGINT too prevents a second Ctrl-C from unwinding the cleanup that
-    the first one started. The runner preserves standalone Ctrl-C as
-    ``KeyboardInterrupt`` while worker-managed signals become
+    the first one started. The runner turns either signal into
     ``WorkerShutdownInterrupt``.
     """
 
@@ -131,52 +128,53 @@ class RunResult:
     input_identity: dict[str, Any] = field(default_factory=dict)
     executable_identity: dict[str, Any] = field(default_factory=dict)
     output_identity: dict[str, Any] = field(default_factory=dict)
-    execution_provenance: dict[str, Any] = field(default_factory=dict)
     scratch_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 class OrcaRunner:
-    def __init__(self, orca_executable: str) -> None:
-        self.orca_executable = orca_executable
-        self._prepare_running_job: Callable[[], None] | None = None
-        self._register_running_job: Callable[[Any | None], None] | None = None
-        self._shutdown_requested: Callable[[], bool] | None = None
-        self._bound_executable_identity: dict[str, Any] = {}
-        self._bound_durable_directory_identity: tuple[int, int] | None = None
-        self._scratch_policy: OrcaScratchPolicy | None = None
-        self._prepared_workspace: EngineScratchWorkspace | None = None
+    """Launch and supervise the one ORCA attempt of a run in its bound generation.
 
-    def set_running_job_registrar(
+    The constructor fixes everything a launch uses: the executable and its
+    queued identity, the generation directory and its identity, the snapshot
+    verifier, the worker child's cancel-or-shutdown check, the RAM scratch
+    policy (``None`` runs in place) and the admission slot's engine-process
+    preparer and registrar.
+    """
+
+    def __init__(
         self,
-        registrar: Callable[[Any | None], None],
+        orca_executable: str,
         *,
-        prepare: Callable[[], None],
+        executable_identity: dict[str, Any],
+        execution_dir: Path,
+        execution_dir_identity: dict[str, Any],
+        verify_snapshot: Callable[..., object],
+        stop_requested: Callable[[], bool],
+        scratch_policy: OrcaScratchPolicy | None,
+        prepare_running_job: Callable[[], None],
+        register_running_job: Callable[[Any | None], None],
     ) -> None:
-        self._register_running_job = registrar
-        self._prepare_running_job = prepare
-
-    def set_shutdown_requested(self, callback: Callable[[], bool]) -> None:
-        self._shutdown_requested = callback
-
-    def set_executable_identity(self, identity: dict[str, Any]) -> None:
-        self._bound_executable_identity = dict(identity)
-
-    def set_scratch_policy(self, policy: OrcaScratchPolicy) -> None:
-        self._scratch_policy = policy
-
-    def set_durable_directory_identity(self, identity: dict[str, Any]) -> None:
-        device = identity.get("device")
-        inode = identity.get("inode")
+        device = execution_dir_identity.get("device")
+        inode = execution_dir_identity.get("inode")
         if type(device) is not int or device < 0 or type(inode) is not int or inode <= 0:
             raise ValueError("ORCA durable directory identity is invalid")
+        self.orca_executable = orca_executable
+        self._bound_executable_identity = dict(executable_identity)
+        self._execution_dir = execution_dir
         self._bound_durable_directory_identity = (device, inode)
+        self._verify_snapshot = verify_snapshot
+        self._shutdown_requested = stop_requested
+        self._scratch_policy = scratch_policy
+        self._prepare_running_job = prepare_running_job
+        self._register_running_job = register_running_job
+        self._prepared_workspace: EngineScratchWorkspace | None = None
 
-    def _open_pinned_executable(self) -> tuple[int, dict[str, Any]]:
+    def _open_pinned_executable(self) -> int:
         descriptor, observed = open_pinned_executable(self.orca_executable, label="ORCA executable")
         try:
-            if self._bound_executable_identity and observed != self._bound_executable_identity:
+            if observed != self._bound_executable_identity:
                 raise ValueError("ORCA executable no longer matches its queued identity")
-            return descriptor, observed
+            return descriptor
         except BaseException:
             os.close(descriptor)
             raise
@@ -260,13 +258,16 @@ class OrcaRunner:
     def prepare(self, inp_path: Path) -> None:
         """Reserve the RAM scratch workspace before any run state is written.
 
-        Only a capacity refusal propagates: nothing has started, so the caller
-        may leave the job waiting. Any other failure is left for `run` to raise
-        again, where it is recorded as a failed attempt.
+        Staging reads the generation, so the snapshot is verified first, as in
+        `run`. Only a capacity refusal propagates: nothing has started, so the
+        caller may leave the job waiting. Any other failure, a snapshot that no
+        longer verifies included, is left for `run` to raise again, where it is
+        recorded as a failed attempt.
         """
         if self._scratch_policy is None or self._prepared_workspace is not None:
             return
         try:
+            self._verify_snapshot(allow_runtime_outputs=False)
             durable_input = require_confined_regular_file(
                 inp_path.parent,
                 inp_path,
@@ -299,20 +300,53 @@ class OrcaRunner:
         finally:
             workspace.close()
 
-    def _take_prepared_workspace(self, durable_input: Path) -> EngineScratchWorkspace | None:
+    def _take_prepared_workspace(self) -> EngineScratchWorkspace | None:
         workspace = self._prepared_workspace
-        if workspace is None:
-            return None
-        if workspace.durable_input != durable_input:
-            # A resumed run executes a derived input instead of the prepared one.
-            self.release_prepared()
-            return None
         self._prepared_workspace = None
         return workspace
 
     def run(self, inp_path: Path) -> RunResult:
-        if self._prepare_running_job is None or self._register_running_job is None:
-            raise RuntimeError("ORCA execution requires managed admission callbacks")
+        """Run the attempt's input with the snapshot verified before and after the launch.
+
+        The input must be a private ``.inp`` in the generation directory. Before
+        the launch the generation must be pristine; afterwards its runtime
+        outputs are allowed. A failed verification after the launch carries the
+        launch's scratch provenance.
+        """
+        current_input = require_confined_regular_file(
+            self._execution_dir,
+            inp_path,
+            label="ORCA queued execution input",
+        )
+        if (
+            current_input.parent != self._execution_dir.resolve()
+            or current_input.suffix.lower() != ".inp"
+        ):
+            raise ValueError("ORCA queued execution input must be a private .inp file")
+        self._verify_snapshot(allow_runtime_outputs=False)
+        try:
+            result = self._run_with_scratch(inp_path)
+        except BaseException as run_exc:
+            try:
+                self._verify_snapshot(allow_runtime_outputs=True)
+            except BaseException as verify_exc:
+                provenance = scratch_provenance_from_exception(run_exc)
+                if provenance:
+                    attach_scratch_provenance_mapping_to_exception(verify_exc, provenance)
+                raise
+            raise
+        try:
+            self._verify_snapshot(allow_runtime_outputs=True)
+        except BaseException as verify_exc:
+            if result.scratch_provenance:
+                attach_scratch_provenance_mapping_to_exception(
+                    verify_exc, result.scratch_provenance
+                )
+            raise
+        return result
+
+    def _run_with_scratch(self, inp_path: Path) -> RunResult:
+        """Run ``inp_path`` in a RAM scratch workspace when a policy is set, else in place."""
         durable_input = require_confined_regular_file(
             inp_path.parent,
             inp_path,
@@ -320,7 +354,7 @@ class OrcaRunner:
         )
         if self._scratch_policy is None:
             return self._run_in_place(durable_input)
-        workspace = self._take_prepared_workspace(durable_input)
+        workspace = self._take_prepared_workspace()
         if workspace is None:
             workspace = EngineScratchWorkspace.create(
                 self._scratch_policy,
@@ -341,7 +375,7 @@ class OrcaRunner:
             publication = workspace.publish()
             durable_out = durable_input.parent / Path(result.out_path).name
             result.out_path = str(durable_out)
-            result.input_identity = executable_identity(durable_input)
+            result.input_identity = file_content_identity(durable_input)
             result.output_identity = confined_output_identity(durable_input.parent, durable_out)
             result.scratch_provenance = scratch_publication_provenance(publication)
             return result
@@ -367,8 +401,6 @@ class OrcaRunner:
     ) -> RunResult:
         prepare_running_job = self._prepare_running_job
         register_running_job = self._register_running_job
-        assert prepare_running_job is not None
-        assert register_running_job is not None
         if working_directory_fd is None:
             inp = require_confined_regular_file(
                 inp_path.parent,
@@ -388,8 +420,7 @@ class OrcaRunner:
         cwd = str(inp.parent)
 
         command: list[str] = [self.orca_executable, inp.name]
-        input_identity = executable_identity(inp)
-        bound_executable_identity = dict(self._bound_executable_identity)
+        input_identity = file_content_identity(inp)
         logger.info("Running ORCA: %s in %s", command, cwd)
 
         return_code = 1
@@ -402,12 +433,7 @@ class OrcaRunner:
             with ShutdownSignalGuard() as shutdown_guard:
 
                 def _raise_if_shutdown_requested() -> None:
-                    received_signal = shutdown_guard.received_signal
-                    if received_signal == signal.SIGINT and self._shutdown_requested is None:
-                        raise KeyboardInterrupt
-                    if received_signal is not None:
-                        raise WorkerShutdownInterrupt
-                    if self._shutdown_requested is not None and self._shutdown_requested():
+                    if shutdown_guard.received_signal is not None or self._shutdown_requested():
                         raise WorkerShutdownInterrupt
 
                 proc: subprocess.Popen[str] | None = None
@@ -417,9 +443,7 @@ class OrcaRunner:
                     prepare_running_job()
                     _raise_if_shutdown_requested()
                     process_start_attempted = True
-                    executable_fd, observed_executable_identity = self._open_pinned_executable()
-                    if not bound_executable_identity:
-                        bound_executable_identity = observed_executable_identity
+                    executable_fd = self._open_pinned_executable()
                     launch_gate_fd = -1
                     try:
                         launch_gate_fd = self._open_pinned_launch_gate()
@@ -522,13 +546,6 @@ class OrcaRunner:
                         "terminated ORCA process tree\n",
                     )
                     raise
-                except KeyboardInterrupt:
-                    self._retain_until_subprocess_tree_exits(proc)
-                    self._write_interrupt_notice(
-                        handle,
-                        "\n[orca_auto] interrupted by user; terminated ORCA process tree\n",
-                    )
-                    raise
                 except BaseException:
                     # A failed wait/callback can race the leader's exit. Only
                     # terminate a reaped group after ruling out PID reuse.
@@ -555,18 +572,18 @@ class OrcaRunner:
             # delivered only after ownership has been released. A worker's restored
             # handler may also have set the polling callback during handler restore.
             _raise_if_shutdown_requested()
-        if executable_identity(inp) != input_identity:
+        if file_content_identity(inp) != input_identity:
             raise RuntimeError(f"ORCA execution input changed while it was running: {inp}")
         output_identity = (
             confined_output_identity(inp.parent, out)
             if working_directory_fd is None
-            else executable_identity(out)
+            else file_content_identity(out)
         )
         return RunResult(
             out_path=str(out),
             return_code=return_code,
             command=tuple(command),
             input_identity=input_identity,
-            executable_identity=bound_executable_identity,
+            executable_identity=dict(self._bound_executable_identity),
             output_identity=output_identity,
         )

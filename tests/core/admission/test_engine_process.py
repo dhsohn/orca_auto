@@ -18,7 +18,7 @@ from orca_auto.core import admission
 from orca_auto.core.admission import engine_process, store
 from orca_auto.core.admission import persistence as admission_persistence
 from orca_auto.core.utils import process as process_utils
-from orca_auto.orca.orca_runner import OrcaRunner
+from tests.conftest import make_orca_runner
 
 
 def _engine_host(
@@ -702,10 +702,11 @@ def test_orca_popen_failure_clears_only_unambiguous_pending_launch(
     executable = tmp_path / "fake-orca"
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o755)
-    runner = OrcaRunner(str(executable))
-    runner.set_running_job_registrar(
-        admission.build_slot_engine_process_registrar(tmp_path, token),
-        prepare=admission.build_slot_engine_process_preparer(tmp_path, token),
+    runner = make_orca_runner(
+        executable,
+        tmp_path,
+        register_running_job=admission.build_slot_engine_process_registrar(tmp_path, token),
+        prepare_running_job=admission.build_slot_engine_process_preparer(tmp_path, token),
     )
     inp = tmp_path / "job.inp"
     inp.write_text("! SP\n", encoding="utf-8")
@@ -726,10 +727,11 @@ def test_orca_registrar_without_start_ticks_terminates_launch_before_clearing_pe
     fake_orca: Path,
 ) -> None:
     token = _reserve_managed(tmp_path, monkeypatch)
-    runner = OrcaRunner(str(fake_orca))
-    runner.set_running_job_registrar(
-        admission.build_slot_engine_process_registrar(tmp_path, token),
-        prepare=admission.build_slot_engine_process_preparer(tmp_path, token),
+    runner = make_orca_runner(
+        fake_orca,
+        tmp_path,
+        register_running_job=admission.build_slot_engine_process_registrar(tmp_path, token),
+        prepare_running_job=admission.build_slot_engine_process_preparer(tmp_path, token),
     )
     inp = tmp_path / "job.inp"
     inp.write_text("! SP\n", encoding="utf-8")

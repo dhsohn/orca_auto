@@ -175,7 +175,7 @@ def report_generation_target(job_dir: Path) -> tuple[Path, tuple[int, int]]:
 
 def bind_report_generation(job_dir: Path, state: dict) -> Path:
     from orca_auto.core.queue.generation_owner import bind_direct_generation_owner
-    from orca_auto.orca.engine_runner import executable_identity
+    from orca_auto.orca.file_identity import file_content_identity
 
     generation, identity = report_generation_target(job_dir)
     selected = Path(str(state["selected_inp"]))
@@ -195,6 +195,6 @@ def bind_report_generation(job_dir: Path, state: dict) -> Path:
         "execution_dir": str(generation),
         "execution_dir_identity": {"device": identity[0], "inode": identity[1]},
         "generation_owner_token": "test-report-owner-token-0001",
-        "bound_selected_identity": executable_identity(bound),
+        "bound_selected_identity": file_content_identity(bound),
     }
     return generation
