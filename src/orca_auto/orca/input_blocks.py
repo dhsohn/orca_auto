@@ -29,7 +29,19 @@ GEOM_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 BLOCK_START_RE = re.compile(r"^\s*%([A-Za-z0-9_\-]+)")
-NESTED_BLOCK_NAMES = frozenset({"scan", "constraints"})
+NESTED_BLOCK_NAMES = frozenset(
+    {
+        "scan",
+        "constraints",
+        "modify_internal",
+        "constrainfragments",
+        "connectfragments",
+        "fixfrags",
+        "relaxhfrags",
+        "relaxfrags",
+        "rigidfrags",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -119,9 +131,9 @@ class OrcaBlock:
     """One ``%name`` block found by :func:`iter_blocks`.
 
     This is the shared block-termination rule of the package: a block closes at
-    the first unquoted ``end`` token outside a nested ``scan``/``constraints``
+    the first unquoted ``end`` token outside a nested geometry
     sub-block -- on the header line itself (``%pal nprocs 8 end``) or on a
-    later line. A ``scan``/``constraints`` token opens a sub-block wherever it
+    later line. A token in NESTED_BLOCK_NAMES opens a sub-block wherever it
     stands (``%geom Constraints``, ``Constraints {B 0 1 C} end``), and each
     ``end`` closes the innermost open sub-block first. An unterminated block is
     cut by the next ``%`` directive, by the geometry section (``*``), or by end
@@ -251,9 +263,8 @@ def scan_coordinate_rows(lines: Sequence[str]) -> list[str] | None:
     A ``Scan`` sub-block counts even when no coordinate in it can be read.
     Walks each ``%geom`` header up to the next ``%`` directive, route line, or
     geometry section, past the block's own closing ``end``: the shared block
-    rule nests only ``scan``/``constraints``, so another end-terminated
-    sub-block (``modify_internal ... end``) closes ``%geom`` there before a
-    later ``Scan``. ``Scan`` may share its row with a coordinate or its ``end``.
+    rule may not know every ORCA sub-block. ``Scan`` may share its row with a
+    coordinate or its ``end``.
     """
     rows: list[str] = []
     found = in_geom = in_scan = False

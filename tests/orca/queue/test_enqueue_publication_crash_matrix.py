@@ -39,6 +39,7 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.store import list_queue
 from orca_auto.core.queue.transitions import request_cancel
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.orca.config import load_config
 from orca_auto.orca.queue import enqueue_publication
 from orca_auto.orca.queue import notifications as queue_notifications
 from tests.conftest import claim_next_entry
@@ -125,7 +126,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     )
 
     def submit() -> Outcome:
-        result = orca_submission.submit_reaction_dir_to_queue(args)
+        result = orca_submission.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
         queued = result.queued_result
         detail = str(result.stderr or "")
         if queued is not None and queued.worker_info.detail:

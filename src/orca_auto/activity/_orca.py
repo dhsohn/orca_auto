@@ -43,7 +43,7 @@ def _row_snapshot(entry: QueueEntry, snapshot_by_dir: dict[str, RunSnapshot]) ->
     run_id = normalize_text(queue_entries.queue_entry_run_id(entry))
     if run_id:
         return snapshot if normalize_text(snapshot.run_id) == run_id else None
-    if normalize_text(queue_entries.queue_entry_status(entry)) not in ACTIVE_STATUSES:
+    if entry.status.value not in ACTIVE_STATUSES:
         return None
     # The reusable root can still carry the preceding run's terminal state
     # while this queue generation waits for its child to publish new state.
@@ -59,8 +59,8 @@ def queue_record(
     allowed_root: Path,
 ) -> ActivityRecord:
     entry_metadata = queue_entries.queue_entry_metadata(entry)
-    queue_id = normalize_text(queue_entries.queue_entry_id(entry))
-    task_id = normalize_text(queue_entries.queue_entry_task_id(entry))
+    queue_id = entry.queue_id
+    task_id = entry.task_id
     run_id = normalize_text(queue_entries.queue_entry_run_id(entry))
     reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
     snapshot_name = snapshot.name if snapshot is not None else ""
@@ -130,7 +130,7 @@ def queue_record(
             "selected_inp": normalize_text(entry_metadata.get("selected_inp")),
             "reaction_dir": reaction_dir,
             "allowed_root": str(allowed_root),
-            "priority": queue_entries.queue_entry_priority(entry),
+            "priority": entry.priority,
             # A claim removes the deferral; a row that left pending by another
             # path must not advertise one either.
             "admission_deferral_reason": (

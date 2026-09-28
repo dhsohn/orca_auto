@@ -41,13 +41,7 @@ from .queue.adapter import (
     mark_failed,
     requeue_running_entry,
 )
-from .queue.entries import (
-    queue_entry_app_name,
-    queue_entry_generation_token,
-    queue_entry_id,
-    queue_entry_reaction_dir,
-    queue_entry_task_id,
-)
+from .queue.entries import queue_entry_generation_token, queue_entry_reaction_dir
 from .recovery_rebind import maybe_rebind_recovery_generation
 from .run_context import RunExecutionContext
 
@@ -142,9 +136,9 @@ def _build_execution_context(
         orca_executable=orca_executable,
         admission_root=admission_dir(cfg.runtime.allowed_root),
         admission_token=admission_token,
-        admission_app_name=queue_entry_app_name(entry) or None,
-        admission_task_id=queue_entry_task_id(entry) or None,
-        queue_id=queue_entry_id(entry) or None,
+        admission_app_name=entry.app_name or None,
+        admission_task_id=entry.task_id or None,
+        queue_id=entry.queue_id or None,
         queue_generation=queue_entry_generation_token(entry) or None,
     )
 
@@ -161,7 +155,7 @@ def _defer_admission(
     still pristine and the next claim reuses it without a recovery rebind. This
     re-asks for a resource; it never reruns a calculation.
     """
-    queue_id = queue_entry_id(entry)
+    queue_id = entry.queue_id
     requeued = requeue_running_entry(
         queue_root,
         queue_id,
@@ -203,7 +197,7 @@ def _record_worker_rejection(
     cancellation still wins.
     """
 
-    queue_id = str(entry.queue_id)
+    queue_id = entry.queue_id
     current = get_entry_by_id(queue_root, queue_id)
     recorded = current is not None and mark_failed(
         queue_root,
@@ -311,7 +305,7 @@ def run_worker_child_job(
             resolved_queue_root,
             queue_id,
             expected_entry=entry,
-            expected_task_id=queue_entry_task_id(entry) or None,
+            expected_task_id=entry.task_id or None,
         )
         return 0
 

@@ -5,11 +5,11 @@ import pytest
 from orca_auto import cli_systemd_units, systemd_plan
 
 
-def test_service_units_for_user_reuses_canonical_name_owner() -> None:
+def test_service_units_for_user_names_the_installed_units() -> None:
     assert cli_systemd_units.service_units_for_user("alice") == (
-        ("runtime", systemd_plan.runtime_unit_for_user("alice")),
-        ("engines", systemd_plan.engine_workers_unit_for_user("alice")),
-        ("worker", systemd_plan.worker_unit_for_user("alice")),
+        ("runtime", "orca_auto-runtime@alice.target"),
+        ("engines", "orca_auto-engine-workers@alice.target"),
+        ("worker", "orca_auto-queue-worker@alice.service"),
     )
 
 

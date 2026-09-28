@@ -21,12 +21,7 @@ from orca_auto.core.utils.process_tracking import run_lock_is_held
 from ..job_locations import payload_matches_queue_generation
 from ..state_reading import load_state
 from ..statuses import RunStatus
-from .entries import (
-    is_orca_queue_entry,
-    queue_entry_id,
-    queue_entry_reaction_dir,
-    queue_entry_status,
-)
+from .entries import is_orca_queue_entry, queue_entry_reaction_dir
 from .terminal_marker import (
     terminal_replay_marker_from_entry,
     terminal_replay_metadata_update_fn,
@@ -87,7 +82,7 @@ class _PriorTerminalGenerationEvidence:
 
 def _queue_generation_payload(entry: QueueEntry) -> dict[str, Any]:
     return {
-        "task_id": str(entry.task_id or "").strip(),
+        "task_id": entry.task_id,
         "metadata": dict(entry.metadata) if isinstance(entry.metadata, dict) else {},
     }
 
@@ -104,7 +99,7 @@ def _payload_run_id(payload: dict[str, Any]) -> str:
 
 def _entry_generation_key(entry: QueueEntry) -> tuple[str, str] | None:
     reaction_dir = str(entry.metadata.get("reaction_dir") or "").strip()
-    task_id = str(entry.task_id or "").strip()
+    task_id = entry.task_id
     if not reaction_dir or not task_id:
         return None
     return (str(Path(reaction_dir).expanduser().resolve()), task_id)
@@ -168,9 +163,9 @@ def reconcile_orphaned_running_entries(
         for index, entry in enumerate(entries):
             if not is_orca_queue_entry(entry):
                 continue
-            if queue_entry_status(entry) != QueueStatus.RUNNING.value:
+            if entry.status != QueueStatus.RUNNING:
                 continue
-            queue_id = str(queue_entry_id(entry) or "").strip()
+            queue_id = entry.queue_id
             reaction_dir = str(queue_entry_reaction_dir(entry) or "").strip()
             normalized_dir = str(Path(reaction_dir).expanduser().resolve()) if reaction_dir else ""
             if not normalized_dir or not Path(normalized_dir).is_relative_to(
@@ -212,7 +207,7 @@ def _has_running_row_for_dir(allowed_root: Path, normalized_dir: str) -> bool:
     for entry in _queue_store.list_queue(allowed_root):
         if not is_orca_queue_entry(entry):
             continue
-        if queue_entry_status(entry) != QueueStatus.RUNNING.value:
+        if entry.status != QueueStatus.RUNNING:
             continue
         reaction_dir = str(queue_entry_reaction_dir(entry) or "").strip()
         if reaction_dir and str(Path(reaction_dir).expanduser().resolve()) == normalized_dir:
@@ -291,7 +286,7 @@ def _reconcile_entry(
     if run_lock_is_held(reaction_dir, logger=logger):
         return None
 
-    queue_id = queue_entry_id(entry) or "?"
+    queue_id = entry.queue_id or "?"
     loaded_state = load_state(reaction_dir)
     state: dict[str, Any] | None = dict(loaded_state) if loaded_state is not None else None
     if state is not None and (

@@ -44,24 +44,20 @@ def test_read_orca_text_replaces_invalid_utf8(tmp_path: Path) -> None:
     assert read_orca_text(str(path)) == "valid\ufffdtext"
 
 
-def test_open_orca_text_streams_the_same_lines_read_orca_text_decodes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-8-sig", "utf-16-le", "invalid-utf8"])
+def test_whole_and_streamed_reads_preserve_decoded_content(tmp_path: Path, encoding: str) -> None:
     text = "energy = -1.0\r\nSCF CONVERGED\nvalid\ufffdtext\n"
-    files = {
-        "utf16_bom.out": text.encode("utf-16"),
-        "utf8_bom.out": ("\ufeff" + text).encode("utf-8"),
-        "utf16le_no_bom.out": text.encode("utf-16-le"),
-        "invalid_utf8.out": text.replace("\ufffd", "\xff").encode("utf-8", errors="ignore")
-        + b"\xff",
-    }
-    for name, raw in files.items():
-        path = tmp_path / name
-        path.write_bytes(raw)
-        whole = read_orca_text(str(path))
-        with open_orca_text(path) as handle:
-            streamed = list(handle)
-        # The stream applies universal newlines; the whole read keeps the CRLF.
-        assert "".join(streamed) == whole.replace("\r\n", "\n"), name
-        assert streamed[1] == "SCF CONVERGED\n", name
+    raw = (
+        b"energy = -1.0\r\nSCF CONVERGED\nvalid\xfftext\n"
+        if encoding == "invalid-utf8"
+        else text.encode(encoding)
+    )
+    path = tmp_path / "encoded.out"
+    path.write_bytes(raw)
+
+    assert read_orca_text(str(path)) == text
+    with open_orca_text(path) as handle:
+        assert list(handle) == ["energy = -1.0\n", "SCF CONVERGED\n", "valid\ufffdtext\n"]
 
 
 def test_open_orca_text_decides_the_codec_from_the_prefix_only(tmp_path: Path) -> None:
@@ -79,7 +75,8 @@ def test_open_orca_text_decides_the_codec_from_the_prefix_only(tmp_path: Path) -
         streamed = list(handle)
     assert streamed[-1] == "ORCA TERMINATED\n"
     assert len(streamed) == len(lines)
-    assert "".join(streamed) == read_orca_text(str(path))
+    assert "".join(streamed) == text
+    assert read_orca_text(str(path)) == text
 
 
 def test_open_orca_text_propagates_open_errors(tmp_path: Path) -> None:

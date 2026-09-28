@@ -14,8 +14,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import scan_coordinate_rows
-from .input_syntax import input_file_lines, orca_route_lines
+from .input_blocks import iter_blocks, scan_coordinate_rows
+from .input_syntax import input_file_lines, orca_route_lines, value_token_index
 
 # Only real ORCA TS keywords. No bare `TS` token: ORCA has no `! TS`, so it
 # can only ever match stray text (the SCAN-functional collision class), never
@@ -56,7 +56,40 @@ def is_optimization_route(routes: str) -> bool:
 
 def is_full_optimization_route(routes: str) -> bool:
     """Whether ``routes`` minimize on the full surface, so the result may be claimed a minimum."""
-    return bool(OPT_ROUTE_RE.search(routes)) and not PARTIAL_OPT_ROUTE_RE.search(routes)
+    return (
+        bool(OPT_ROUTE_RE.search(routes))
+        and not PARTIAL_OPT_ROUTE_RE.search(routes)
+        and not re.search(r"\bRIGIDBODYOPT\b", routes, re.IGNORECASE)
+    )
+
+
+def _has_geometry_constraints(lines: list[str]) -> bool:
+    """Whether %geom restricts the optimized coordinates.
+
+    Boolean settings use their last explicit value; comments, quoted values
+    and empty Constraints blocks do not impose a restriction.
+    """
+    hydrogen_settings: dict[str, bool] = {}
+    constrained = False
+    for block in iter_blocks(lines, "geom"):
+        tokens = [token for row in block.rows for token in row.tokens]
+        for index, token in enumerate(tokens):
+            if token.quoted:
+                continue
+            keyword = token.value.lower()
+            value_index = value_token_index(tokens, index)
+            if value_index >= len(tokens):
+                continue
+            value = tokens[value_index]
+            if (
+                keyword
+                in {"constraints", "constrainfragments", "fixfrags", "rigidfrags", "relaxhfrags"}
+                and value.value.lower() != "end"
+            ):
+                constrained = True
+            elif keyword in {"optimizehydrogens", "freezehydrogens"} and not value.quoted:
+                hydrogen_settings[keyword] = value.value.lower() == "true"
+    return constrained or any(hydrogen_settings.values())
 
 
 @dataclass(frozen=True)
@@ -94,7 +127,7 @@ def route_facts(inp_path: Path) -> RouteFacts:
         is_irc=bool(IRC_ROUTE_RE.search(routes)),
         is_neb_ts="NEB-TS" in ts_keywords,
         is_opt=is_opt,
-        is_full_opt=is_full_optimization_route(routes),
+        is_full_opt=is_full_optimization_route(routes) and not _has_geometry_constraints(lines),
         is_relaxed_scan=is_opt and scan_coordinate_rows(lines) is not None,
         # The NEB alternative also matches the NEB of NEB-TS, a TS route.
         is_non_stationary=not is_ts and bool(_NON_STATIONARY_ROUTE_RE.search(routes)),

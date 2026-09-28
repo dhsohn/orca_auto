@@ -27,7 +27,6 @@ from .entries import (
     TERMINAL_STATUSES,
     queue_entry_metadata,
     queue_entry_reaction_dir,
-    queue_entry_task_id,
 )
 
 TERMINAL_REPLAY_MARKER_VERSION = 1
@@ -262,7 +261,7 @@ def terminal_replay_marker_for_entry(
     ).strip()
     return terminal_replay_marker(
         reaction_dir=queue_entry_reaction_dir(entry),
-        task_id=queue_entry_task_id(entry),
+        task_id=entry.task_id,
         selected_inp=selected_inp,
         status=status,
         error=error,
@@ -324,7 +323,7 @@ def terminal_replay_marker_from_entry(entry: Any) -> dict[str, Any] | None:
     if marker_status not in TERMINAL_STATUSES:
         return None
     marker_task_id = str(marker.get("task_id") or "").strip()
-    entry_task_id = str(queue_entry_task_id(entry) or "").strip()
+    entry_task_id = entry.task_id
     if not marker_task_id or not entry_task_id or marker_task_id != entry_task_id:
         return None
     return marker

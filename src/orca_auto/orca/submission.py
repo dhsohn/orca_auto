@@ -1,8 +1,9 @@
 """Submit an ORCA input directory to the durable queue.
 
 ``submit_reaction_dir_to_queue`` is the ``run-dir`` entry point: it resolves
-the target (config, job directory, newest input), refuses a directory that is
-already queued or running, and reports every failure as one reason code and
+the target (job directory, newest input) using the command's loaded config,
+refuses a directory that is already queued or running, and reports every
+submission failure as one reason code and
 message. ``create_queued_submission`` runs the staged pipeline: read the
 selected input once and derive the queue metadata and resources from those
 bytes, build the execution snapshot from the same bytes under a fresh intent,
@@ -18,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.confined_io import read_stable_regular_file, require_confined_regular_file
 from orca_auto.core.paths import is_subpath
 from orca_auto.core.queue.persistence import QueueStoreCorruptError
@@ -41,7 +41,7 @@ from orca_auto.orca.run_dir_guard import (
     assert_run_dir_publication_allowed,
 )
 
-from .config import AppConfig, load_config
+from .config import AppConfig
 from .execution_binding import (
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
@@ -149,13 +149,11 @@ def select_latest_inp(reaction_dir: Path) -> Path:
     return candidates[0]
 
 
-def resolve_submission_target(args: Any) -> SubmissionTarget | None:
-    """Load the config, validate the job directory and select its newest input.
+def resolve_submission_target(args: Any, *, cfg: AppConfig) -> SubmissionTarget | None:
+    """Validate the job directory and select its input using the command's config.
 
-    A refused directory or input is logged and returns None; a config that
-    does not load raises.
+    A refused directory or input is logged and returns None.
     """
-    cfg = load_config(args.config)
     raw = getattr(args, "path", None)
     if not isinstance(raw, str) or not raw.strip():
         logger.error("job directory path is required")
@@ -189,8 +187,8 @@ def find_submission_conflict(
     if active_entry is not None:
         return (
             "Job directory already queued: "
-            f"{reaction_dir} (queue_id={queue_entries.queue_entry_id(active_entry)}, "
-            f"status={queue_entries.queue_entry_status(active_entry)})"
+            f"{reaction_dir} (queue_id={active_entry.queue_id}, "
+            f"status={active_entry.status.value})"
         )
     return run_lock_conflict_message(reaction_dir)
 
@@ -385,19 +383,8 @@ def create_queued_submission(
     )
 
 
-def submit_reaction_dir_to_queue(
-    args: Any,
-) -> DirectQueueSubmission:
-    try:
-        target = resolve_submission_target(args)
-    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
-        # A missing, unreadable or invalid config is reported like every other
-        # submission failure: one message, no traceback.
-        return DirectQueueSubmission(
-            status="failed",
-            reason="invalid_config",
-            stderr=str(exc),
-        )
+def submit_reaction_dir_to_queue(args: Any, *, cfg: AppConfig) -> DirectQueueSubmission:
+    target = resolve_submission_target(args, cfg=cfg)
     if target is None:
         return DirectQueueSubmission(
             status="failed",

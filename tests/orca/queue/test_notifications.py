@@ -21,7 +21,7 @@ from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker.loop import QueueWorkerLoop
 from orca_auto.orca import notifications as orca_notifications
 from orca_auto.orca import submission
-from orca_auto.orca.config import AppConfig
+from orca_auto.orca.config import AppConfig, load_config
 from orca_auto.orca.queue import adapter, job_records, notifications
 from orca_auto.orca.queue.entries import QUEUED_NOTIFICATION_PENDING_KEY
 from orca_auto.orca.queue.worker import OrcaQueueWorker
@@ -64,10 +64,10 @@ def test_slow_queued_delivery_does_not_delay_submission_or_reservation(tmp_path,
     from orca_auto.orca.notifications import notify_queue_enqueued_event
 
     monkeypatch.setattr(notifications, "notify_queue_enqueued_event", notify_queue_enqueued_event)
-    result = submission.submit_reaction_dir_to_queue(args)
+    result = submission.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
     assert result.status == "submitted"
     assert not entered.is_set()  # CLI only hands off a durable intent.
-    cfg = submission.load_config(args.config)
+    cfg = load_config(args.config)
     worker = OrcaQueueWorker(cfg, config_path=args.config)
     reserved = None
     with ThreadPoolExecutor(max_workers=1) as pool:

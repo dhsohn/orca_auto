@@ -37,19 +37,10 @@ def test_as_nonempty_str_preserves_existing_string_behavior(
     assert as_nonempty_str(value, default) == expected
 
 
-@pytest.mark.parametrize(
-    ("parser", "default"),
-    [
-        (discord_config_from_mapping, DiscordConfig()),
-    ],
-)
-def test_messenger_delivery_settings_default_only_when_omitted_and_bound_finite_values(
-    parser: Any,
-    default: DiscordConfig,
-) -> None:
-    assert parser({}) == default
+def test_discord_delivery_settings_default_only_when_omitted_and_bound_finite_values() -> None:
+    assert discord_config_from_mapping({}) == DiscordConfig()
 
-    bounded = parser(
+    bounded = discord_config_from_mapping(
         {
             "timeout_seconds": 999,
             "max_attempts": 999,
@@ -61,10 +52,6 @@ def test_messenger_delivery_settings_default_only_when_omitted_and_bound_finite_
     assert bounded.retry_backoff_seconds == 120.0
 
 
-@pytest.mark.parametrize(
-    "parser",
-    [discord_config_from_mapping],
-)
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -92,14 +79,13 @@ def test_messenger_delivery_settings_default_only_when_omitted_and_bound_finite_
         ("max_attempts", float("inf"), "must be an integer"),
     ],
 )
-def test_messenger_delivery_settings_reject_invalid_explicit_values(
-    parser: Any,
+def test_discord_delivery_settings_reject_invalid_explicit_values(
     field: str,
     value: object,
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=rf"messenger\..*\.{field} {message}"):
-        parser({field: value})
+        discord_config_from_mapping({field: value})
 
 
 def test_discord_config_parses_bot_notification_settings() -> None:
@@ -116,32 +102,28 @@ def test_discord_config_parses_bot_notification_settings() -> None:
 
 
 @pytest.mark.parametrize(
-    ("parser", "raw", "message"),
+    ("raw", "message"),
     [
         (
-            discord_config_from_mapping,
             {"channe_ids": []},
             "Unknown messenger.discord config fields are not supported",
         ),
         (
-            discord_config_from_mapping,
             {"channel_ids": []},
             "Unknown messenger.discord config fields are not supported",
         ),
         (
-            discord_config_from_mapping,
             {"allowed_user_ids": []},
             "Unknown messenger.discord config fields are not supported",
         ),
     ],
 )
-def test_messenger_adapter_config_rejects_unknown_fields(
-    parser: Any,
+def test_discord_config_rejects_unknown_fields(
     raw: dict[str, object],
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        parser(raw)
+        discord_config_from_mapping(raw)
 
 
 def test_messenger_unknown_field_error_does_not_echo_raw_key() -> None:

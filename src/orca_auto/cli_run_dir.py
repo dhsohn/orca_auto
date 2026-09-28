@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.cli_handlers import CommandConfigError, _configure_orca_logging, command_config_path
-from orca_auto.core.config.files import shared_runs_root_from_config
+from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.utils import normalize_text
+from orca_auto.orca.config import load_config
 from orca_auto.orca.run_dir_guard import (
     _pinned_run_dir_target,
     _RunDirPublicationContract,
@@ -34,11 +35,12 @@ def cmd_run_dir(args: Any) -> int:
         # to the fd-backed inode for the whole synchronous publication.
         namespace_target = Path(raw_target).expanduser().absolute()
         config_path = command_config_path(args)
-        runs_root = shared_runs_root_from_config(config_path) or ""
+        cfg = load_config(config_path)
+        runs_root = cfg.runtime.allowed_root
     except CommandConfigError as exc:
         emit_error(exc, hint=exc.hint, json_output=json_output)
         return 1
-    except ValueError as exc:
+    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
         emit_error(exc, json_output=json_output)
         return 1
 
@@ -78,6 +80,7 @@ def cmd_run_dir(args: Any) -> int:
                 return int(
                     cmd_run_inp(
                         args,
+                        cfg=cfg,
                         report_error=lambda message: emit_error(message, json_output=json_output),
                         emit_json=emit_json,
                     )

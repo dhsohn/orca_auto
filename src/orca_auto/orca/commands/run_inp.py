@@ -19,12 +19,8 @@ from typing import Any
 from orca_auto.core.statuses import STATUS_QUEUED
 
 from .. import submission
-from ..queue.entries import (
-    queue_entry_force,
-    queue_entry_id,
-    queue_entry_priority,
-    queue_entry_task_id,
-)
+from ..config import AppConfig
+from ..queue.entries import queue_entry_force
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +49,12 @@ def _queued_submission_payload(
     payload: dict[str, Any] = {
         "status": STATUS_QUEUED,
         "job_dir": str(reaction_dir),
-        "queue_id": queue_entry_id(entry),
+        "queue_id": entry.queue_id,
     }
-    task_id = queue_entry_task_id(entry)
+    task_id = entry.task_id
     if task_id:
         payload["job_id"] = task_id
-    payload["priority"] = queue_entry_priority(entry)
+    payload["priority"] = entry.priority
     if queue_entry_force(entry):
         payload["force"] = True
     if worker_status:
@@ -102,6 +98,7 @@ def _emit_queued_submission(
 def cmd_run_inp(
     args: Any,
     *,
+    cfg: AppConfig,
     report_error: Callable[[str], None] = _print_error_line,
     emit_json: Callable[[Mapping[str, Any]], None] = _print_json_document,
 ) -> int:
@@ -119,7 +116,7 @@ def cmd_run_inp(
         report_error(message)
         return 1
 
-    result = submission.submit_reaction_dir_to_queue(args)
+    result = submission.submit_reaction_dir_to_queue(args, cfg=cfg)
     if result.status != "submitted":
         return fail(result.stderr.rstrip() if result.stderr else "ORCA queue submission failed.")
 

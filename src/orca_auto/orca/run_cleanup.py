@@ -28,7 +28,6 @@ from .queue.entries import (
     TERMINAL_STATUSES,
     is_orca_queue_entry,
     queue_entry_reaction_dir,
-    queue_entry_status,
 )
 from .queue.terminal_marker import (
     TerminalReplayMarkerKind,
@@ -65,7 +64,7 @@ def _row_protection(entry: QueueEntry) -> _RowProtection | None:
     ``active`` and ``pending_replay`` keep the state; a plain ``terminal`` row
     lets a stale active state be cleared.
     """
-    status = queue_entry_status(entry)
+    status = entry.status.value
     if status in ACTIVE_STATUSES:
         return "active"
     if status not in TERMINAL_STATUSES:

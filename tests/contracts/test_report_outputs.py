@@ -168,10 +168,13 @@ def test_report_outputs(tmp_path: Path, name: str) -> None:
 
     n = Normalizer({tmp_path: "<tmp>"})
     assert_golden(f"reports/{name}/reports.json", n(reports))
-    for filename in (RUN_REPORT_HTML_FILE, SI_BLOCK_MD_FILE):
+    for key, filename in (("report_html", RUN_REPORT_HTML_FILE), ("si_block", SI_BLOCK_MD_FILE)):
         path = generation / filename
-        if path.exists():
+        if key in reports:
+            assert path.is_file(), f"publisher returned {key}, but {filename} is missing"
             assert_golden(f"reports/{name}/{filename}", n.text(path.read_text(encoding="utf-8")))
+        else:
+            assert not path.exists(), f"unreported artifact: {filename}"
     for filename in (RUN_REPORT_JSON_FILE, EXECUTION_PROVENANCE_FILE):
         stem = filename.removesuffix(".json")
         assert_golden(

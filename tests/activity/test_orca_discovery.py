@@ -40,7 +40,7 @@ def _write_run(root: Path, name: str, *, indexed: bool) -> None:
         )
 
 
-def test_listing_reads_neither_the_location_index_nor_the_run_tree(
+def test_listing_reads_only_queue_known_runs_without_index_or_tree_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "runs"
@@ -74,9 +74,7 @@ def test_listing_reads_neither_the_location_index_nor_the_run_tree(
     assert [row.job_id for row in list_job_locations(root)] == ["tracked"]
 
 
-def test_queue_known_run_does_not_require_an_index_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_queue_known_run_does_not_require_an_index_entry(tmp_path: Path) -> None:
     root = tmp_path / "runs"
     config = tmp_path / "config.yaml"
     config.write_text(f"runs_root: {root}\n")

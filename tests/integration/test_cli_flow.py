@@ -86,12 +86,22 @@ def test_force_submit_preserves_force_flag_in_queue_entry(
 def test_existing_completed_output_is_queued_for_worker_reconciliation(
     submit_env: _SubmitEnv,
 ) -> None:
-    reaction = submit_env.reaction("rxn_completed_skip")
-    (reaction / "rxn.out").write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+    reaction = submit_env.reaction("rxn_completed")
+    source_input = (reaction / "rxn.inp").read_bytes()
+    existing_output = b"****ORCA TERMINATED NORMALLY****\n"
+    (reaction / "rxn.out").write_bytes(existing_output)
 
     rc = main(["run-dir", str(reaction), "--config", str(submit_env.config)])
 
     assert rc == 0
     assert not submit_env.counter.exists()
-    assert len(submit_env.entries_for(reaction)) == 1
+    [entry] = submit_env.entries_for(reaction)
+    assert entry.status == QueueStatus.PENDING
+    assert (reaction / "rxn.inp").read_bytes() == source_input
+    assert (reaction / "rxn.out").read_bytes() == existing_output
+    generation = Path(entry.metadata["execution_snapshot"]["execution_dir"])
+    assert generation.parent == reaction.resolve()
+    assert Path(entry.metadata["selected_inp"]) == generation / "rxn.inp"
+    assert (generation / "rxn.inp").is_file()
+    assert not (generation / "rxn.out").exists()
     assert not state_path(reaction).exists()

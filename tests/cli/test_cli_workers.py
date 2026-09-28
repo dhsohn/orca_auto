@@ -104,6 +104,7 @@ def test_cmd_queue_worker_requires_a_discoverable_config(
 def test_cmd_run_dir_uses_discovered_shared_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_orca: Path,
 ) -> None:
     target = tmp_path / "orca_job"
     target.mkdir()
@@ -111,7 +112,8 @@ def test_cmd_run_dir_uses_discovered_shared_config(
     captured: list[tuple[str | None, str]] = []
 
     monkeypatch.setattr(cli_run_dir, "_configure_orca_logging", lambda args: None)
-    discovered = tmp_path / "orca_auto.yaml"
+    discovered = _write_worker_config(tmp_path, fake_orca)
+    discovered.write_text(discovered.read_text().replace(str(tmp_path / "runs"), str(tmp_path)))
     monkeypatch.setattr(
         cli_handlers, "discover_shared_config_path", lambda explicit: str(discovered)
     )

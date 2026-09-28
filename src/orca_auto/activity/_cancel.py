@@ -81,10 +81,10 @@ def _payload(status: str, reason: str = "", record: ActivityRecord | None = None
 
 def _committed_cancel(runs_root: Path, matched: QueueEntry) -> QueueEntry | None:
     """This generation's row when its cancel is durable: cancelled, or flagged while active."""
-    current = queue_adapter.get_entry_by_id(runs_root, queue_entries.queue_entry_id(matched))
+    current = queue_adapter.get_entry_by_id(runs_root, matched.queue_id)
     if current is None or not queue_entries.same_generation(current, matched):
         return None
-    status = queue_entries.queue_entry_status(current)
+    status = current.status.value
     if status == QueueStatus.CANCELLED.value or (
         status in ACTIVE_STATUSES and current.cancel_requested
     ):
@@ -111,17 +111,12 @@ def cancel_activity(*, target: str, runs_root: Path) -> tuple[dict[str, Any], st
         )
     [(matched, record)] = rows
     try:
-        updated = queue_adapter.cancel(
-            runs_root, queue_entries.queue_entry_id(matched), expected_entry=matched
-        )
+        updated = queue_adapter.cancel(runs_root, matched.queue_id, expected_entry=matched)
         if updated is None:
             # Refused: finished, removed or replaced. Only this generation's
             # cancelled row repeats a success.
             updated = _committed_cancel(runs_root, matched)
-            if (
-                updated is None
-                or queue_entries.queue_entry_status(updated) != QueueStatus.CANCELLED.value
-            ):
+            if updated is None or updated.status.value != QueueStatus.CANCELLED.value:
                 return (
                     _payload(STATUS_FAILED, "already_terminal", record),
                     f"queue target already terminal: {record.cancel_target}",

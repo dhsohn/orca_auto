@@ -244,10 +244,13 @@ def test_main_dispatches_list_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cmd_run_dir_dispatches_to_orca_command_module(
-    monkeypatch: pytest.MonkeyPatch, restored_root_logger: logging.Logger, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    restored_root_logger: logging.Logger,
+    tmp_path: Path,
+    config_path: Callable[..., Path],
 ) -> None:
     seen: list[Namespace] = []
-    resolved_config = str(tmp_path / "resolved.yaml")
+    resolved_config = str(config_path(runs_root=tmp_path))
     target = tmp_path / "rxn"
     target.mkdir()
     (target / "rxn.inp").write_text("! Opt\n", encoding="utf-8")
@@ -973,7 +976,7 @@ def test_cli_run_dir_json_success_carries_ok(
     runs_root, job, config = _run_dir_fixture(tmp_path)
     from orca_auto.orca.commands import run_inp as run_inp_command
 
-    def _fake_submit(args: Any) -> Any:
+    def _fake_submit(args: Any, *, cfg: Any) -> Any:
         entry = make_queue_entry(queue_id="q-ok", task_id="orca-ok", reaction_dir=job)
         worker = SimpleNamespace(status="inactive", pid=None, log_file=None, detail=None)
         return SimpleNamespace(
@@ -991,3 +994,43 @@ def test_cli_run_dir_json_success_carries_ok(
     assert payload["ok"] is True
     assert payload["queue_id"] == "q-ok"
     assert payload["status"] == "queued"
+
+
+def test_run_dir_reads_config_once_before_guard_and_submission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root, job, config = _run_dir_fixture(tmp_path)
+    original = Path.open
+    reads: list[Path] = []
+
+    def count_config_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == config:
+            reads.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", count_config_open)
+    assert main(["run-dir", str(job), "--config", str(config)]) == 0
+    assert len(reads) == 1
+    entries = queue_adapter.list_queue(runs_root)
+    assert len(entries) == 1
+    assert entries[0].metadata["reaction_dir"] == str(job)
+
+
+def test_run_dir_keeps_loaded_config_when_file_changes_before_submission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root, job, config = _run_dir_fixture(tmp_path)
+    require_input = cli_run_dir._require_orca_input
+    changed: list[Path] = []
+
+    def change_config(target: Path) -> None:
+        require_input(target)
+        config.write_text("invalid: [", encoding="utf-8")
+        changed.append(config)
+
+    monkeypatch.setattr(cli_run_dir, "_require_orca_input", change_config)
+    assert main(["run-dir", str(job), "--config", str(config)]) == 0
+    assert changed == [config]
+    entries = queue_adapter.list_queue(runs_root)
+    assert len(entries) == 1
+    assert entries[0].metadata["reaction_dir"] == str(job)

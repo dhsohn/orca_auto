@@ -93,11 +93,8 @@ def machine_json_bytes(payload: Mapping[str, Any]) -> bytes:
 class ReceiptDigest:
     """One artifact receipt's ``bytes`` and ``byte_sha256``, accumulated over chunks.
 
-    ``artifact_receipt`` fills one in while writing a receipt. A reader that
-    checks a receipt hashes with this class too: a second hashing routine could
-    drift from this one — a different chunk size is harmless, but a different
-    algorithm or a size counted differently would silently accept or reject the
-    wrong bytes.
+    artifact_receipt fills one in while writing a receipt. Contract tests
+    calculate receipts independently so a writer defect cannot validate itself.
     """
 
     def __init__(self) -> None:

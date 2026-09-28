@@ -190,8 +190,8 @@ def _row_matches_enqueue_attempt(current: QueueEntry, identity: _EnqueueAttemptI
     return bool(
         current.status == QueueStatus.PENDING
         and not current.cancel_requested
-        and normalize_text(current.app_name) == ORCA_AUTO_ORCA_APP_NAME
-        and normalize_text(current.task_id) == identity.task_id
+        and current.app_name == ORCA_AUTO_ORCA_APP_NAME
+        and current.task_id == identity.task_id
         and normalize_text(current.task_kind) == ORCA_TASK_KIND
         and normalize_text(current.engine) == ORCA_ENGINE
         and current_priority == identity.priority
