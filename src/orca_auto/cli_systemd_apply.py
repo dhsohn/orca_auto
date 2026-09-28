@@ -17,11 +17,34 @@ from orca_auto.systemd_plan import (
     DEFAULT_SYSTEMD_UNIT_DIR,
     SystemdInstallPlan,
     build_systemd_install_plan,
-    print_plan,
-    print_warnings,
+    format_command,
     running_as_root,
 )
 from orca_auto.terminal import emit_error
+
+
+def print_plan(plan: SystemdInstallPlan) -> None:
+    print("systemd install plan:")
+    print(f"  user: {plan.target_user}")
+    print(f"  repo: {plan.repo}")
+    print(f"  config: {plan.config}")
+    print(f"  unit_dir: {plan.unit_dir}")
+    if plan.enabled_unit:
+        print(f"  enable: {plan.enabled_unit}")
+    else:
+        print("  enable: skipped")
+    print("  write:")
+    for unit in plan.units:
+        print(f"    {unit.destination}")
+    if plan.commands:
+        print("  run:")
+        for command in plan.commands:
+            print(f"    {format_command(command, use_sudo=plan.use_sudo)}")
+
+
+def print_warnings(plan: SystemdInstallPlan) -> None:
+    for warning in plan.warnings:
+        print(f"warning: {warning}")
 
 
 def _run_install_step(

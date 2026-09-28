@@ -2,12 +2,15 @@
 
 Everything here reads one fact about a running unit or its main process
 (``systemctl show``, ``/proc/<pid>``) and reports it without judging it. The
-freshness modules and the restart guard build their verdicts on top.
+restart guard and the freshness modules read unit evidence through these
+readers and build their verdicts on top; ``WorkerVerdict`` is the record those
+freshness judges return, kept here because both deployment models produce it.
 """
 
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,11 +21,75 @@ from typing import Any
 from orca_auto import cli_systemd_units
 from orca_auto._process_evidence import PROCESS_IMPORT_SOURCE_ENV
 from orca_auto.core.runtime_bundle import PROCESS_RUNTIME_BUILD_ENV
+from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils import process as process_utils
 
 
 def read_process_file(path: str) -> bytes:
     return Path(path).read_bytes()
+
+
+def strict_unit_property(
+    unit: str,
+    name: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+) -> str:
+    """One ``systemctl show`` property; ValueError unless systemd answered cleanly."""
+    try:
+        completed = cli_systemd_units.show_unit_property(unit, name, run=run)
+    except OSError:
+        raise ValueError(f"Cannot inspect {name} for {unit}.") from None
+    if completed.returncode != 0 or normalize_text(completed.stderr):
+        raise ValueError(f"Cannot inspect {name} for {unit}.")
+    return str(completed.stdout or "").strip()
+
+
+def refuse_environment_overrides(
+    unit: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+) -> None:
+    """ValueError when drop-in environment files or unset names can change the unit's environment."""
+    if strict_unit_property(unit, "EnvironmentFiles", run=run) or strict_unit_property(
+        unit, "UnsetEnvironment", run=run
+    ):
+        raise ValueError(f"Cannot verify overridden service configuration for {unit}.")
+
+
+def unit_environment_values(
+    unit: str,
+    key: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+) -> list[str]:
+    """Every value ``key`` takes in the unit's ``Environment=``."""
+    environment = strict_unit_property(unit, "Environment", run=run)
+    try:
+        items = shlex.split(environment)
+    except ValueError:
+        raise ValueError(f"Cannot parse Environment for {unit}.") from None
+    prefix = f"{key}="
+    return [item[len(prefix) :] for item in items if item.startswith(prefix)]
+
+
+def process_environ_values(
+    pid: int,
+    key: str,
+    *,
+    read_process_file: Callable[[str], bytes] = read_process_file,
+) -> list[str]:
+    """Every value ``key`` takes in ``/proc/<pid>/environ``."""
+    try:
+        raw_environ = read_process_file(f"/proc/{pid}/environ")
+    except OSError as exc:
+        raise ValueError(f"cannot read /proc/{pid}/environ: {exc}") from exc
+    prefix = f"{key}=".encode()
+    return [
+        os.fsdecode(entry[len(prefix) :])
+        for entry in raw_environ.split(b"\0")
+        if entry.startswith(prefix)
+    ]
 
 
 def unit_main_pid(
@@ -115,17 +182,15 @@ def worker_process_import_evidence(
     reused by another process during the read is rejected rather than trusted.
     """
     start_ticks_before = read_process_start_ticks(pid, read_process_file=read_process_file)
-    try:
-        raw_environ = read_process_file(f"/proc/{pid}/environ")
-    except OSError as exc:
-        raise ValueError(f"cannot read /proc/{pid}/environ: {exc}") from exc
-    prefix = f"{PROCESS_IMPORT_SOURCE_ENV}=".encode()
-    values = [
-        entry[len(prefix) :] for entry in raw_environ.split(b"\0") if entry.startswith(prefix)
-    ]
+    values = process_environ_values(
+        pid, PROCESS_IMPORT_SOURCE_ENV, read_process_file=read_process_file
+    )
+    builds = process_environ_values(
+        pid, PROCESS_RUNTIME_BUILD_ENV, read_process_file=read_process_file
+    )
     if len(values) != 1 or not values[0]:
         raise ValueError("worker import-source evidence is missing or ambiguous")
-    import_source = Path(os.fsdecode(values[0])).expanduser()
+    import_source = Path(values[0]).expanduser()
     if not import_source.is_absolute():
         raise ValueError(f"worker import source is not absolute: {import_source!s}")
     try:
@@ -137,18 +202,12 @@ def worker_process_import_evidence(
     start_ticks_after = read_process_start_ticks(pid, read_process_file=read_process_file)
     if start_ticks_after != start_ticks_before:
         raise ValueError("worker process identity changed during freshness inspection")
-    runtime_prefix = f"{PROCESS_RUNTIME_BUILD_ENV}=".encode()
-    builds = [
-        entry[len(runtime_prefix) :]
-        for entry in raw_environ.split(b"\0")
-        if entry.startswith(runtime_prefix)
-    ]
     if len(builds) > 1:
         raise ValueError("worker runtime build evidence is ambiguous")
     return WorkerImportEvidence(
         import_source=import_source,
         process_start_ticks=start_ticks_before,
-        runtime_build_id=os.fsdecode(builds[0]) if builds else "",
+        runtime_build_id=builds[0] if builds else "",
     )
 
 
@@ -174,20 +233,28 @@ def process_identity_race_detail(
 
 @dataclass(frozen=True)
 class WorkerVerdict:
-    """One active worker's staleness judgement: which payload list it joins."""
+    """One active worker's staleness judgement: which payload list it joins.
+
+    ``stale_explanation`` says why a stale worker fails ``service status``; it
+    is empty exactly when the worker is not stale.
+    """
 
     kind: str  # "worker" | "undetermined" | "uncompared"
     row: dict[str, Any]
-    stale: bool = False
+    stale_explanation: str = ""
 
 
 __all__ = [
     "WorkerImportEvidence",
     "WorkerVerdict",
     "parse_process_start_ticks",
+    "process_environ_values",
     "process_identity_race_detail",
     "read_process_file",
     "read_process_start_ticks",
+    "refuse_environment_overrides",
+    "strict_unit_property",
+    "unit_environment_values",
     "unit_main_pid",
     "unit_start_epoch",
     "worker_process_import_evidence",

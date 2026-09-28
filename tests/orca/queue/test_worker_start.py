@@ -67,7 +67,7 @@ def test_worker_roots_and_limit_match_the_rendered_unit(
     worker = OrcaQueueWorker(load_config(str(config)), str(config))
     _path, shared, _orca_sections = load_orca_shared_config(config)
 
-    assert systemd_plan._configured_read_write_paths(shared) == (worker.queue_root,)
+    assert systemd_plan._configured_read_write_path(shared) == worker.queue_root
     assert worker.admission_root == worker.queue_root / ".admission"
     assert worker.max_concurrent == (max_active or SchedulerConfig.max_active_simulations)
     budget = worker_shutdown_budget_seconds(worker.max_concurrent)

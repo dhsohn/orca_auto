@@ -195,7 +195,7 @@ def test_service_status_json(
             default_service_user=lambda: "alice",
             run=_systemctl_states(states),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: None,
+            collect_worker_staleness=lambda statuses, run=None: (None, ()),
         ),
     )
     captured = capsys.readouterr()

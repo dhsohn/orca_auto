@@ -900,7 +900,7 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
             default_service_user=lambda: "alice",
             run=_states_run(states),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: None,
+            collect_worker_staleness=lambda statuses, run=None: (None, ()),
         ),
     )
 
@@ -942,7 +942,7 @@ def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> Non
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: None,
+            collect_worker_staleness=lambda statuses, run=None: (None, ()),
         ),
     )
 
@@ -984,7 +984,7 @@ def test_cmd_service_status_hides_runtime_managed_enabled_noise(
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: None,
+            collect_worker_staleness=lambda statuses, run=None: (None, ()),
         ),
     )
 
@@ -1014,7 +1014,7 @@ def test_cmd_service_status_emits_json(capsys: Any) -> None:
             default_service_user=lambda: "alice",
             run=_states_run(states),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: None,
+            collect_worker_staleness=lambda statuses, run=None: (None, ()),
         ),
     )
 
@@ -1062,7 +1062,7 @@ def test_cmd_service_status_judges_only_units_and_worker_freshness(capsys: Any) 
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: None,
+            collect_worker_staleness=lambda statuses, run=None: (None, ()),
         ),
     )
 
@@ -1112,6 +1112,7 @@ def _checkout_staleness_payload(
 def test_cmd_service_status_gates_on_stale_worker_process(capsys: Any) -> None:
     statuses = _healthy_worker_only_statuses()
     verdict = _checkout_staleness_payload(stale=[_stale_checkout_worker()], undetermined=[])
+    explanation = "orca_auto-queue-worker@alice.service (pid 4242) runs pre-deploy code"
 
     result = cli_systemd_status.cmd_service_status(
         Namespace(target_user="alice", json=True),
@@ -1119,7 +1120,7 @@ def test_cmd_service_status_gates_on_stale_worker_process(capsys: Any) -> None:
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: verdict,
+            collect_worker_staleness=lambda statuses, run=None: (verdict, (explanation,)),
         ),
     )
 
@@ -1132,41 +1133,11 @@ def test_cmd_service_status_gates_on_stale_worker_process(capsys: Any) -> None:
     assert payload["ok"] is False
     assert payload["error"] == "a worker runs stale code or could not be judged"
     assert payload["worker_staleness"] == verdict
-    assert "orca_auto-queue-worker@alice.service (pid 4242)" in captured.err
-    assert "started 1970-01-11T10:00:00Z" in captured.err
-    assert "(aaaaaaaaaaaa) in /srv/orca_auto was updated 1970-01-12T13:46:40Z" in captured.err
-    assert "pre-deploy code" in captured.err
-    assert "orca_auto service restart" in captured.err
-
-
-def test_cmd_service_status_reports_a_stale_entry_without_update_time_as_undetermined(
-    capsys: Any,
-) -> None:
-    # The collector dates every stale checkout worker itself; a payload that
-    # lacks the field is not explained with a 1970 fallback.
-    statuses = _healthy_worker_only_statuses()
-    stale_row = _stale_checkout_worker()
-    del stale_row["head_update_epoch"]
-    verdict = _checkout_staleness_payload(stale=[stale_row], undetermined=[])
-    verdict["head_update_epoch"] = None
-
-    result = cli_systemd_status.cmd_service_status(
-        Namespace(target_user="alice", json=True),
-        deps=cli_systemd_status.ServiceStatusDeps(
-            collect_service_status=lambda target_user, run: statuses,
-            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
-            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: verdict,
-        ),
+    # The collector's explanation is printed as given, with the restart hint.
+    assert captured.err == (
+        f"error: {explanation}\n"
+        "hint: restart the workers in an idle window: orca_auto service restart\n"
     )
-
-    assert result == 1
-    captured = capsys.readouterr()
-    assert "cannot judge worker code freshness for orca_auto-queue-worker@alice.service" in (
-        captured.err
-    )
-    assert "1970" not in captured.err
-    assert "pre-deploy code" not in captured.err
 
 
 def test_cmd_service_status_gates_on_undetermined_worker_process(capsys: Any) -> None:
@@ -1188,7 +1159,13 @@ def test_cmd_service_status_gates_on_undetermined_worker_process(capsys: Any) ->
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: verdict,
+            collect_worker_staleness=lambda statuses, run=None: (
+                verdict,
+                (
+                    "cannot judge worker code freshness for "
+                    "orca_auto-queue-worker@alice.service: no readable main PID",
+                ),
+            ),
         ),
     )
 
@@ -1210,7 +1187,7 @@ def test_cmd_service_status_accepts_fresh_worker_processes(capsys: Any) -> None:
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: verdict,
+            collect_worker_staleness=lambda statuses, run=None: (verdict, ()),
         ),
     )
 
@@ -1229,7 +1206,9 @@ def test_cmd_service_status_consults_the_real_staleness_collector_by_default(
     statuses = _healthy_worker_only_statuses()
     verdict = _checkout_staleness_payload(stale=[_stale_checkout_worker()], undetermined=[])
     monkeypatch.setattr(
-        cli_systemd_freshness, "collect_worker_staleness", lambda statuses, run=None: verdict
+        cli_systemd_freshness,
+        "collect_worker_staleness",
+        lambda statuses, run=None: (verdict, ("stale",)),
     )
 
     result = cli_systemd_status.cmd_service_status(
@@ -1671,7 +1650,7 @@ def test_cmd_service_status_returns_failure_when_any_unit_failed(capsys: Any) ->
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-            collect_worker_staleness=lambda statuses, run=None: None,
+            collect_worker_staleness=lambda statuses, run=None: (None, ()),
         ),
     )
 
@@ -1709,7 +1688,7 @@ def test_cmd_service_status_full_mode_rejects_any_non_active_required_unit(
                 collect_service_status=lambda target_user, run: statuses,
                 run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
                 which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-                collect_worker_staleness=lambda statuses, run=None: None,
+                collect_worker_staleness=lambda statuses, run=None: (None, ()),
             ),
         )
 

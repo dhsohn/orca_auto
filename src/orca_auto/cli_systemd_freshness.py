@@ -4,7 +4,9 @@ Each active worker is identified by the import source it published at exec
 time. A source tracked by a Git checkout is judged as an editable install
 (:mod:`cli_systemd_freshness_checkout`); any other source is judged as a
 prepared runtime or an unmanaged wheel (:mod:`cli_systemd_freshness_runtime`).
-Both verdicts are then compared with the pin the installed unit declares.
+Both verdicts are then compared with the pin the installed unit declares, and
+each stale or undetermined worker comes with the sentence ``service status``
+prints for it.
 """
 
 from __future__ import annotations
@@ -29,8 +31,6 @@ from orca_auto.cli_systemd_freshness_runtime import (
     judge_installed_runtime,
     judge_runtime_worker,
 )
-
-_WORKER_PROCESS_LABELS = frozenset({"worker"})
 
 
 def _common_evidence_value(rows: Sequence[dict[str, Any]], key: str) -> Any:
@@ -117,7 +117,7 @@ def collect_worker_staleness(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
     read_process_file: Callable[[str], bytes] = read_process_file,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
     """Compare each active worker process against the code it should be running.
 
     The module CLI re-execs once with the resolved source file it actually
@@ -126,20 +126,22 @@ def collect_worker_staleness(
     reflog against the unit start, a prepared runtime by its build id against
     the bundle and the installed unit's pin. PID plus kernel process-start
     ticks are rechecked around every observation so a restart or PID reuse
-    becomes undetermined rather than false-fresh. Unmanaged installed wheels
-    have no comparison; an all-unmanaged-wheel set (or no active worker)
-    returns ``None``.
+    becomes undetermined rather than false-fresh.
+
+    Returns the ``worker_staleness`` payload (``None`` for an all-unmanaged-wheel
+    set or no active worker) and the sentence ``service status`` prints for each
+    stale worker, then each undetermined one. The status fails exactly when a
+    sentence is returned.
     """
     active_workers = tuple(
-        status
-        for status in statuses
-        if status.label in _WORKER_PROCESS_LABELS and status.active == "active"
+        status for status in statuses if status.label == "worker" and status.active == "active"
     )
     if not active_workers:
-        return None
+        return None, ()
 
     workers: list[dict[str, Any]] = []
     stale: list[dict[str, Any]] = []
+    stale_explanations: list[str] = []
     undetermined: list[dict[str, Any]] = []
     uncompared: list[dict[str, Any]] = []
     for status in active_workers:
@@ -150,15 +152,23 @@ def collect_worker_staleness(
             uncompared.append(verdict.row)
         else:
             workers.append(verdict.row)
-            if verdict.stale:
+            if verdict.stale_explanation:
                 stale.append(dict(verdict.row))
+                stale_explanations.append(verdict.stale_explanation)
     if uncompared and not workers and not undetermined:
-        return None
-    return _worker_staleness_payload(
+        return None, ()
+    payload = _worker_staleness_payload(
         workers=workers,
         stale=stale,
         undetermined=undetermined,
         uncompared=uncompared,
+    )
+    return payload, (
+        *stale_explanations,
+        *(
+            f"cannot judge worker code freshness for {row['unit']}: {row['detail']}"
+            for row in undetermined
+        ),
     )
 
 

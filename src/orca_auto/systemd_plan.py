@@ -7,7 +7,6 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from orca_auto.cli_worker_supervision import worker_stop_budget_seconds
 from orca_auto.core.config.files import (
@@ -60,19 +59,6 @@ class SystemdInstallPlan:
 
 def running_as_root() -> bool:
     return os.geteuid() == 0
-
-
-@dataclass(frozen=True)
-class SystemdInstallOptions:
-    target_user: str
-    repo: Path
-    config: Path
-    unit_dir: Path
-    worker_only: bool = False
-    no_enable: bool = False
-    no_start: bool = False
-    no_sudo: bool = False
-    is_root: Callable[[], bool] = running_as_root
 
 
 def _existing_parent(path: Path) -> Path:
@@ -132,33 +118,21 @@ def _systemd_path_text(path: Path, *, label: str) -> str:
     return text.replace("%", "%%")
 
 
-def _append_absolute_path(paths: list[Path], value: Any) -> None:
-    text = normalize_text(value)
-    if not text:
-        return
-    candidate = Path(text).expanduser()
-    if not candidate.is_absolute():
-        return
-    paths.append(candidate.resolve(strict=False))
-
-
-def _configured_read_write_paths(shared: SharedConfig | None) -> tuple[Path, ...]:
-    if shared is None:
-        return ()
+def _configured_read_write_path(shared: SharedConfig | None) -> Path | None:
     # The worker writes only under runs_root, including the admission store it
     # creates at <runs_root>/.admission. Naming that not-yet-created child as a
     # mandatory systemd path would keep the service namespace from starting.
-    paths: list[Path] = []
-    _append_absolute_path(paths, usable_runs_root_text(shared.runs_root))
-    return tuple(paths)
+    text = normalize_text(usable_runs_root_text(shared.runs_root)) if shared is not None else ""
+    candidate = Path(text).expanduser() if text else None
+    if candidate is None or not candidate.is_absolute():
+        return None
+    return candidate.resolve(strict=False)
 
 
-def _render_read_write_paths(shared: SharedConfig | None) -> str:
-    paths = _configured_read_write_paths(shared)
-    if not paths:
+def _render_read_write_paths(path: Path | None) -> str:
+    if path is None:
         return "# ReadWritePaths omitted: config runtime paths unavailable at render time"
-    joined = " ".join(_systemd_path_text(path, label="ReadWritePaths path") for path in paths)
-    return f"ReadWritePaths={joined}"
+    return f"ReadWritePaths={_systemd_path_text(path, label='ReadWritePaths path')}"
 
 
 def _configured_stop_timeout_seconds(shared: SharedConfig | None) -> int | None:
@@ -173,15 +147,12 @@ def _configured_stop_timeout_seconds(shared: SharedConfig | None) -> int | None:
 def _render_unit_template(
     template: str,
     *,
-    repo: Path,
-    config: Path,
-    shared: SharedConfig | None,
-    runtime_build: str = "",
+    repo_text: str,
+    config_text: str,
+    read_write_paths: str,
+    stop_timeout_seconds: int | None,
+    runtime_build: str,
 ) -> str:
-    repo_text = _systemd_path_text(repo, label="--repo")
-    config_text = _systemd_path_text(config, label="--config")
-    read_write_paths = _render_read_write_paths(shared)
-    stop_timeout_seconds = _configured_stop_timeout_seconds(shared)
     rendered = template.replace("/home/%i/orca_auto", repo_text)
     lines = []
     config_environment_prefix = f"Environment={ORCA_AUTO_CONFIG_ENV_VAR}="
@@ -278,12 +249,9 @@ def _systemctl_transition_commands(
         # deploy to running workers needs `orca_auto service restart`, which
         # restarts the worker services explicitly.
         commands.append(("systemctl", "restart", enabled_unit))
-        desired_units = [
-            worker_unit_for_user(target_user),
-        ]
         # Targets use Wants=, so a successful target job does not prove that its
-        # services started. Gate destructive cleanup on the actual runtime units.
-        commands.extend(("systemctl", "is-active", "--quiet", unit) for unit in desired_units)
+        # service started. Gate destructive cleanup on the actual worker unit.
+        commands.append(("systemctl", "is-active", "--quiet", worker_unit_for_user(target_user)))
     # Older worker-only installs enabled the ORCA service directly. Remove only
     # its boot selection after the desired target is ready; stopping this shared
     # service would also stop the freshly restarted runtime.
@@ -342,77 +310,6 @@ def _collect_warnings(
     return tuple(warnings)
 
 
-def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstallPlan:
-    # ``--repo`` is a required public argument and names the checkout whose
-    # service code will run. Its versioned unit files are therefore the sole
-    # template source, including when this installer itself came from a wheel.
-    template_root = _template_dir(options.repo)
-    runtime_build = ""
-    if (options.repo / RUNTIME_MANIFEST_NAME).exists():
-        runtime_build = verify_runtime_bundle(options.repo)["build_id"]
-        if options.config.is_relative_to(options.repo):
-            raise ValueError(
-                "prepared runtime configuration must be outside the read-only runtime; pass --config"
-            )
-    if not template_root.is_dir():
-        raise ValueError(
-            "--repo must name a checkout that contains a systemd/ template directory: "
-            f"{options.repo}"
-        )
-    # A config that exists but cannot be loaded fails the install: units
-    # rendered without ReadWritePaths would start a worker that cannot write.
-    loaded = load_orca_shared_config(options.config) if options.config.exists() else None
-    shared = loaded[1] if loaded is not None else None
-    units = tuple(
-        RenderedUnit(
-            name=name,
-            destination=options.unit_dir / name,
-            content=_render_unit_template(
-                _read_unit_template(template_root, name),
-                repo=options.repo,
-                config=options.config,
-                shared=shared,
-                runtime_build=runtime_build,
-            ),
-        )
-        for name in SYSTEMD_UNIT_NAMES
-    )
-
-    effective_worker_only = options.worker_only
-    enabled_unit = _enabled_unit_for_args(
-        target_user=options.target_user,
-        worker_only=effective_worker_only,
-        no_enable=options.no_enable,
-    )
-    if enabled_unit is not None:
-        _validate_worker_config(options.config, loaded)
-    commands = _systemctl_transition_commands(
-        target_user=options.target_user,
-        worker_only=effective_worker_only,
-        enabled_unit=enabled_unit,
-        no_start=options.no_start,
-    )
-
-    return SystemdInstallPlan(
-        target_user=options.target_user,
-        repo=options.repo,
-        config=options.config,
-        unit_dir=options.unit_dir,
-        units=units,
-        commands=commands,
-        enabled_unit=enabled_unit,
-        use_sudo=False
-        if options.no_sudo
-        else _needs_sudo(options.unit_dir, is_root=options.is_root),
-        warnings=_collect_warnings(
-            options.repo,
-            options.config,
-            no_enable=options.no_enable,
-            no_start=options.no_start,
-        ),
-    )
-
-
 def build_systemd_install_plan(
     *,
     target_user: str | None,
@@ -435,18 +332,70 @@ def build_systemd_install_plan(
         raise ValueError("--repo is required")
 
     repo_path = _normalize_path(repo_text)
-    options = SystemdInstallOptions(
+    config_path = _normalize_path(config or _default_config_for_user(user_text))
+    unit_dir_path = _normalize_path(unit_dir)
+    # ``--repo`` is a required public argument and names the checkout whose
+    # service code will run. Its versioned unit files are therefore the sole
+    # template source, including when this installer itself came from a wheel.
+    template_root = _template_dir(repo_path)
+    runtime_build = ""
+    if (repo_path / RUNTIME_MANIFEST_NAME).exists():
+        runtime_build = verify_runtime_bundle(repo_path)["build_id"]
+        if config_path.is_relative_to(repo_path):
+            raise ValueError(
+                "prepared runtime configuration must be outside the read-only runtime; pass --config"
+            )
+    if not template_root.is_dir():
+        raise ValueError(
+            f"--repo must name a checkout that contains a systemd/ template directory: {repo_path}"
+        )
+    # A config that exists but cannot be loaded fails the install: units
+    # rendered without ReadWritePaths would start a worker that cannot write.
+    loaded = load_orca_shared_config(config_path) if config_path.exists() else None
+    shared = loaded[1] if loaded is not None else None
+    repo_unit_text = _systemd_path_text(repo_path, label="--repo")
+    config_unit_text = _systemd_path_text(config_path, label="--config")
+    read_write_paths = _render_read_write_paths(_configured_read_write_path(shared))
+    stop_timeout_seconds = _configured_stop_timeout_seconds(shared)
+    units = tuple(
+        RenderedUnit(
+            name=name,
+            destination=unit_dir_path / name,
+            content=_render_unit_template(
+                _read_unit_template(template_root, name),
+                repo_text=repo_unit_text,
+                config_text=config_unit_text,
+                read_write_paths=read_write_paths,
+                stop_timeout_seconds=stop_timeout_seconds,
+                runtime_build=runtime_build,
+            ),
+        )
+        for name in SYSTEMD_UNIT_NAMES
+    )
+
+    enabled_unit = _enabled_unit_for_args(
+        target_user=user_text, worker_only=worker_only, no_enable=no_enable
+    )
+    if enabled_unit is not None:
+        _validate_worker_config(config_path, loaded)
+    commands = _systemctl_transition_commands(
+        target_user=user_text,
+        worker_only=worker_only,
+        enabled_unit=enabled_unit,
+        no_start=no_start,
+    )
+
+    return SystemdInstallPlan(
         target_user=user_text,
         repo=repo_path,
-        config=_normalize_path(config or _default_config_for_user(user_text)),
-        unit_dir=_normalize_path(unit_dir),
-        worker_only=worker_only,
-        no_enable=no_enable,
-        no_start=no_start,
-        no_sudo=no_sudo,
-        is_root=is_root,
+        config=config_path,
+        unit_dir=unit_dir_path,
+        units=units,
+        commands=commands,
+        enabled_unit=enabled_unit,
+        use_sudo=False if no_sudo else _needs_sudo(unit_dir_path, is_root=is_root),
+        warnings=_collect_warnings(repo_path, config_path, no_enable=no_enable, no_start=no_start),
     )
-    return _build_systemd_install_plan(options)
 
 
 def systemd_command_argv(command: Sequence[str], *, use_sudo: bool) -> tuple[str, ...]:
@@ -457,41 +406,14 @@ def format_command(command: Sequence[str], *, use_sudo: bool) -> str:
     return " ".join(systemd_command_argv(command, use_sudo=use_sudo))
 
 
-def print_plan(plan: SystemdInstallPlan) -> None:
-    print("systemd install plan:")
-    print(f"  user: {plan.target_user}")
-    print(f"  repo: {plan.repo}")
-    print(f"  config: {plan.config}")
-    print(f"  unit_dir: {plan.unit_dir}")
-    if plan.enabled_unit:
-        print(f"  enable: {plan.enabled_unit}")
-    else:
-        print("  enable: skipped")
-    print("  write:")
-    for unit in plan.units:
-        print(f"    {unit.destination}")
-    if plan.commands:
-        print("  run:")
-        for command in plan.commands:
-            print(f"    {format_command(command, use_sudo=plan.use_sudo)}")
-
-
-def print_warnings(plan: SystemdInstallPlan) -> None:
-    for warning in plan.warnings:
-        print(f"warning: {warning}")
-
-
 __all__ = [
     "DEFAULT_SYSTEMD_UNIT_DIR",
     "SYSTEMD_UNIT_NAMES",
     "RenderedUnit",
-    "SystemdInstallOptions",
     "SystemdInstallPlan",
     "build_systemd_install_plan",
     "engine_workers_unit_for_user",
     "format_command",
-    "print_plan",
-    "print_warnings",
     "running_as_root",
     "runtime_unit_for_user",
     "systemd_command_argv",

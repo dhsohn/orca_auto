@@ -105,7 +105,7 @@ def _systemd_plan_answer(config: Path) -> dict[str, Any]:
     _path, shared, _orca_sections = load_orca_shared_config(config)
     return {
         "read_write_paths": [
-            str(path) for path in systemd_plan._configured_read_write_paths(shared)
+            str(path) for path in [systemd_plan._configured_read_write_path(shared)] if path
         ],
         "stop_timeout_seconds": systemd_plan._configured_stop_timeout_seconds(shared),
     }

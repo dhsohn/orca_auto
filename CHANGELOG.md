@@ -188,6 +188,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   shows, instead of matching a second time in the queue. A directory given
   relative to the working directory or with a trailing slash now names the job
   too; it used to be reported as not found.
+- `service restart` and `service status` read the worker unit's properties,
+  its `Environment=` values and the worker's `/proc/<pid>/environ` through the
+  same readers, and their decisions are unchanged. Some explanations changed.
+  `service restart` refuses a worker unit whose `Environment` cannot be read
+  with `Cannot inspect Environment for <unit>.` and one whose `Environment`
+  cannot be parsed with `Cannot parse Environment for <unit>.`, both formerly
+  `Cannot read service configuration binding for <unit>.`. In `service status`,
+  an undetermined prepared-runtime worker whose unit property cannot be read
+  says `Cannot inspect <property> for <unit>.` instead of
+  `cannot read installed unit <property>` or the raw `systemctl` error, an
+  unparsable `Environment` says `Cannot parse Environment for <unit>.`
+  instead of the raw parser error, and an `EnvironmentFiles=` or
+  `UnsetEnvironment=` override says
+  `Cannot verify overridden service configuration for <unit>.` instead of
+  `installed unit has unsupported environment overrides`.
 - `queue cancel` without an existing `runs_root` now prints
   `runs_root does not exist: PATH`, as `queue list` does, instead of the raw
   `No such file or directory` error. It still exits 1.

@@ -265,7 +265,7 @@ def test_unreadable_systemd_evidence_refuses_restart(tmp_path: Path, failure: st
         return result
 
     with (
-        pytest.raises(ValueError, match="Cannot read service configuration binding"),
+        pytest.raises(ValueError, match="Cannot inspect Environment"),
         cli_systemd_restart_guard.guard_service_restart(
             WORKER, run=run, read_process_file=evidence.read_process_file
         ),

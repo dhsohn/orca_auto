@@ -155,10 +155,11 @@ def test_status_binds_runtime_build_to_active_process(bundle: Path, correct_iden
             f"{PROCESS_RUNTIME_BUILD_ENV}={build_id}\0"
         ).encode()
 
-    payload = cli_systemd_freshness.collect_worker_staleness(
+    payload, failures = cli_systemd_freshness.collect_worker_staleness(
         [status], run=run, read_process_file=read
     )
     assert payload is not None
+    assert len(failures) == (0 if correct_identity else 1)
     if correct_identity:
         assert payload["workers"][0]["runtime_build_id"] == build_id
         assert payload["undetermined"] == []
@@ -270,10 +271,12 @@ def test_status_detects_installed_unit_cutover_before_worker_restart(
         return f"{_process_evidence.PROCESS_IMPORT_SOURCE_ENV}={source}\0{PROCESS_RUNTIME_BUILD_ENV}={build}\0".encode()
 
     try:
-        payload = cli_systemd_freshness.collect_worker_staleness(
+        collected = cli_systemd_freshness.collect_worker_staleness(
             [status], run=run, read_process_file=read
         )
+        payload, failures = collected
         assert payload is not None
+        assert len(failures) == 1
         assert payload["undetermined"] == []
         assert payload["stale"][0]["expected_runtime_build_id"] == desired_build
         assert payload["stale"][0]["expected_runtime_root"] == str(desired)
@@ -283,7 +286,7 @@ def test_status_detects_installed_unit_cutover_before_worker_restart(
                 deps=cli_systemd_status.ServiceStatusDeps(
                     which=lambda command: command,
                     collect_service_status=lambda *args, **kwargs: (status,),
-                    collect_worker_staleness=lambda *args, **kwargs: payload,
+                    collect_worker_staleness=lambda *args, **kwargs: collected,
                 ),
             )
             == 1

@@ -11,6 +11,7 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,10 @@ from orca_auto.cli_systemd_evidence import (
 from orca_auto.core.utils.coercion import normalize_text
 
 _CHECKOUT_ERRORS = (OSError, ValueError, RuntimeError)
+
+
+def _epoch_iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @dataclass(frozen=True)
@@ -319,8 +324,17 @@ def judge_checkout_worker(
     # systemd's formatted start timestamp has one-second precision. Treat an
     # equal-second checkout update conservatively rather than allowing a
     # timing truncation to produce a false-fresh verdict.
+    if started_epoch > head_evidence.head_update_epoch:
+        return WorkerVerdict("worker", worker_row)
     return WorkerVerdict(
-        "worker", worker_row, stale=started_epoch <= head_evidence.head_update_epoch
+        "worker",
+        worker_row,
+        stale_explanation=(
+            f"{unit} (pid {pid}) started {_epoch_iso(int(started_epoch))}, before checkout "
+            f"HEAD ({head_evidence.head_sha[:12]}) in {head_evidence.source_root} was updated "
+            f"{_epoch_iso(head_evidence.head_update_epoch)}; the process still runs "
+            "pre-deploy code"
+        ),
     )
 
 
