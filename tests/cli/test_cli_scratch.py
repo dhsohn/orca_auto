@@ -221,9 +221,12 @@ def test_scratch_commands_require_a_configured_scratch_root(
     captured = capsys.readouterr()
     assert "No orca_auto.yaml found" in captured.err
 
-    assert _main("scratch", "list", "--config", str(tmp_path / "absent.yaml")) == 1
+    absent = tmp_path / "absent.yaml"
+    assert _main("scratch", "list", "--config", str(absent)) == 1
+    absent = absent.resolve()
     captured = capsys.readouterr()
-    assert "error:" in captured.err
+    assert f"error: Config file not found: {absent}" in captured.err
+    assert f"Run `orca_auto init --config {absent}`" in captured.err
     assert "Traceback" not in captured.err
 
 

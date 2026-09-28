@@ -80,16 +80,31 @@ def test_resolve_command_config_reads_the_top_level_runs_root(tmp_path: Path) ->
 @pytest.mark.parametrize(
     ("payload", "message", "hint"),
     [
-        (None, "No such file or directory", "repair the reported state file"),
+        (
+            None,
+            "Config file not found: {config}. Run `orca_auto init --config {config}`",
+            "repair the reported state file",
+        ),
         ("runs_root: [unclosed\n", "Invalid YAML syntax", "repair the reported state file"),
         (
             "scheduler:\n  max_active_simulations: 4\n",
             "runs_root is missing or invalid in",
             "Set runs_root to an absolute directory path",
         ),
-        ("runs_root: './runs'\n", "runs_root is missing or invalid in", "Set runs_root"),
-        ("runs_root: '/mnt/c/runs'\n", "runs_root is missing or invalid in", "Set runs_root"),
+        (
+            "runs_root: './runs'\n",
+            "runs_root is missing or invalid in {config}: "
+            "runs_root must be an absolute Linux path.",
+            "Set runs_root",
+        ),
+        (
+            "runs_root: '/mnt/c/runs'\n",
+            "runs_root is missing or invalid in {config}: "
+            "runs_root must be a Linux path (Windows paths are not supported).",
+            "Set runs_root",
+        ),
         ("runs_root: {missing}\n", "runs_root does not exist: {missing}", "Check runs_root"),
+        ("runs_root: {config}\n", "runs_root is not a directory: {config}", "Check runs_root"),
         ("runs_root: /tmp\nschedulr: {{}}\n", "Unknown top-level config fields", "repair"),
         ("runs_root: /tmp\nscheduler: []\n", "scheduler section must be a mapping", "repair"),
         (
@@ -115,12 +130,14 @@ def test_resolve_command_config_names_each_unusable_config(
     config_path = tmp_path / "config.yaml"
     missing = tmp_path / "absent"
     if payload is not None:
-        config_path.write_text(payload.format(missing=missing), encoding="utf-8")
+        config_path.write_text(
+            payload.format(missing=missing, config=config_path), encoding="utf-8"
+        )
 
     with pytest.raises(cli_handlers.CommandConfigError) as raised:
         cli_handlers.resolve_command_config(Namespace(config=str(config_path)))
 
-    assert message.format(missing=missing) in str(raised.value)
+    assert message.format(missing=missing, config=config_path.resolve()) in str(raised.value)
     assert hint in raised.value.hint
     assert not missing.exists()
 

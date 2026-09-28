@@ -355,7 +355,8 @@ def test_collect_worker_staleness_observes_the_active_process_checkout(tmp_path:
     )
 
     assert verdict is not None
-    assert "/proc/77/environ" in observed_proc_paths
+    # The worker's environ is read once for both its import source and build.
+    assert observed_proc_paths.count("/proc/77/environ") == 1
     assert all(not path.endswith("/cwd") for path in observed_proc_paths)
     assert verdict["source_root"] == str(unit_checkout)
     assert verdict["head_sha"] == head_sha

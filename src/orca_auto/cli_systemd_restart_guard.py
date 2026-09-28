@@ -109,9 +109,9 @@ def _worker_binding(
             ticks = cli_systemd_evidence.read_process_start_ticks(
                 pid, read_process_file=read_process_file
             )
-            values = cli_systemd_evidence.process_environ_values(
-                pid, ORCA_AUTO_CONFIG_ENV_VAR, read_process_file=read_process_file
-            )
+            values = cli_systemd_evidence.process_environ(
+                pid, read_process_file=read_process_file
+            ).get(ORCA_AUTO_CONFIG_ENV_VAR, [])
             if values != [str(config)]:
                 raise ValueError
             if (

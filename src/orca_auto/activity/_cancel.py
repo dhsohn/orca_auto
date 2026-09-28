@@ -24,28 +24,41 @@ def _resolved_target(target: str) -> str:
         return ""
 
 
-def target_rows(rows: list[CatalogRow], target: str) -> list[CatalogRow]:
-    """The rows ``target`` names: exactly one, none, or several when it is ambiguous.
+def _row_directory(record: ActivityRecord) -> tuple[str, ...]:
+    return path_aliases(normalize_text(record.metadata.get("reaction_dir")))[:1]
 
-    A target matches a row's queue ID, job ID, run ID (a running row's from its
-    own state) or directory: absolute, relative to ``runs_root`` or to the
-    working directory, or its name. Matches in several directories are
-    ambiguous. Within one directory the active generation wins and two active
-    ones are ambiguous; with none active the newest finished row answers, so a
-    retry observes an already-cancelled outcome.
+
+def target_rows(rows: list[CatalogRow], target: str) -> tuple[list[CatalogRow], str]:
+    """The rows ``target`` names, and a directory it names that none of them has (or "").
+
+    A target equal to a row's queue ID or run ID (the one the row records, or a
+    running row's from its own state) names that row before any alias.
+    Otherwise it matches a row's job ID or directory: absolute, relative to
+    ``runs_root`` or to the working directory, or its name. Matches in several
+    directories are ambiguous. Within one directory the active generation wins
+    and two active ones are ambiguous; with none active the newest finished row
+    answers, so a retry observes an already-cancelled outcome.
+
+    A target that is an existing directory relative to the working directory
+    names that directory. When no matched row has it, the matches come back
+    with it and the target is ambiguous: ``foo`` inside a directory holding its
+    own ``foo`` never falls back to another directory's ``foo``.
     """
-    wanted = {target, _resolved_target(target)} - {""}
+    named = [row for row in rows if target in row[1].ids]
+    if named:
+        return named, ""
+    resolved = _resolved_target(target)
+    wanted = {target, resolved} - {""}
     matches = [row for row in rows if wanted.intersection(row[1].aliases)]
-    directories = {
-        path_aliases(normalize_text(record.metadata.get("reaction_dir")))[:1]
-        for _entry, record in matches
-    }
+    directories = {_row_directory(record) for _entry, record in matches}
+    if matches and resolved and (resolved,) not in directories and Path(resolved).is_dir():
+        return matches, resolved
     if len(matches) > 1 and (len(directories) > 1 or () in directories):
-        return matches
+        return matches, ""
     active = [row for row in matches if is_queue_active_status(row[1].status)]
     if active:
-        return active
-    return [max(matches, key=lambda row: sort_key(row[1]))] if matches else []
+        return active, ""
+    return ([max(matches, key=lambda row: sort_key(row[1]))] if matches else []), ""
 
 
 def _payload(status: str, reason: str = "", record: ActivityRecord | None = None) -> dict[str, Any]:
@@ -84,11 +97,14 @@ def cancel_activity(*, target: str, runs_root: Path) -> tuple[dict[str, Any], st
     target = normalize_text(target)
     if not target:
         return _payload(STATUS_FAILED, "target_not_found"), "Cancel target is empty."
-    rows = target_rows(_orca.catalog(runs_root), target)
+    rows, directory = target_rows(_orca.catalog(runs_root), target)
     if not rows:
         return _payload(STATUS_FAILED, "target_not_found"), f"Activity target not found: {target}"
-    if len(rows) > 1:
-        matches = ", ".join(sorted(record.activity_id for _entry, record in rows))
+    if len(rows) > 1 or directory:
+        names = [record.activity_id for _entry, record in rows]
+        if directory:
+            names.append(directory)
+        matches = ", ".join(sorted(names))
         return (
             _payload(STATUS_FAILED, "ambiguous"),
             f"Ambiguous activity target: {target}. Matches: {matches}",

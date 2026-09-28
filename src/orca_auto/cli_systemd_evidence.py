@@ -57,14 +57,8 @@ def refuse_environment_overrides(
         raise ValueError(f"Cannot verify overridden service configuration for {unit}.")
 
 
-def unit_environment_values(
-    unit: str,
-    key: str,
-    *,
-    run: Callable[..., subprocess.CompletedProcess[Any]],
-) -> list[str]:
-    """Every value ``key`` takes in the unit's ``Environment=``."""
-    environment = strict_unit_property(unit, "Environment", run=run)
+def environment_values(environment: str, key: str, *, unit: str) -> list[str]:
+    """Every value ``key`` takes in ``environment``, one ``Environment`` text of ``unit``."""
     try:
         items = shlex.split(environment)
     except ValueError:
@@ -73,23 +67,32 @@ def unit_environment_values(
     return [item[len(prefix) :] for item in items if item.startswith(prefix)]
 
 
-def process_environ_values(
-    pid: int,
+def unit_environment_values(
+    unit: str,
     key: str,
     *,
-    read_process_file: Callable[[str], bytes] = read_process_file,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
 ) -> list[str]:
-    """Every value ``key`` takes in ``/proc/<pid>/environ``."""
+    """Every value ``key`` takes in the unit's ``Environment=``."""
+    return environment_values(strict_unit_property(unit, "Environment", run=run), key, unit=unit)
+
+
+def process_environ(
+    pid: int,
+    *,
+    read_process_file: Callable[[str], bytes] = read_process_file,
+) -> dict[str, list[str]]:
+    """Every value each name takes in ``/proc/<pid>/environ``, read once."""
     try:
         raw_environ = read_process_file(f"/proc/{pid}/environ")
     except OSError as exc:
         raise ValueError(f"cannot read /proc/{pid}/environ: {exc}") from exc
-    prefix = f"{key}=".encode()
-    return [
-        os.fsdecode(entry[len(prefix) :])
-        for entry in raw_environ.split(b"\0")
-        if entry.startswith(prefix)
-    ]
+    environ: dict[str, list[str]] = {}
+    for entry in raw_environ.split(b"\0"):
+        name, separator, value = entry.partition(b"=")
+        if separator:
+            environ.setdefault(os.fsdecode(name), []).append(os.fsdecode(value))
+    return environ
 
 
 def unit_main_pid(
@@ -182,12 +185,9 @@ def worker_process_import_evidence(
     reused by another process during the read is rejected rather than trusted.
     """
     start_ticks_before = read_process_start_ticks(pid, read_process_file=read_process_file)
-    values = process_environ_values(
-        pid, PROCESS_IMPORT_SOURCE_ENV, read_process_file=read_process_file
-    )
-    builds = process_environ_values(
-        pid, PROCESS_RUNTIME_BUILD_ENV, read_process_file=read_process_file
-    )
+    environ = process_environ(pid, read_process_file=read_process_file)
+    values = environ.get(PROCESS_IMPORT_SOURCE_ENV, [])
+    builds = environ.get(PROCESS_RUNTIME_BUILD_ENV, [])
     if len(values) != 1 or not values[0]:
         raise ValueError("worker import-source evidence is missing or ambiguous")
     import_source = Path(values[0]).expanduser()
@@ -247,8 +247,9 @@ class WorkerVerdict:
 __all__ = [
     "WorkerImportEvidence",
     "WorkerVerdict",
+    "environment_values",
     "parse_process_start_ticks",
-    "process_environ_values",
+    "process_environ",
     "process_identity_race_detail",
     "read_process_file",
     "read_process_start_ticks",

@@ -44,7 +44,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--json]
 - `--json`: Structured JSON output for downstream automation and tooling.
 - Each row carries `worker_log` (`<runs_root>/logs/<queue_id>.log`); the text view lists it under the table for running and failed rows.
 - Rows are the jobs in `queue.json`, each read with its own directory's root `job_state.json`. A run state without a queue row is not listed; `index rebuild` records such runs in `job_locations.json`.
-- Exits 1 without a discoverable config or an existing `runs_root`, creating nothing. A corrupt `admission_slots.json` is reported as an `admission_blockers` entry (scope `admission_store`, queue id `*`) while `active_simulations` falls back to the listing's count.
+- Exits 1 without a discoverable config or an existing `runs_root`, creating nothing. A corrupt `admission_slots.json` is reported as an `admission_blockers` entry (scope `admission_store`, queue id `*`) while `active_simulations` falls back to the listing's count. `admission_blockers` lists blocked rows in `queue.json` order, then that entry.
 
 ---
 
@@ -55,7 +55,7 @@ Cancels a pending or running job.
 ```bash
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
-- `<TARGET>`: Queue ID (`q_...`), Run ID (`run_...`, including a running job's), or job directory path or name. A directory resolves to its active generation even when older finished rows of it remain.
+- `<TARGET>`: Queue ID (`q_...`), Run ID (`run_...`, including a running job's), or job directory path or name. A directory resolves to its active generation even when older finished rows of it remain. A queue ID or run ID wins over a directory name. A path is also resolved from the working directory, and a name that is an existing directory there without a queue row of its own is refused as ambiguous instead of naming another directory's job.
 - `--json`: Prints `activity_id`, `kind`, `engine`, `source`, `label`, `status` and `cancel_target` of the resolved row and `result` (`status`, `reason`, `queue_id`, `job_id`, `reaction_dir`). A failure exits 1 with `reason` `target_not_found`, `ambiguous`, `already_terminal` or `cancel_failed` and an `error` message; the row fields are empty when the target names no single row.
 - Exits 1 without a discoverable config or an existing `runs_root`, with the same `error:` line as `queue list`.
 

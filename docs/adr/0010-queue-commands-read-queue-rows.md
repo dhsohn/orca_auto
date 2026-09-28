@@ -48,16 +48,20 @@ without a queue row is not listed. `index rebuild` still records such runs in
 listing, is removed.
 
 `queue cancel` resolves its target once over that catalog
-(`activity/_cancel.target_rows`). A target matches a row's queue ID, job ID,
-run ID (the one the row records, or a running row's from its own state) or
-directory, given as an absolute path, a path relative to `runs_root` or to the
-working directory, or its name. Matches in several directories are ambiguous.
-Within one directory the active generation is the target, two active
-generations are ambiguous, and with none active the newest finished row in
-list order answers. The resolved row is cancelled through
-`queue/adapter.cancel`, fenced on its generation; when that call refuses or
-raises, a read of the row decides whether the cancel of that generation is
-durable.
+(`activity/_cancel.target_rows`). A target equal to a row's queue ID or run ID
+(the one the row records, or a running row's from its own state) names that
+row before any other match, as `match_activity_record` let an exact ID win
+over aliases. Otherwise a target matches a row's job ID or directory, given as an absolute
+path, a path relative to `runs_root` or to the working directory, or its name.
+Matches in several directories are ambiguous. Within one directory the active
+generation is the target, two active generations are ambiguous, and with none
+active the newest finished row in list order answers. A target that, relative
+to the working directory, is an existing directory that none of the matched
+rows has is ambiguous too, and that directory is listed among the matches: a
+name never falls back from the directory it names to another directory's row.
+The resolved row is cancelled through `queue/adapter.cancel`, fenced on its
+generation; when that call refuses or raises, a read of the row decides whether
+the cancel of that generation is durable.
 
 `queue cancel --json` keeps its top-level keys (`ok`, `activity_id`, `kind`,
 `engine`, `source`, `label`, `status`, `cancel_target`, `error`). `result` is
@@ -65,8 +69,11 @@ durable.
 `target_not_found`, `ambiguous`, `already_terminal` and `cancel_failed` on
 failure. A target that names no row or several rows now prints the same
 document with empty row fields instead of `{"ok": false, "error": ...}` alone.
-The text output is unchanged, and so are the rows, `admission_blockers` and
-`active_simulations` of `queue list --json`.
+The text output is unchanged, and so are the rows and `active_simulations` of
+`queue list --json`. `admission_blockers` lists the blocked rows in
+`queue.json` order and then the admission-store entry; the projection returned
+them in its storage order, so only a listing with several blocked rows can
+differ.
 
 Removed: `core/activity_index.py`, `core/activity_invalidation.py`,
 `activity/_orca_index.py`, `orca/direct_cancel.py`, the writers' mirror and
@@ -81,8 +88,12 @@ record shows no alternative that was weighed.
   (`test_catalog_joins_queue_rows_with_their_own_state_only`,
   `test_catalog_lists_no_run_state_without_its_queue_row`), the target rule
   (`test_target_rows_select_active_then_newest_terminal`,
+  `test_target_rows_prefer_a_queue_or_run_id_to_any_alias`,
   `test_cancel_activity_path_alias_prefers_active_generation`,
-  `test_cancel_activity_by_state_run_id_of_running_job`) and the payload
+  `test_cancel_activity_by_state_run_id_of_running_job`,
+  `test_cancel_by_name_never_passes_a_directory_of_that_name`,
+  `test_cancel_by_queue_id_wins_over_a_directory_of_that_name`), the blocker
+  order (`test_admission_blockers_follow_queue_row_order`) and the payload
   (`test_cancel_activity_routes_orca_targets`,
   `test_cancel_activity_reports_an_empty_or_unknown_target`).
   `tests/activity/test_orca_discovery.py::test_listing_reads_neither_the_location_index_nor_the_run_tree`
@@ -101,11 +112,17 @@ record shows no alternative that was weighed.
   ADR 0006 describes, and this change lists the queue row alone.
 
 Limits: a run whose root state has no queue row is not listed, whether its row
-was cleared, edited out of `queue.json` or never existed. A job still running
-from a worker of an earlier major version is listed once, without its run ID,
-so `queue cancel <run ID>` cannot find it until it finishes; its queue ID and
-directory still name it. The files `.activity.sqlite3`, `.activity-query.lock`
-and `.activity-dirty/` under `runs_root` are no longer read or written and may
-be deleted. 8.x would trust a projection that this version stopped updating,
-so a rollback to 8.x deletes `.activity.sqlite3` first and lets 8.x rebuild it
-from disk.
+was cleared, edited out of `queue.json` or never existed. Such a run's
+directory still blocks a bare name: `queue cancel foo` run inside `runs/x`,
+which holds `runs/x/foo` without a queue row, is refused as ambiguous even when
+one queued `foo` elsewhere is the only row of that name; run it from another
+directory or name the job by queue ID or path. A job still running from a
+worker of an earlier major version is listed once, without its run ID, so
+`queue cancel <run ID>` cannot find it until it finishes; its queue ID and
+directory still name it. The second, run-state row and the ambiguous directory
+cancel that ADR 0006 describes for such a job no longer occur. The files
+`.activity.sqlite3*`, `.activity-query.lock` and `.activity-dirty/` under
+`runs_root` are no longer read or written and may be deleted. 8.x would trust
+a projection that this version stopped updating, so a rollback to 8.x first
+deletes every `.activity.sqlite3*` file, the database and its journal alike,
+and lets 8.x rebuild the projection from disk.

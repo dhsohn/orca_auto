@@ -18,10 +18,10 @@ from typing import Any
 from orca_auto.cli_systemd_evidence import (
     WorkerImportEvidence,
     WorkerVerdict,
+    environment_values,
     process_identity_race_detail,
     refuse_environment_overrides,
     strict_unit_property,
-    unit_environment_values,
 )
 from orca_auto.core.runtime_bundle import (
     PROCESS_RUNTIME_BUILD_ENV,
@@ -116,7 +116,8 @@ def judge_installed_runtime(
     row = verdict.row
     unit = row["unit"]
     try:
-        values = unit_environment_values(unit, PROCESS_RUNTIME_BUILD_ENV, run=run)
+        environment = strict_unit_property(unit, "Environment", run=run)
+        values = environment_values(environment, PROCESS_RUNTIME_BUILD_ENV, unit=unit)
         if not values:
             if row.get("runtime_build_id"):
                 raise ValueError("installed unit has no pinned runtime build")
@@ -131,8 +132,9 @@ def judge_installed_runtime(
         manifest = verify_runtime_bundle(root)
         if manifest["build_id"] != values[0]:
             raise ValueError("installed unit pin differs from its prepared runtime")
+        # Any change to Environment, not only to the pin, voids the reading.
         if (
-            unit_environment_values(unit, PROCESS_RUNTIME_BUILD_ENV, run=run) != values
+            strict_unit_property(unit, "Environment", run=run) != environment
             or strict_unit_property(unit, "WorkingDirectory", run=run) != directory
         ):
             raise ValueError("installed unit runtime changed during freshness inspection")

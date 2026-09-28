@@ -448,7 +448,10 @@ def test_target_rows_select_active_then_newest_terminal(tmp_path: Path) -> None:
     )
 
     def named(records: list[activity.ActivityRecord]) -> list[str]:
-        rows = _activity_cancel.target_rows([_row(record) for record in records], "water")
+        rows, directory = _activity_cancel.target_rows(
+            [_row(record) for record in records], "water"
+        )
+        assert directory == ""
         return sorted(record.activity_id for _entry, record in rows)
 
     assert named([old, pending, newer]) == ["q-pending"]
@@ -461,6 +464,106 @@ def test_target_rows_select_active_then_newest_terminal(tmp_path: Path) -> None:
     assert named([old, pending, elsewhere]) == ["q-elsewhere", "q-old", "q-pending"]
     assert named([newer, elsewhere]) == ["q-elsewhere", "q-newer"]
     assert named([old, unlocated]) == ["q-old", "q-unlocated"]
+
+
+def test_target_rows_prefer_a_queue_or_run_id_to_any_alias(tmp_path: Path) -> None:
+    def record(
+        activity_id: str, directory: str, *, ids: tuple[str, ...], aliases: tuple[str, ...]
+    ) -> activity.ActivityRecord:
+        return activity.ActivityRecord(
+            activity_id,
+            "job",
+            "orca",
+            "pending",
+            Path(directory).name,
+            ORCA_AUTO_ORCA_SOURCE,
+            "",
+            "",
+            activity_id,
+            aliases=aliases,
+            ids=ids,
+            metadata={"reaction_dir": str(tmp_path / directory)},
+        )
+
+    # q-run's run ID is also the name of q-dir's directory.
+    running = record("q-run", "a/water", ids=("q-run", "run-7"), aliases=("q-run", "run-7"))
+    named_dir = record("q-dir", "b/run-7", ids=("q-dir",), aliases=("q-dir", "run-7"))
+    rows = [_row(running), _row(named_dir)]
+
+    for target, expected in (("run-7", ["q-run"]), ("q-dir", ["q-dir"])):
+        matched, directory = _activity_cancel.target_rows(rows, target)
+        assert sorted(record.activity_id for _entry, record in matched) == expected
+        assert directory == ""
+
+
+@pytest.mark.parametrize(
+    ("working_directory", "target"),
+    [("", "foo"), ("x", "foo"), ("y", "./foo")],
+    ids=["unrelated-directory", "directory-without-row", "working-directory-path"],
+)
+def test_cancel_by_name_never_passes_a_directory_of_that_name(
+    allowed: Path,
+    orca_config: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    working_directory: str,
+    target: str,
+) -> None:
+    queued = allowed / "y" / "foo"
+    queued.mkdir(parents=True)
+    queue_persistence.save_entries(
+        allowed, [make_queue_entry(queue_id="q-foo", task_id="t-foo", reaction_dir=queued)]
+    )
+    # x/foo holds a finished run whose queue row is gone, so no row names it.
+    unqueued = allowed / "x" / "foo"
+    write_run_state(unqueued, status=RunStatus.COMPLETED, run_id="run-x")
+    monkeypatch.chdir(allowed / working_directory if working_directory else allowed.parent)
+
+    code = cli_main(["queue", "cancel", target, "--json", "--config", orca_config])
+
+    payload = json.loads(capsys.readouterr().out)
+    [entry] = list_queue(allowed)
+    if working_directory == "x":
+        # Inside x, foo is x/foo; it never falls back to y/foo by name.
+        assert code == 1
+        assert payload["error"] == (
+            f"Ambiguous activity target: foo. Matches: {unqueued.resolve()}, q-foo"
+        )
+        assert payload["result"]["reason"] == "ambiguous"
+        assert payload["activity_id"] == ""
+        assert entry.status is QueueStatus.PENDING
+        assert not entry.cancel_requested
+    else:
+        assert code == 0
+        assert payload["activity_id"] == "q-foo"
+        assert payload["result"]["reaction_dir"] == str(queued)
+        assert entry.status is QueueStatus.CANCELLED
+
+
+def test_cancel_by_queue_id_wins_over_a_directory_of_that_name(
+    allowed: Path, orca_config: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    named_dir = allowed / "a" / "q-dup"
+    other = allowed / "b" / "job2"
+    named_dir.mkdir(parents=True)
+    other.mkdir(parents=True)
+    queue_persistence.save_entries(
+        allowed,
+        [
+            make_queue_entry(queue_id="q-other", reaction_dir=named_dir),
+            make_queue_entry(queue_id="q-dup", reaction_dir=other),
+        ],
+    )
+
+    assert cli_main(["queue", "cancel", "q-dup", "--json", "--config", orca_config]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["activity_id"] == "q-dup"
+    assert payload["result"]["reaction_dir"] == str(other)
+    assert {entry.queue_id: entry.status for entry in list_queue(allowed)} == {
+        "q-other": QueueStatus.PENDING,
+        "q-dup": QueueStatus.CANCELLED,
+    }
 
 
 @pytest.mark.parametrize("finished_status", [QueueStatus.FAILED, QueueStatus.CANCELLED])
@@ -641,4 +744,52 @@ def test_filtered_page_keeps_catalog_wide_blockers_and_active_count(
             "reason": "index unavailable",
             "next_action": "Restore index access.",
         }
+    ]
+
+
+def test_admission_blockers_follow_queue_row_order(
+    allowed: Path, orca_config: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.activity import _list
+    from orca_auto.core.queue.publication import (
+        QUEUE_RECORD_SYNC_BLOCKED_KEY,
+        QUEUE_RECORD_SYNC_KEY,
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+    )
+
+    def blocked(queue_id: str, enqueued_at: str) -> QueueEntry:
+        return make_queue_entry(
+            queue_id=queue_id,
+            reaction_dir=allowed / queue_id,
+            enqueued_at=enqueued_at,
+            metadata={
+                QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                QUEUE_RECORD_SYNC_BLOCKED_KEY: {
+                    "reason": "index unavailable",
+                    "scope": "orca_queue",
+                    "next_action": "Restore index access.",
+                },
+            },
+        )
+
+    # Rows are listed newest first; their blockers keep the queue.json order.
+    queue_persistence.save_entries(
+        allowed,
+        [
+            blocked("q-older", "2026-09-01T00:00:00+00:00"),
+            blocked("q-newer", "2026-09-02T00:00:00+00:00"),
+        ],
+    )
+    store_blocker = {"queue_id": "*", "scope": "admission_store"}
+    monkeypatch.setattr(
+        _list, "global_active_simulations", lambda runs_root, *, fallback: (0, store_blocker)
+    )
+
+    payload = activity.list_activities(config_path=orca_config, runs_root=allowed)
+
+    assert [row["activity_id"] for row in payload["activities"]] == ["q-newer", "q-older"]
+    assert [blocker["queue_id"] for blocker in payload["admission_blockers"]] == [
+        "q-older",
+        "q-newer",
+        "*",
     ]

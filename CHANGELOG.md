@@ -185,9 +185,22 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   instead of only `ok` and `error`. The top-level keys, the exit codes and the
   text output are unchanged.
 - `queue cancel` resolves its target once, over the same rows `queue list`
-  shows, instead of matching a second time in the queue. A directory given
-  relative to the working directory or with a trailing slash now names the job
-  too; it used to be reported as not found.
+  shows, instead of matching a second time in the queue. The target is also
+  resolved against the working directory, so a job directory given relative to
+  it (`./water`, `../batch/water`), or given with a trailing slash as an
+  absolute or working-directory path, now names the job too; it used to be
+  reported as not found. A path relative to `runs_root` and a bare name are
+  still matched as written unless they also resolve from the working directory,
+  so `batch/water/` given elsewhere is still not found. A queue ID names its
+  row before any directory alias, as before, and so does a run ID. A name that
+  is an existing directory in the working directory without a queue row of its
+  own, such as `queue cancel foo` inside `runs/x` next to `runs/x/foo`, is
+  refused as ambiguous with that directory among the matches; it never cancels
+  another directory's job of that name.
+- `queue list --json` lists `admission_blockers` in `queue.json` row order,
+  followed by the `admission_store` entry when the admission store is corrupt.
+  The SQLite projection returned them in its storage order, so only a listing
+  with several blocked rows can see a different order.
 - `service restart` and `service status` read the worker unit's properties,
   its `Environment=` values and the worker's `/proc/<pid>/environ` through the
   same readers, and their decisions are unchanged. Some explanations changed.
@@ -208,15 +221,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `No such file or directory` error. It still exits 1.
 - `queue list`, `queue list clear`, `queue cancel`, `index prune`/`rebuild`,
   `scratch list`/`clear` and `queue worker` find the config the same way and
-  load it once, and they print the same error for the same problem. A missing
-  config is always `No orca_auto.yaml found: pass --config, set
-  ORCA_AUTO_CONFIG, or create ~/orca_auto/config/orca_auto.yaml.`; a missing or
-  invalid `runs_root` is `runs_root is missing or invalid in CONFIG`; a
-  `runs_root` that is not a directory is `runs_root does not exist: PATH`; a
-  config that does not load names the loader's own error. Exit codes are
-  unchanged. `index` used to say `runs_root is not configured`, `scratch` said
-  `shared config is not configured` or the worker's config error, and
-  `queue worker` said `Could not discover orca_auto.yaml`.
+  load it once, and they print the same error for the same problem. When no
+  config is found the error is `No orca_auto.yaml found: pass --config, set
+  ORCA_AUTO_CONFIG, or create ~/orca_auto/config/orca_auto.yaml.`. A
+  `--config` or `ORCA_AUTO_CONFIG` path that does not exist is
+  `Config file not found: PATH.` followed by the `orca_auto init --config PATH`
+  guidance that `scratch` printed. A missing `runs_root` is
+  `runs_root is missing or invalid in CONFIG`, and an invalid one adds the rule
+  it breaks, for example
+  `runs_root is missing or invalid in CONFIG: runs_root must be an absolute Linux path.`.
+  A `runs_root` that does not exist is `runs_root does not exist: PATH` and
+  one that is not a directory is `runs_root is not a directory: PATH`; a config
+  that does not load names the loader's own error. Exit codes are unchanged.
+  `index` used to say `runs_root is not configured`, `scratch` said
+  `shared config is not configured` or the worker's config error, `queue list`
+  and `queue cancel` printed the raw `No such file or directory` error for a
+  missing config file, and `queue worker` said
+  `Could not discover orca_auto.yaml`.
 - A cancelled running job's `job_state.json` gets its `cancelled` result only
   from the worker parent, when it settles the cancelled queue row
   ([ADR 0008](docs/adr/0008-parent-writes-the-cancelled-result.md)). The

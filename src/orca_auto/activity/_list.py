@@ -66,6 +66,7 @@ def list_activities(
     active_simulations, store_blocker = global_active_simulations(
         runs_root, fallback=listing.active_count
     )
+    # Blocked rows in queue.json order, then the admission store.
     blockers = [*listing.blockers, *([store_blocker] if store_blocker else [])]
     return {
         "count": len(items),

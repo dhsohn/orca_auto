@@ -63,10 +63,12 @@ directory, and a queue row's `workflow_id` metadata is ignored.
   `queue list`; a run state without a queue row is no longer listed. Scripts
   that parse `queue cancel --json` read the outcome from `result.status` and
   `result.reason`. After `service status --json` shows the new worker, the
-  unused `<runs_root>/.activity.sqlite3`, `<runs_root>/.activity-query.lock`
-  and `<runs_root>/.activity-dirty/` may be removed by hand. Before rolling
-  back to 8.x, delete `.activity.sqlite3` so that 8.x rebuilds it from disk
-  instead of trusting a projection this version did not update.
+  unused `<runs_root>/.activity.sqlite3*` files,
+  `<runs_root>/.activity-query.lock` and `<runs_root>/.activity-dirty/` may be
+  removed by hand. Before rolling back to 8.x, delete every
+  `<runs_root>/.activity.sqlite3*` file, the database and its
+  `.activity.sqlite3-journal` alike, so that 8.x rebuilds the projection from
+  disk instead of trusting one this version did not update.
 - `scheduler.admission_root` is removed: admission state always lives in
   `<runs_root>/.admission` and its limit is `scheduler.max_active_simulations`
   ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)). A config that

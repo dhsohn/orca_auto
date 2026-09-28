@@ -25,6 +25,10 @@ class ActivityRecord:
     cancel_target: str
     aliases: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: The queue ID and run IDs among ``aliases``; a cancel target equal to one
+    #: of them names this row before any job ID or directory alias. Not part
+    #: of ``to_dict``.
+    ids: tuple[str, ...] = ()
     #: The per-job worker log (``<runs_root>/logs/<queue_id>.log``) the queue
     #: row names; empty when it names none.
     worker_log: str = ""
@@ -61,6 +65,8 @@ class ActivityListing:
     ``records`` is already status-filtered, newest first and cut to the
     requested limit; nobody downstream filters or slices again. ``blockers``
     and ``active_count`` describe the whole catalog regardless of the page.
+    ``blockers`` keeps the order the catalog is given in, which for the queue
+    catalog is ``queue.json`` row order.
     """
 
     records: tuple[ActivityRecord, ...] = ()
@@ -109,7 +115,8 @@ def listing_from_records(
     limit: int = 0,
 ) -> ActivityListing:
     """Filter, order and page an in-memory catalog exactly once."""
-    ordered = sorted(records, key=sort_key, reverse=True)
+    catalog = list(records)
+    ordered = sorted(catalog, key=sort_key, reverse=True)
     wanted = {normalize_status(status) for status in statuses} - {""}
     page = [record for record in ordered if not wanted or normalize_status(record.status) in wanted]
     if limit > 0:
@@ -117,7 +124,7 @@ def listing_from_records(
     return ActivityListing(
         records=tuple(page),
         blockers=tuple(
-            payload for record in ordered if (payload := blocker_payload(record)) is not None
+            payload for record in catalog if (payload := blocker_payload(record)) is not None
         ),
         active_count=sum(1 for record in ordered if is_active_simulation(record)),
     )

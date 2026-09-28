@@ -237,7 +237,7 @@ def test_cmd_index_prune_rejects_a_missing_runs_root(
     ("config_text", "expected"),
     [
         ("runs_root: [unclosed\n", "Invalid YAML"),
-        (None, "No such file"),
+        (None, "Config file not found"),
     ],
 )
 def test_cmd_index_prune_names_a_damaged_or_missing_config(

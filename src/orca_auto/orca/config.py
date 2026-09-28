@@ -123,7 +123,7 @@ def load_orca_shared_config_mapping(
     return path, raw
 
 
-def _missing_config_error(path: Path) -> ValueError:
+def missing_config_error(path: Path) -> ValueError:
     # The package may be a wheel or prepared runtime, so no checkout-relative
     # template path can be promised here.
     return ValueError(
@@ -230,7 +230,7 @@ def load_config(config_path: str) -> AppConfig:
 
     path, shared, orca_sections = load_orca_shared_config(
         config_path,
-        missing_error=_missing_config_error,
+        missing_error=missing_config_error,
         invalid_message="Config file is invalid: {path}",
     )
     cfg = worker_config(path, shared, orca_sections)

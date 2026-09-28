@@ -20,9 +20,13 @@ from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
     SharedConfig,
     discover_shared_config_path,
-    usable_runs_root_text,
+    validated_runs_root_text,
 )
-from orca_auto.orca.config import OrcaConfigSections, load_orca_shared_config
+from orca_auto.orca.config import (
+    OrcaConfigSections,
+    load_orca_shared_config,
+    missing_config_error,
+)
 from orca_auto.terminal import emit_error
 
 
@@ -65,25 +69,30 @@ def resolve_command_config(args: argparse.Namespace) -> CommandConfig:
     """
     config_path = command_config_path(args)
     try:
-        _path, shared, orca_sections = load_orca_shared_config(config_path)
+        _path, shared, orca_sections = load_orca_shared_config(
+            config_path, missing_error=missing_config_error
+        )
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
         # A missing or damaged config names its own failure instead of reading
-        # as "not configured".
+        # as "not configured"; a missing one also says how to create it.
         raise CommandConfigError(
             str(exc),
             hint="Check the config path and repair the reported state file before retrying.",
         ) from exc
-    root_text = usable_runs_root_text(shared.runs_root)
-    if not root_text:
-        raise CommandConfigError(
-            f"runs_root is missing or invalid in {config_path}",
-            hint="Set runs_root to an absolute directory path in the config.",
-        )
-    runs_root = Path(root_text).expanduser().resolve()
+    invalid = f"runs_root is missing or invalid in {config_path}"
+    root_hint = "Set runs_root to an absolute directory path in the config."
+    if not shared.runs_root:
+        raise CommandConfigError(invalid, hint=root_hint)
+    try:
+        runs_root = Path(validated_runs_root_text(shared.runs_root)).expanduser().resolve()
+    except ValueError as exc:
+        # The validator names the rule the value breaks, such as an absolute Linux path.
+        raise CommandConfigError(f"{invalid}: {exc}", hint=root_hint) from None
     if not runs_root.is_dir():
         # A typo here would otherwise read as an empty queue or index.
+        problem = "is not a directory" if runs_root.exists() else "does not exist"
         raise CommandConfigError(
-            f"runs_root does not exist: {runs_root}",
+            f"runs_root {problem}: {runs_root}",
             hint="Check runs_root in the config; a missing root is never created.",
         )
     return CommandConfig(

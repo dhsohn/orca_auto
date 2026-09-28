@@ -120,6 +120,7 @@ def queue_record(
                 *list(path_aliases(reaction_dir, root=allowed_root)),
             ]
         ),
+        ids=unique_texts([queue_id, run_id, snapshot_run_id]),
         metadata={
             "queue_id": queue_id,
             "task_id": task_id,
