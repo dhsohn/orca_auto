@@ -208,99 +208,99 @@ graph TD
 ### 워커의 책임과 자식 실행
 워커는 감독과 실행을 분리합니다.
 
-`OrcaQueueWorker`(`orca/queue/worker.py`)가 유일한 큐 워커다. PID 파일과 단일
-실행 잠금의 생명주기, 실행 슬롯 예약(행을 ID로 인수하기 전에 슬롯을 먼저 예약하며,
-미리 읽은 행을 `expected_entry`로 사용), 자식 시작과 슬롯 연결, 종료 확정, 취소,
-셧다운, 고아 행 정리를 모두 소유한다. `_admit_next`가 한 번의 수용을 순서대로
-적는다. 보류 디렉터리, 발행 복구, 제출 알림, 여유 확인, 미리 보기, 슬롯 예약,
-ID 기준 인수, 인수를 놓치면 슬롯 해제 순이다. 기반 클래스 `core.queue.worker.loop.QueueWorkerLoop`는
-패스 순서(회수, 취소, 수용, 대기), 셧다운 sweep, 시그널 핸들러만 담당하며 작업을
-프로세스가 딸린 레코드로만 안다. ORCA 워커는 대기 직전에 `_periodic_upkeep`을
-실행한다. 제출 알림을 보낸 뒤, 정리 주기가 되었고 종료 확정 재시도를 기다리는 회수된
-작업이 없으면 복구 패스를 실행한다. 따라서 한 번의 폴링 패스는 회수, 취소, 수용,
-주기 작업, 대기 순이다. 한 패스에서 일반 예외가 나면 기록한 뒤 폴링 간격
-후 그 패스를 다시 시도하며, 실행 중인 자식은 계속 감독한다. KeyboardInterrupt,
-SystemExit, 시작 실패는 이전처럼 워커를 끝낸다. 테스트는 워커의 `_start_background_process`와
+`OrcaQueueWorker`(`orca/queue/worker.py`)는 단일 큐 워커 서비스입니다. PID 파일과 단일
+실행 잠금의 수명주기, 실행 슬롯 예약(행을 ID로 인수하기 전에 슬롯을 먼저 예약하며,
+미리 읽은 행을 `expected_entry`로 사용), 자식 프로세스 구동 및 슬롯 연결, 종료 확정, 취소,
+셧다운, 고아 행 정리를 총괄합니다. `_admit_next`는 실행권 할당(admission) 절차를 순서대로
+수행합니다: 보류 디렉터리 확인, 발행 복구, 제출 알림, 가용 슬롯 확인, 미리 보기, 슬롯 예약,
+ID 기준 인수, 인수 실패 시 슬롯 해제 순입니다. 기반 클래스 `core.queue.worker.loop.QueueWorkerLoop`는
+루프 순서(회수, 취소, 수용, 대기), 셧다운 sweep, 시그널 핸들러를 관리하며 작업을
+프로세스 기반 레코드로만 다룹니다. ORCA 워커는 대기 직전에 `_periodic_upkeep`을
+실행합니다. 제출 알림을 보낸 뒤, 정리 주기가 되었고 종료 확정 재시도를 기다리는 회수
+작업이 없으면 복구 패스를 실행합니다. 따라서 한 번의 폴링 패스는 회수, 취소, 수용,
+주기 작업, 대기 순으로 진행됩니다. 특정 패스에서 일반 예외가 발생하면 로그를 남긴 후 다음
+폴링 간격에 해당 패스를 재시도하며, 실행 중인 자식 프로세스는 계속 감독합니다. `KeyboardInterrupt`,
+`SystemExit` 및 초기화 실패 시에는 워커를 즉시 종료합니다. 테스트는 워커의 `_start_background_process`와
 `sleep_fn`을 교체하고, 설정 탐색·`/dev/shm`·인수는 `tests/conftest.py`의 공용 fixture로
-다룬다([DEVELOPMENT](DEVELOPMENT.ko.md)). 주입되는 의존성 묶음은 없다. 부모 진입점은
-`python -m orca_auto.orca.commands.queue --config …`, 자식 진입점은
+다룹니다([DEVELOPMENT](DEVELOPMENT.ko.md)). 별도의 의존성 주입 프레임워크 없이 동작합니다. 부모 진입점은
+`python -m orca_auto.orca.commands.queue --config …`이며, 자식 진입점은
 `python -m orca_auto.orca.commands.worker_child --config … --queue-root …
---queue-id … [--admission-token …]`이다.
+--queue-id … [--admission-token …]`입니다.
 
-부모나 자식을 잃은 뒤의 복구는 워커가 소유한다. 복구 패스
-`_reconcile_worker_state`는 시작할 때와 그 뒤 최대 1분에 한 번 실행되며 단계를
-순서대로 적는다. 버려진 스냅숏 의도 정리(주기가 된 경우), 이 워커가 예약만 하고
-작업에 연결하지 못한 슬롯 해제(실패한 수용 패스가 남길 수 있다), 소유자가 죽은
-슬롯의 엔진 기록 복구, 큐 한 번 읽기, 오래된 슬롯 정리(살아 있는 슬롯이 가진 큐
-ID를 먼저 모은다), 고아 RUNNING 행 정리, 마지막으로 그 큐 읽기나 이전 패스 이후
-관찰된 모든 종료 전이를 재처리하는 `replay.reconcile_terminal_replays`다.
-재처리하지 못한 전이(generation 소유자가 모호하거나 부수 효과가 실패한 경우)는
-재처리 상태의 `retry_keys`에 남아 다음 패스에서 다시 시도하며, 처음부터 종료
-상태로 관찰된 행은 재처리하지 않는다.
+부모 또는 자식 프로세스가 비정상 종료된 후의 복구는 워커가 수행합니다. 복구 패스
+`_reconcile_worker_state`는 시작할 때와 그 뒤 최대 1분에 한 번 실행되며 다음 단계를
+순서대로 수행합니다: 버려진 스냅숏 의도 정리(주기가 된 경우), 워커가 예약 후
+작업에 연결하지 못한 슬롯 해제(실패한 할당 패스가 남긴 슬롯), 프로세스가 종료된
+슬롯의 엔진 기록 복구, 큐 1회 조회, 오래된 슬롯 정리(활성 슬롯이 보유한 큐
+ID를 먼저 취합), 고아 RUNNING 행 정리, 그리고 해당 큐 조회나 이전 패스 이후
+관찰된 모든 종료 전이를 재처리하는 `replay.reconcile_terminal_replays`입니다.
+generation 소유자가 모호하거나 후속 처리가 실패하여 재처리하지 못한 전이는
+재처리 상태의 `retry_keys`에 남아 다음 패스에서 다시 시도하며, 최초 관찰 시점부터
+이미 종료 상태였던 행은 재처리하지 않습니다.
 
-취소 관찰은 변경되지 않은 큐 스냅샷을 재사용한다. 실행을 마친 자식은 종료 상태와 보고서를 발행한 뒤 종료하고, 취소된 자식은 결과를 부모에게 맡깁니다. 부모가 큐의 종료 처리를 정리하고 작업·실행 ID가 일치하는 상태에서 완료 알림의 전송권을 기록합니다. 부모의 두 전송권 확보, 즉 디스크 큐 행의 접수 알림과 `job_state.json`의 종료 알림은 모두 `orca/queue/notifications.py`에 있습니다. 동시 전송 수가 제한된 백그라운드 전송기는 확보한 메시지만 전달하며, 실행 슬롯을 붙잡거나 전송 후 상태를 다시 쓰지 않습니다. 종료 처리를 반복해도 이미 전송권을 기록한 알림은 건너뛰며, 과거 전송 완료 표식도 인식합니다. 알림은 참고용이므로 전송권 기록 뒤 프로세스가 중단되거나 전송 실패·용량 부족이 발생하면 유실될 수 있고, 이를 재시도하거나 계산 결과를 변경하지 않습니다. 제출은 디스크 큐 항목에 `orca_queued_notification_pending`을 기록합니다. 위치 기록 발행 후 부모 워커가 큐 잠금 안에서 전송권을 확보하고 제출 알림을 별도로 전달하므로 CLI가 종료돼도 전송 전의 의도는 남습니다. 이 표시가 없는 과거 항목의 알림을 소급 전송하지 않습니다. 자식은 실행 중 상태를 저장한 뒤 시작 알림을 캡처해 별도로 전달하고 ORCA를 실행합니다. 세 알림은 같은 전송기를 사용하며 동시 전송 수는 프로세스당 4개입니다. 전송 실패·용량 부족·프로세스 종료로 참고용 메시지가 유실될 수 있고, 전송기는 실행 상태를 쓰지 않습니다. 제출 알림의 전송권 기록이 실패하면 전송을 건너뛰되 실행권 할당은 보류하지 않습니다.
+취소 여부 확인은 변경되지 않은 큐 스냅샷을 재사용합니다. 실행을 마친 자식은 종료 상태와 보고서를 발행한 뒤 종료하고, 취소된 자식은 결과를 부모에게 넘깁니다. 부모가 큐의 종료 처리를 정리하고 작업·실행 ID가 일치하는 상태에서 완료 알림의 전송권을 기록합니다. 부모의 두 전송권 확보, 즉 디스크 큐 행의 접수 알림과 `job_state.json`의 종료 알림은 모두 `orca/queue/notifications.py`가 처리합니다. 동시 전송 수가 제한된 백그라운드 전송기는 확보한 메시지만 전달하며, 실행 슬롯을 점유하거나 전송 후 상태를 다시 쓰지 않습니다. 종료 처리를 반복해도 이미 전송권을 기록한 알림은 건너뛰며, 과거 전송 완료 표식도 인식합니다. 알림은 참고용이므로 전송권 기록 뒤 프로세스가 중단되거나 전송 실패·용량 부족이 발생하면 유실될 수 있고, 이를 재시도하거나 계산 결과를 변경하지 않습니다. 제출 시에는 디스크 큐 항목에 `orca_queued_notification_pending`을 기록합니다. 위치 기록 발행 후 부모 워커가 큐 잠금 내에서 전송권을 확보하고 제출 알림을 별도로 전달하므로 CLI가 종료되어도 전송 의도는 보존됩니다. 이 표시가 없는 과거 항목의 알림을 소급 전송하지 않습니다. 자식은 실행 중 상태를 저장한 뒤 시작 알림을 별도로 전달하고 ORCA를 구동합니다. 세 알림은 동일한 전송기를 사용하며 동시 전송 수는 프로세스당 4개로 제한됩니다. 전송 실패나 프로세스 종료로 참고용 메시지가 유실될 수 있으며, 전송기는 실행 상태를 변경하지 않습니다. 제출 알림 전송권 기록이 실패해도 전송만 건너뛸 뿐 실행권 할당은 정상 진행됩니다.
 
-`core/queue`의 모듈 이름은 그 모듈을 실행하는 프로세스를 따른다. `worker/`(루프,
-여유 확인, PID 파일)와 `processes.py`(자식을 자기 세션으로 띄우고 프로세스 그룹을
-멈춤)는 부모 워커에서, `child.py`(셧다운 표시와 부모의 슬롯 연결 대기)는 워커
-자식에서 실행된다. 워커 자식도 `processes.py`로 셧다운 신호 처리기를 설치하고
-ORCA 프로세스 그룹을 멈춘다. `snapshot_intent.py`(enqueue 전 의도 기록)와
-`generation_owner.py`(generation 디렉터리의 소유자 xattr과 고정 핸들을 통한 삭제)는
-generation을 만들거나 인수하거나 복구하는 모든 프로세스가 쓴다.
+`core/queue`의 모듈 이름은 해당 모듈을 실행하는 프로세스에 대응합니다. `worker/`(루프,
+자원 확인, PID 파일) 및 `processes.py`(자식을 독립 세션으로 구동하고 프로세스 그룹을
+중지)는 부모 워커에서 실행되며, `child.py`(셧다운 표시 및 부모의 슬롯 연결 대기)는 워커
+자식에서 실행됩니다. 워커 자식도 `processes.py`를 통해 셧다운 신호 처리기를 등록하고
+ORCA 프로세스 그룹을 중지합니다. `snapshot_intent.py`(큐 등록 전 의도 기록)와
+`generation_owner.py`(generation 디렉터리의 소유자 xattr 및 핸들 기반 정리)는
+generation을 생성, 인수, 복구하는 모든 프로세스가 공통으로 사용합니다.
 
 워커 CLI는 설정 로드, PID 확인(`core/queue/worker/pid_file.py`의 `read_worker_pid_file`을
-쓰는 `existing_worker_pid`), ORCA 워커 생성·실행을 직접 수행한다. `orca_auto queue worker`도
-같은 `existing_worker_pid`로 두 번째 워커를 거부한 뒤, `cli_worker_supervision.py`가 그 워커
-프로세스 하나를 감독한다. 종료할 때마다 다시 시작하고, 시작 후 5초 안의 실패 종료가 두 번
-이어지거나 300초 안에 세 번 종료하면 멈추며, SIGTERM을 받으면 `worker_stop_budget_seconds`
-만큼 기다린 뒤 강제 종료한다. `systemd install`은 같은 예산으로 `TimeoutStopSec`을 렌더링한다. `orca/queue/roots.py`가 하나뿐인 큐 루트
-(`runtime.allowed_root`)를 해석하고 행 나열과 ID 기준 fenced 인수를 소유하며 큐 선두
-위치로 행을 인수하는 일은 없다.
-`orca/queue/entries.py`가 ORCA 행 식별과 하나뿐인 generation 식별을 소유한다. 쓰기
-fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 비교하고 각자 자기
-상태 조건만 더한다. 생명주기 메타데이터(대기 연기, 실행 ID, 재처리 표식과 fence,
-제출 알림 전송권, 발행 임대)는 식별에 들지 않으며, `job_state.json`의
-`queue_generation`은 그 해시다.
-`queue.json`은 `core/queue/store.py`의 `mutate_entries`만 쓰고, 재대기·종료 행은 모두
-`core/queue/transitions.py`의 `requeued_entry`·`terminal_entry`가 만든다.
-`tests/core/queue/test_ownership_guards.py`가 둘 다 강제한다.
-`queue/settlement.py`는 종료 정리 단계(작업 항목, 종료 표시, 준비, 결합, 발행, 표식
-제거)를, `queue/replay.py`는 재시작 재처리 파이프라인(정리할 종료 행과 디렉터리마다
-하나의 소유 generation 결정)만 담당하며, 둘 다 상태를 인자로 명시적으로 받는다.
-`queue/terminal_marker.py`는 지속 재처리 표식 형식, 표식이 기록하는 상태 fingerprint,
-그리고 종료 generation이 아직 디렉터리 상태를 소유하는지 판정하는 단 하나의 fail-closed 규칙
-`terminal_generation_verdict`를 담당한다. 재처리 사전 확인(`settlement.is_superseded`)은
-그 판정으로 generation을 버릴지 정하고, `run.lock` 아래에서 종료 `job_state.json`을 합성하는
-`queue/terminal_state.py`는 쓸지 거부할지 정한다. 각 경로는 선택한 큐 행과 작업 식별자를 구체적인 어댑터에 전달한다.
-종료 근거를 확정한 뒤 실행 슬롯을 해제하고, 파생 결과 발행은 복구 표식으로 같은 폴더를 보호하며 재시도한다. RUNNING 행 정리는 워커가 소유한다:
-제출은 큐 전체를 훑지 않으며, 살아 있는 워커 pid가 없을 때 자기 디렉터리의
-죽은 행만 복구한다.
+사용하는 `existing_worker_pid`), ORCA 워커 생성 및 실행을 직접 수행합니다. `orca_auto queue worker`도
+동일한 `existing_worker_pid`로 중복 워커 실행을 거부한 뒤, `cli_worker_supervision.py`가 해당 워커
+프로세스를 감독합니다. 종료 시 자동으로 재시작하되, 시작 후 5초 이내 실패 종료가 2회 연속
+발생하거나 300초 이내 3회 종료되면 재시작을 중단합니다. SIGTERM 수신 시에는 `worker_stop_budget_seconds`
+동안 정상 종료를 대기한 뒤 강제 종료합니다. `systemd install`은 동일한 제한 시간으로 `TimeoutStopSec`을 렌더링합니다. `orca/queue/roots.py`는 단일 큐 루트
+(`runtime.allowed_root`)를 해석하고 행 조회와 ID 기준 fenced 인수를 처리하며, 큐 선두
+위치 기반으로 행을 무조건 인수하지 않습니다.
+`orca/queue/entries.py`는 ORCA 행 식별자와 단일 generation 식별자를 관리합니다. 쓰기
+fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 비교하고 각자 필요한
+상태 조건만 추가로 검사합니다. 수명주기 메타데이터(대기 연기 사유, 실행 ID, 재처리 표식 및 fence,
+제출 알림 전송권, 발행 임대)는 식별자에 포함되지 않으며, `job_state.json`의
+`queue_generation`은 그 해시값입니다.
+`queue.json`은 `core/queue/store.py`의 `mutate_entries`만 수정할 수 있으며, 재대기 및 종료 행은 모두
+`core/queue/transitions.py`의 `requeued_entry`와 `terminal_entry`로만 생성합니다.
+`tests/core/queue/test_ownership_guards.py`가 이 불변 조건을 검증합니다.
+`queue/settlement.py`는 종료 정리 단계(작업 항목 준비, 종료 표시, 준비, 결합, 발행, 표식
+제거)를, `queue/replay.py`는 재시작 재처리 파이프라인(정리할 종료 행과 디렉터리별
+소유 generation 결정)을 담당하며, 둘 다 상태를 명시적인 인자로 전달받습니다.
+`queue/terminal_marker.py`는 영속 재처리 표식 형식, 표식이 기록하는 상태 fingerprint,
+그리고 종료 generation이 여전히 디렉터리 상태를 소유하는지 판정하는 fail-closed 규칙
+`terminal_generation_verdict`를 제공합니다. 재처리 사전 확인(`settlement.is_superseded`)은
+이 판정에 따라 generation을 건너뛸지 결정하고, `run.lock` 아래에서 종료 `job_state.json`을 기록하는
+`queue/terminal_state.py`는 갱신 여부를 판정합니다. 각 경로는 선택한 큐 행과 작업 식별자를 전용 어댑터에 전달합니다.
+종료 근거를 확정한 뒤 실행 슬롯을 해제하며, 후속 결과 발행은 복구 표식으로 동일 디렉터리를 보호하면서 재시도합니다. RUNNING 행 정리는 워커가 소유합니다:
+제출 프로세스는 큐 전체를 순회하지 않으며, 살아 있는 워커 PID가 없을 때 자신의 디렉터리에
+남은 비정상 행만 복구합니다.
 
-ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행권 인계 대기,
-해당 generation 실행을 직접 수행한다. 검증한 입력, 제출된 자원 요청, 실행 스냅샷,
-큐 식별자는 인수한 행에서 한 번 만든 `RunExecutionContext` 하나로 실행 단계에 바로
-전달되며, RAM scratch 크기도 그 요청으로 정한다. `execute_locked_run`은 이를 한 흐름으로
-실행한다: `run.lock`, `recover_crashed_state`, 아래의 슬롯 규칙, 그다음 generation의
-완료 출력 채택 또는 실행마다 하나뿐인 `OrcaRunner`. 그 생성자가 실행에 쓰는 것을 모두
-밝힌다: 스냅샷의 실행 파일과 그 식별자, generation 디렉터리와 그 식별자, 중지 요청,
-RAM scratch 정책, 슬롯의 엔진 프로세스 준비·등록 함수, 그리고 실행 전후마다 부르는
-스냅샷 검증 함수. runner는 첫 상태 기록 전에 RAM scratch를 예약하고, 실행은 시도를
-한 번만 한다([ADR 0002](adr/0002-no-automatic-retry-of-failed-calculations.md)).
-`attempt/run.run_attempt`는 재개한 상태를 기록된 시도로 마무리하거나, 그렇지 않으면
-실행 시작을 기록하고 시작 알림을 보낸 뒤 고정된 입력으로 ORCA를 한 번 실행하고, 종료
-코드와 맞춘 분석 판정(`out_analyzer.apply_exit_code`)과 함께 시도를 기록한 다음 종료
-결과, 보고서, 실행 요약을 발행한다(`attempt/reporting.exit_with_result`). 재개는 새
-generation으로의 재바인딩으로만 일어난다([ADR 0009](adr/0009-resume-only-by-rebind.md)):
-실행 시작 근거가 있는 generation의 인수는 완료 출력으로 마무리되지 않는 한 실행 전에
-재바인딩되므로, 한 generation에서 ORCA가 두 번 실행되지 않는다. Ctrl-C를 포함한 워커
-종료나 취소는 시도를 `WorkerShutdownInterrupt`로 멈춘다.
+ORCA 자식 프로세스는 큐 항목 조회, 중단된 generation 복구, 부모의 실행권 인계 대기,
+해당 generation 실행을 직접 수행합니다. 검증된 입력, 제출된 자원 요청, 실행 스냅샷,
+큐 식별자는 인수한 행에서 생성한 단일 `RunExecutionContext`로 실행 단계에 직접
+전달되며, RAM scratch 크기도 이 요청에 따라 결정됩니다. `execute_locked_run`은 이를 단일
+흐름으로 실행합니다: `run.lock`, `recover_crashed_state`, 슬롯 규칙, generation의
+완료 출력 채택 또는 단일 `OrcaRunner` 실행 순입니다. `OrcaRunner`의 생성자는 실행에 필요한
+모든 요소를 명시적으로 전달받습니다: 스냅샷의 실행 파일 및 식별자, generation 디렉터리 및
+식별자, 중지 요청 플래그, RAM scratch 정책, 슬롯의 엔진 프로세스 등록 함수, 실행 전후
+스냅샷 검증 함수입니다. 러너는 첫 상태 기록 전에 RAM scratch를 예약하며, 실행 시도는 단
+1회만 수행합니다([ADR 0002](adr/0002-no-automatic-retry-of-failed-calculations.md)).
+`attempt/run.run_attempt`는 재개된 상태를 기록된 시도로 마무리하거나, 새 실행의 경우
+실행 시작 기록 및 시작 알림 발송 후 고정된 입력으로 ORCA를 1회 실행합니다. 이후 종료
+코드 기반 분석(`out_analyzer.apply_exit_code`)과 함께 시도 결과를 기록하고, 종료
+결과, 보고서, 실행 요약을 발행합니다(`attempt/reporting.exit_with_result`). 중단된 작업의 재개는
+새 generation으로의 재바인딩을 통해서만 이루어집니다([ADR 0009](adr/0009-resume-only-by-rebind.md)):
+실행 시작 근거가 남아 있는 generation은 완료 출력이 확인되지 않는 한 실행 전에
+새 generation으로 재바인딩되므로, 동일 generation에서 ORCA가 중복 실행되지 않습니다. Ctrl-C를
+비롯한 워커 종료나 취소 요청은 `WorkerShutdownInterrupt`로 시도를 즉시 중단합니다.
 
-자식이 실행권 슬롯을 바꾸는 일은 모두 `execution._child_admission_slot` 규칙 하나를
-거친다. 자식은 슬롯을 활성화하고, 실행이 정상 반환하면 엔진 프로세스를 완료 처리하며,
-예외가 나면 슬롯을 그대로 둔다. 자식이 해제하는 슬롯은 활성화 시점에 살아 있지 않은
-슬롯뿐이다. 성공·중단·예외 모두 슬롯 해제는 자식이 끝난 뒤 부모가 한다.
-`tests/core/queue/test_ownership_guards.py`는 모든 슬롯 변경을 이 소유자로
-제한한다. 슬롯 하나의 생명주기:
+자식이 실행권 슬롯 상태를 변경하는 작업은 모두 `execution._child_admission_slot` 단일 규칙을
+따릅니다. 자식은 슬롯을 활성화하고 실행이 정상 완료되면 엔진 프로세스를 완료 처리하며,
+예외 발생 시에는 슬롯 상태를 유지합니다. 자식이 해제하는 슬롯은 활성화 시점에 프로세스가
+살아 있지 않은 슬롯뿐입니다. 정상 종료, 중단, 예외 상황 모두 슬롯의 최종 해제는 자식이
+종료된 후 부모 워커가 담당합니다. `tests/core/queue/test_ownership_guards.py`가 모든 슬롯 상태
+변경이 이 소유자 경계를 준수하는지 검증합니다. 슬롯 수명주기:
 
 | 단계 | 기록 주체 | `state` | `engine_process_state` |
 |---|---|---|---|
@@ -313,20 +313,20 @@ generation으로의 재바인딩으로만 일어난다([ADR 0009](adr/0009-resum
 | 실행 반환 뒤 완료 처리 | 자식 | `active` | `idle` |
 | 엔진 기록 복구 후 해제 | 부모 | 삭제 | 삭제 |
 
-`recover_crashed_state`(`attempt/resume.py`)는 중단된 실행이 `running`으로 남긴 루트
-`job_state.json`을 닫으며, 두 곳에서 각각 `run.lock` 아래에서 실행된다. 중단 복구 재바인딩
-(`recovery_rebind.py`, 자식이 이미 읽은 설정을 사용)은 대체 generation을 만들기 전에
-호출해, 새 generation이 생기기 전에 고정된 시도를 중단으로 기록한다.
-`execute_locked_run`은 실행 직전에 다시 호출해 재바인딩하지 않은 인수(실행 시작 근거가
-없거나 채택할 완료 출력이 있는 경우)를 처리하며, 재바인딩 뒤에는 복구할 것이 없어 아무것도
-쓰지 않는다. 둘 다 루트 상태를 읽고 고쳐 쓰므로 살아 있는 ORCA 실행과 부모의 종료
-상태 기록기에 대해 각각 `run.lock`을 잡는다.
+`recover_crashed_state`(`attempt/resume.py`)는 중단된 실행이 `running` 상태로 남긴 루트
+`job_state.json`을 정리하며, 두 지점 모두 `run.lock` 보호 아래에서 실행됩니다. 중단 복구 재바인딩
+(`recovery_rebind.py`, 자식이 읽은 설정을 재사용)은 대체 generation을 생성하기 전에
+호출되어, 새 generation이 생성되기 전에 기존 시도를 중단 상태로 명시합니다.
+`execute_locked_run`은 실행 직전에 이를 다시 호출하여 재바인딩을 거치지 않은 작업(실행 시작 근거가
+없거나 채택할 완료 출력이 있는 경우)을 처리하며, 재바인딩 이후에는 추가 복구 작업 없이
+반환됩니다. 두 경로 모두 루트 상태를 조회하고 갱신하므로 실행 중인 ORCA 프로세스 및 부모의 종료
+상태 처리기와의 동시 접근을 방지하기 위해 `run.lock`을 획득합니다.
 
 ---
 
 ## 5. 운영 아키텍처
 
-- **큐 카탈로그**: `queue list`와 `queue cancel`은 카탈로그 하나(`activity/_orca.catalog`)를 함께 씁니다. `queue.json`의 ORCA 행마다 자기 디렉터리의 루트 `job_state.json`이 그 행의 실행이나 generation에 속할 때만 붙입니다. 재귀 스캔도 `job_locations.json` 읽기도 없으며, 큐 행이 없는 실행 상태는 목록에 나오지 않습니다. `queue cancel`은 이 카탈로그에서 대상을 한 번만 해석합니다(`activity/_cancel.target_rows`). 살아 있는 run lock이 없는 `running` 행을 `pending`으로 보이는 규칙은 CLI 계층이 아니라 `orca/run_status.py`에 있습니다. `job_locations.json`은 디스크의 실행 상태에서 `index rebuild`로 재구성할 수 있습니다([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)).
+- **큐 카탈로그**: `queue list`와 `queue cancel`은 공통 카탈로그(`activity/_orca.catalog`)를 공유합니다. `queue.json`의 각 행에 대응하는 작업 디렉터리의 루트 `job_state.json`이 해당 행의 실행 또는 generation에 속할 때만 연결합니다. 재귀 스캔도 `job_locations.json` 읽기도 없으며, 큐 행이 없는 실행 상태는 목록에 나오지 않습니다. `queue cancel`은 이 카탈로그에서 대상을 한 번만 해석합니다(`activity/_cancel.target_rows`). 살아 있는 run lock이 없는 `running` 행을 `pending`으로 보이는 규칙은 CLI 계층이 아니라 `orca/run_status.py`에 있습니다. `job_locations.json`은 디스크의 실행 상태에서 `index rebuild`로 재구성할 수 있습니다([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)).
 - **Scratch 운영 명령**: `orca_auto scratch list`와 `scratch clear`로 비활성(non-live) RAM scratch 워크스페이스를 점검·제거합니다. stale, unverifiable, invalid-manifest 워크스페이스가 하나라도 남아 있으면 이후의 모든 scratch 실행이 차단(fail-closed)됩니다.
 - **불변 휠 런타임 (Prepared Wheel Runtime)**: 프로덕션 서버 환경에서는 Git 체크아웃 대신 검증된 불변 wheel 런타임을 배포하여, 체크아웃 변경이나 의존성 혼선 없이 운영 환경을 격리합니다 ([docs/RUNTIME.md](RUNTIME.md)).
 

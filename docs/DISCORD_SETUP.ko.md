@@ -2,7 +2,7 @@
 
 [English](DISCORD_SETUP.md) | **한국어**
 
-ORCA_auto는 Discord 봇을 통해 작업 제출 및 계산 완료 시 지정된 채널로 알림 메시지를 전송할 수 있습니다. 봇은 메시지 발신 전용으로 동작합니다.
+ORCA_auto는 Discord 봇으로 작업 큐 등록 및 계산 완료 알림을 지정 채널에 전송합니다. 봇은 메시지 발신 전용입니다.
 
 ## 1. 봇 생성 및 서버 초대
 
@@ -41,7 +41,7 @@ messenger:
 chmod 600 ~/orca_auto/config/orca_auto.yaml
 ```
 
-대화형으로 설정하려면 `orca_auto init` 명령을 실행하여 설정할 수도 있습니다.
+`orca_auto init` 명령으로 대화형 설정을 진행할 수도 있습니다.
 
 ## 4. 서비스 적용 및 테스트
 
@@ -63,5 +63,5 @@ orca_auto run-dir <job_path>
 
 ## 문제 해결
 
-- **채널에 알림이 오지 않는 경우**: 봇이 해당 채널에 초대되어 있는지, 그리고 `Send Messages` 및 `Embed Links` 권한이 허용되어 있는지 확인하세요.
+- **채널에 알림이 오지 않을 때**: 봇이 해당 채널에 초대되어 있는지, Send Messages 및 Embed Links 권한이 허용되어 있는지 확인하세요.
 - **잘못된 토큰 오류**: Developer Portal에서 봇 토큰을 재발급(Reset Token)받아 `~/orca_auto/config/orca_auto.yaml`에 반영한 뒤 서비스를 재시작하세요.

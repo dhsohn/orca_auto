@@ -41,7 +41,7 @@ python -m pip install orca_auto==9.0.0
 - **ORCA_auto**: 계산 큐 및 백그라운드 실행 관리
 - [LLMdocx](https://github.com/dhsohn/LLMdocx): 연구 보고서 및 논문 문서화 도구
 
-각 도구는 독립적으로 동작하는 로컬 우선(Local-first) 연구 도구로, 표준 형식(`machine.json`, 결과 번들 등)으로 연결됩니다.
+각 도구는 독립적인 로컬 우선(Local-first) 연구 도구이며, 표준 형식(`machine.json`, 결과 번들, 입력 파일)으로 연계됩니다.
 [도구 간 연결 방식 →](https://github.com/dhsohn/orca_auto/blob/v9.0.0/docs/RELATED_WORK.md#local-first-companion-tools)(영어)
 
 ## 문서

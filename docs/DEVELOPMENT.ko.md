@@ -61,7 +61,7 @@ bash examples/fake_orca_smoke/run.sh
 인터프리터는 건너뛰며, 조건을 만족하는 것이 없으면 거부한 목록을 보여 주고
 실패합니다. 인터프리터를 직접 지정하려면 `PYTHON_BIN=/path/to/python3.11`을 설정합니다. 린트 전에는 `orca_auto`가
 이 체크아웃의 `src/`에서 임포트되는지도 확인하며, `PYTHONPATH`가 다른 트리를
-가리키는 경우처럼 그렇지 않으면 중단합니다. 이때는 `PYTHONPATH`를 해제하거나
+가리키는 등 그렇지 않은 상황에서는 중단합니다. 이때는 `PYTHONPATH`를 해제하거나
 `.venv`를 다시 만듭니다.
 
 `machine.json` 적합성 테스트는 `.github/workflows/ci.yml`에 고정된
@@ -72,7 +72,7 @@ bash examples/fake_orca_smoke/run.sh
 CI와 릴리스 검사는 클론을 준비하고, `make check`는 개발 의존성과 함께
 `jsonschema`를 설치합니다. CI의 고정 커밋을 바꾸면 로컬 클론도 fetch합니다.
 
-- **단위/통합 테스트**: 실제 ORCA 대신 가짜 엔진과 격리된 임시 fixture(`tmp_path`)를 활용하므로, 로컬 머신에 ORCA가 없어도 전체 테스트를 실행할 수 있습니다.
+- **단위/통합 테스트**: 실제 ORCA 대신 가짜 엔진과 격리된 임시 fixture(`tmp_path`)를 사용하므로, 로컬 머신에 ORCA가 없어도 전체 테스트를 실행할 수 있습니다.
 - **테스트 배치**: 테스트는 `src/orca_auto`의 구조를 따릅니다. 모듈의 테스트는 그 모듈 이름을 따르고 소속 패키지에 대응하는 디렉터리에 둡니다. `orca_auto/core/<pkg>/`는 `tests/core/<pkg>/`, `orca_auto/orca/<pkg>/`는 `tests/orca/<pkg>/`, `core/`나 `orca/` 바로 아래의 모듈은 `tests/core/`나 `tests/orca/`, `orca_auto/activity/`는 `tests/activity/`, 최상위 CLI와 표시 모듈은 `tests/cli/`(systemd 명령은 `tests/cli/systemd/`)에 있습니다. 예를 들어 `orca_auto/orca/queue/adapter.py`의 테스트는 `tests/orca/queue/test_adapter.py`이고, 큐 워커 테스트는 관심사별로 `tests/orca/queue/test_worker_*.py`로 나뉩니다. `tests/integration/`은 여러 계층을 가로지르는 흐름, `tests/tooling/`은 저장소 스크립트·git hook·패키징·릴리스 메타데이터 검사, `tests/contracts/`는 골든과 규칙 고정 표를 담습니다. 여러 디렉터리가 함께 쓰는 헬퍼 모듈(`conftest.py`, `*_helpers.py`)은 `tests/` 최상위에 두고, 한 디렉터리 안에서만 쓰는 fixture는 그 디렉터리의 `conftest.py`에 둡니다. 테스트 디렉터리에는 `__init__.py`가 없습니다. `pytest.ini`의 `--import-mode=importlib` 덕분에 `tests/core/queue/test_store.py`와 `tests/core/admission/test_store.py`처럼 서로 다른 디렉터리에 같은 이름의 테스트 파일을 둘 수 있습니다.
 - **공용 fixture**: `tests/conftest.py`가 가짜 ORCA 실행 파일, `AppConfig`/`orca_auto.yaml`, 큐 항목, 실행 상태 fixture와 그 기반 빌더를 제공합니다. 새 테스트는 이를 다시 만들지 않고 가져다 씁니다. 모든 테스트는 설정 탐색이 격리된 채로(`ORCA_AUTO_CONFIG` 제거, `HOME`을 빈 디렉터리로 이동) 실행되므로, 테스트나 테스트가 띄운 자식 프로세스가 실제 `~/orca_auto` 설정을 읽지 않습니다. `fake_shm`은 RAM scratch의 `/dev/shm` 제한 경로를 `tmp_path` 아래로 옮기고, `claim_next_entry`는 워커의 `dequeue_next_entry`로 행을 가져옵니다. `make_run_context`는 제출 스냅샷 없이 `RunExecutionContext`를 만들어 runner나 그 `run`, 실행을 바꾸는 테스트에 쓰고, `bound_run_context`는 `run-dir`과 같은 방식으로 바인딩한 입력에 대한 워커 자식의 컨텍스트를 만들며, `make_orca_runner`는 실행 파일을 내용으로 고정하고 스냅샷 검증과 실행권 콜백은 아무 일도 하지 않는 `OrcaRunner`를 만듭니다. `tests/orca_output_helpers.py`는 보고서 테스트가 함께 쓰는 합성 ORCA 입력과 출력(최적화, NEB-TS, relaxed scan, IRC, single point, SI)을 모아 둡니다.
 - **마커**: 모든 테스트에서 `os.fsync`/`os.fdatasync`는 no-op이며 `@pytest.mark.real_fsync`를 붙인 테스트만 예외입니다. `@pytest.mark.slow`는 격리된 인터프리터에 패키지를 스테이징하는 테스트를 표시합니다.

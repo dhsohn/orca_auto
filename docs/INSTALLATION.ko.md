@@ -56,9 +56,9 @@ orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config 
 orca_auto service status
 ```
 
-> **참고**: systemd 없이 대화형 세션이나 스크립트로 직접 실행하려면, `orca_auto run-dir`로 작업을 제출하고 포그라운드 워커(`orca_auto queue worker`)를 직접 실행할 수 있습니다.
+> **참고**: systemd 없이 대화형 세션이나 스크립트로 직접 실행하려면, `orca_auto run-dir`로 작업을 제출하고 포그라운드 워커(`orca_auto queue worker`)를 직접 실행합니다.
 
-이후 작업 제출 방법은 [빠른 시작 가이드](QUICKSTART.ko.md)를 참고합니다.
+작업 제출 방법은 [빠른 시작 가이드](QUICKSTART.ko.md)를 참고합니다.
 
 ---
 
@@ -70,7 +70,7 @@ orca_auto service status
 
 ## 4. 개발 환경 설치 (소스 체크아웃)
 
-코드 기여 및 개발을 위해 저장소를 직접 클론하여 설치하는 경우:
+소스 코드를 직접 클론하여 개발 환경을 구성할 때:
 
 ```bash
 git clone https://github.com/dhsohn/orca_auto.git
