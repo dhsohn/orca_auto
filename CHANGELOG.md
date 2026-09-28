@@ -6,9 +6,9 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
-## [Unreleased]
+## [9.0.0] - 2026-09-28
 
-The next release is a major release, 9.0. The entries marked *public contract*
+Version 9.0 is a major release. The entries marked *public contract*
 change configuration, CLI output, on-disk state and the upgrade and rollback
 procedure; upgrading needs an idle window (`active_simulations: 0`). See
 [Upgrading to 9.0](docs/RELEASE.md#upgrading-to-90).
@@ -99,6 +99,10 @@ procedure; upgrading needs an idle window (`active_simulations: 0`). See
   receipts themselves. Published reports are unchanged.
 
 ### Fixed
+
+- PID lookups no longer delete a newly published worker PID file during a
+  concurrent restart. Readers preserve stale or unverifiable files; the worker
+  replaces and removes its file under its lifetime lock ([ADR 0011](docs/adr/0011-read-only-pid-lookups.md)).
 
 - Constrained optimizations, including geometry constraints, fixed or rigid
   fragments and hydrogen restrictions, now report as partial optimizations
