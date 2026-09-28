@@ -36,7 +36,7 @@ graph TD
 
 | 패키지/모듈 | 주요 역할 및 책임 |
 | :--- | :--- |
-| **`cli.py`, `cli_parsers.py`, `cli_handlers.py`, `cli_run_dir.py`, `cli_queue.py`, `cli_index.py`, `cli_scratch.py`, `cli_workers.py`, `cli_worker_supervision.py`** | 명령어 파싱과 명령 묶음마다 처리 모듈 하나. 닫힌 stdout 파이프는 `cli.main` 한 곳에서만 처리합니다. 명령이 설정 파일과 `runs_root`를 찾고 (한 번) 읽고 확인하며 빠진 것을 알리는 곳은 `cli_handlers.resolve_command_config` 하나입니다. `cli_run_dir`는 `run-dir` 대상을 inode 하나로 고정하고, `cli_workers`는 두 번째 워커를 거부하며 `cli_worker_supervision`은 워커 프로세스 하나를 다시 시작하고 멈춥니다 |
+| **`cli.py`, `cli_parsers.py`, `cli_handlers.py`, `cli_run_dir.py`, `cli_queue.py`, `cli_index.py`, `cli_scratch.py`, `cli_workers.py`, `cli_worker_supervision.py`** | 명령어 파싱과 명령 묶음마다 처리 모듈 하나. 닫힌 stdout 파이프는 `cli.main` 한 곳에서만 처리합니다. `cli_handlers.resolve_command_config`는 공통 명령 설정을 읽고 확인하며 빠진 것을 알립니다. `cli_run_dir`는 전체 ORCA 설정을 한 번 읽어 같은 객체를 대상 검증과 큐 제출에 전달합니다. 또한 `run-dir` 대상을 inode 하나로 고정하고, `cli_workers`는 두 번째 워커를 거부하며 `cli_worker_supervision`은 워커 프로세스 하나를 다시 시작하고 멈춥니다 |
 | **`activity/`, `activity_labels.py`, `activity_rendering.py`, `terminal.py`, `terminal_table.py`** | 큐 카탈로그(`activity/_orca.catalog`), 취소 대상 규칙(`activity/_cancel.target_rows`), 출력 표시. `activity_labels`가 큐 표의 각 칸을 만들고, `activity_rendering.queue_list_table`이 `queue list` 텍스트 출력 전체를 돌려주며 `cli_queue`는 TTY용과 일반용 스타일만 고릅니다. 상태별 아이콘과 색 하나씩은 `terminal.py`에, 표시 폭 계산은 `terminal_table.py`에 있습니다. 상태 묶음은 `core/statuses.py`에 있습니다 |
 | **`cli_systemd_*.py`, `systemd_plan.py`, `_process_evidence.py`** | `systemd install`, `service status`, `service restart`. 아래에서 위로 쌓이며 import-linter가 강제합니다: 유닛 계획(`systemd_plan`), 유닛 렌더링(`cli_systemd_units`), 유닛과 `/proc` 읽기(`cli_systemd_evidence`), 최신성 판정(`cli_systemd_freshness*`), 실행권 저장소 하나에 대한 유휴 전용 재시작 가드(`cli_systemd_restart_guard`), 그 위의 명령 소유 모듈(`cli_systemd_apply`, `cli_systemd_restart`, `cli_systemd_status`). `_process_evidence`는 워커가 시작한 import 출처를 기록합니다 |
 | **`orca/`** | ORCA 전용 로직: 입력 파일(`.inp`) 파싱 및 자원 판별, 실행 준비, 큐 워커 및 프로세스 구동, 출력 로그 분석 및 수렴 판정, 결과 보고서(`machine.json`) 생성 |
@@ -47,6 +47,8 @@ graph TD
 > **아키텍처 특징**: 엔진은 ORCA 하나이며, 작업 하나는 독립된 ORCA 입력 디렉터리 하나입니다. 워크플로우 계층은 없습니다([ADR 0005](adr/0005-remove-retired-workflow-support.md)).
 
 ---
+
+큐 행은 `core/queue/persistence.entry_from_dict`에서 디스크 경계를 통과하며, 이곳에서 스키마를 검증하고 식별자·상태·우선순위를 정규화합니다. 내부에서는 타입이 정해진 `QueueEntry` 필드를 직접 읽습니다. `orca/queue/entries`는 generation 식별과 타입이 정해지지 않은 metadata 해석을 맡고, metadata 사본 함수는 원본 행을 바꾸지 않는 갱신을 보장합니다. `effective_queue_status`는 취소 요청 중인 행의 표시 규칙만 더합니다. 영속 ORCA 식별 문자열은 `orca/app_ids.py`의 상수이며 엔진 카탈로그는 없습니다.
 
 ## 3. 소유 지도
 
@@ -170,13 +172,15 @@ graph TD
 
 선택된 입력의 작업 종류는 규칙 하나로 정합니다. `completion_rules.route_facts`가 `.inp`를 읽어 route 줄과 플래그(TS, IRC, NEB-TS, 전체·부분 최적화, relaxed scan(`%geom Scan` 블록이 있는 최적화), 비정류 경로·동역학)를 기록합니다. 분석기의 완료 모드, HTML 보고서 구성(`report/composer.py`), 구조 종류(`evidence.structure_kind`), SI 작성(`report/si.py`)이 모두 이 기록에서 나오므로 같은 입력을 서로 다르게 분류할 수 없습니다. 입력은 호출하는 쪽마다 직접 읽습니다. 완료 모드, HTML 작성기, SI 작성기가 각각 `route_facts`를 호출하고, relaxed scan 보고서는 scan 좌표를 얻으려고 입력을 한 번 더 읽습니다. 작업 유형 표시(`job_type.detect_job_type`)와 입력이 요청하는 실행 산출물 판정(`execution_binding/_inputs.py`)은 같은 키워드 규칙에 자체 규칙 몇 개를 더해 route 줄을 따로 분류합니다. 보고서 조립기는 작업 상태로부터 페이지마다 `ReportHeader` 하나(제목, 상태와 사유, route 줄, 시각, 마지막 출력)를 만들어 Opt, SP, relaxed scan, NEB-TS, IRC 각 구성 요소의 수집기에 넘깁니다. 각 구성 요소는 두 가지 사실로 `ReportComponent` 하나(종류 이름, 배지, 메타 줄, 지표 카드, 섹션)를 만듭니다. 하나는 주 구성 요소인지 여부로, 주 구성 요소가 페이지 이름을 정하고 attempt 기록을 혼자 싣습니다. 다른 하나는 IRC 구성 요소가 있는지 여부로, 있으면 진동 요약을 IRC 쪽이 보여 줍니다. IRC 구성 요소 자신은 대신 다른 구성 요소가 최적화 추이를 이미 보여 주는지를 받습니다.
 
+기하 제약, 고정·강체 fragment, 수소만 최적화하거나 수소를 고정하는 설정, `RigidBodyOpt`는 최적화 좌표를 제한합니다. 이런 제약이 있는 비-TS 최적화는 부분 최적화로 분류하고 전체 표면의 최소점이라고 주장하지 않습니다. 빈 제약 블록과 명시적으로 false인 수소 설정은 제약으로 보지 않습니다. 릴리스 smoke의 테스트 검증기는 생성기와 독립적으로 SHA-256과 바이트 수를 계산합니다.
+
 | 작업 종류 | HTML 보고서 구성 요소(페이지 종류) | SI 블록(완료된 작업) |
 | :--- | :--- | :--- |
 | NEB-TS, ZOOM-NEB-TS | NEB-TS (`NEB-TS`) | TS 구조 |
 | Relaxed scan: `%geom Scan` 블록이 있는 최적화 | Relaxed scan (`Relaxed scan`) | 없음 |
 | OptTS | Opt (`TS`) | TS 구조 |
 | 전체 최적화: `Opt`, `TightOpt`, `COpt` 등 | Opt (`Opt`) | 최소점 구조 |
-| 부분 최적화: `OptH`, `MECP-Opt` 등 | Opt (`Partial Opt`) | 최소점·TS 주장이 없는 구조 |
+| 부분 최적화: `OptH`, `MECP-Opt`, 제약이 있는 `Opt` 등 | Opt (`Partial Opt`) | 최소점·TS 주장이 없는 구조 |
 | `IRC`가 붙은 모든 종류 또는 `IRC` 단독 | IRC 구성 요소 추가. NEB-TS나 relaxed scan이 없으면 IRC가 페이지 이름(`IRC`)을 정함 | 대신 IRC 검증 요약 |
 | 일반 NEB / NEB-CI, MD | 보고서 없음 | 없음 |
 | 단일점, `Freq` 단독, 그 밖의 입력 | SP (`SP`) | 최소점·TS 주장이 없는 구조 |

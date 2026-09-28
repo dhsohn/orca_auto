@@ -888,15 +888,15 @@ def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> No
     assert created.engine == "orca"
 
 
-def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) -> None:
+def test_loaded_queue_fields_are_normalized_and_metadata_copy_is_detached(tmp_path: Path) -> None:
     entry = queue_persistence.entry_from_dict(
         {
-            "queue_id": "q_meta",
-            "app_name": "orca_auto_orca",
-            "task_id": "task_meta",
+            "queue_id": " q_meta ",
+            "app_name": " orca_auto_orca ",
+            "task_id": " task_meta ",
             "task_kind": "orca_run_inp",
             "engine": "orca",
-            "status": "PENDING",
+            "status": " PENDING ",
             "priority": 7,
             "enqueued_at": "2026-03-10T00:00:00+00:00",
             "started_at": "",
@@ -910,14 +910,17 @@ def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) 
         }
     )
 
-    assert queue_entries.queue_entry_id(entry) == "q_meta"
-    assert queue_entries.queue_entry_task_id(entry) == "task_meta"
-    assert queue_entries.queue_entry_status(entry) == QueueStatus.PENDING.value
-    assert queue_entries.queue_entry_priority(entry) == 7
+    assert entry.queue_id == "q_meta"
+    assert entry.task_id == "task_meta"
+    assert entry.status is QueueStatus.PENDING
+    assert entry.priority == 7
     assert queue_entries.queue_entry_force(entry) is True
-    assert queue_entries.queue_entry_app_name(entry) == "orca_auto_orca"
+    assert entry.app_name == "orca_auto_orca"
     assert queue_entries.queue_entry_reaction_dir(entry) == str(tmp_path / "rxn")
-    assert queue_entries.queue_entry_metadata(entry)["reaction_dir"] == str(tmp_path / "rxn")
+    metadata = queue_entries.queue_entry_metadata(entry)
+    assert metadata["reaction_dir"] == str(tmp_path / "rxn")
+    metadata["force"] = False
+    assert entry.metadata["force"] is True
 
 
 def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> None:

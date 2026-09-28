@@ -8,8 +8,6 @@ import sys
 import venv
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHECK_SCRIPT = REPO_ROOT / "scripts" / "check.sh"
 
@@ -114,14 +112,6 @@ def _run_discovery_check(
 
 
 _SYSTEM_PYTHON_DIRS = (Path("/usr/local/bin"), Path("/opt/homebrew/bin"), Path("/opt/conda/bin"))
-
-
-def _system_dirs_have_python() -> bool:
-    return any(
-        (directory / name).exists()
-        for directory in _SYSTEM_PYTHON_DIRS
-        for name in ("python3.13", "python3.12", "python3.11", "python3")
-    )
 
 
 def _run_check(
@@ -348,9 +338,15 @@ def test_discovers_suitable_interpreter_outside_minimal_path(tmp_path: Path) -> 
 
 
 def test_reports_rejected_interpreters_when_none_is_suitable(tmp_path: Path) -> None:
-    if _system_dirs_have_python():
-        pytest.skip("a system python location is populated; discovery could succeed")
     repo, script = _copy_check_script(tmp_path)
+    # Redirect only host-specific search roots in the disposable script. The
+    # discovery loop and rejection path still run even when CI has Python installed.
+    source = script.read_text(encoding="utf-8")
+    for index, directory in enumerate(_SYSTEM_PYTHON_DIRS):
+        needle = f"\n  {directory}\n"
+        assert source.count(needle) == 1
+        source = source.replace(needle, f'\n  "{tmp_path / f"empty-system-{index}"}"\n')
+    script.write_text(source, encoding="utf-8")
     home = tmp_path / "home"
     local_bin = home / ".local" / "bin"
     local_bin.mkdir(parents=True)

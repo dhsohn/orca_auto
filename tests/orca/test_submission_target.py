@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from orca_auto.orca.config import load_config
 from orca_auto.orca.submission import resolve_submission_target, select_latest_inp
 from tests.conftest import make_app_cfg, write_config_file, write_fake_orca
 
@@ -60,7 +61,9 @@ def test_submission_target_is_the_newest_input_under_the_allowed_root(tmp_path: 
     reaction.mkdir()
     (reaction / "r1.inp").write_text("! SP\n", encoding="utf-8")
 
-    target = resolve_submission_target(SimpleNamespace(config=config, path=str(reaction)))
+    target = resolve_submission_target(
+        SimpleNamespace(config=config, path=str(reaction)), cfg=load_config(config)
+    )
 
     assert target is not None
     assert target.reaction_dir == reaction.resolve()
@@ -89,6 +92,11 @@ def test_submission_target_refusal_is_logged_and_returns_none(
         path.mkdir()
 
     with caplog.at_level(logging.ERROR, logger="orca_auto.orca.submission"):
-        assert resolve_submission_target(SimpleNamespace(config=config, path=str(path))) is None
+        assert (
+            resolve_submission_target(
+                SimpleNamespace(config=config, path=str(path)), cfg=load_config(config)
+            )
+            is None
+        )
 
     assert message in caplog.text

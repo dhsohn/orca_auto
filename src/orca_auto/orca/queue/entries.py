@@ -146,35 +146,12 @@ def queue_entry_run_id(entry: QueueEntry) -> str | None:
     return normalize_optional_text(entry.metadata.get("run_id"))
 
 
-def queue_entry_id(entry: QueueEntry) -> str:
-    return normalize_text(entry.queue_id)
-
-
-def queue_entry_task_id(entry: QueueEntry) -> str | None:
-    task_id = normalize_text(entry.task_id)
-    return task_id or None
-
-
-def queue_entry_status(entry: QueueEntry) -> str:
-    if isinstance(entry.status, QueueStatus):
-        return entry.status.value
-    return normalize_text(entry.status).lower()
-
-
 def queue_entry_reaction_dir(entry: QueueEntry) -> str:
     return normalize_text(entry.metadata.get("reaction_dir"))
 
 
 def queue_entry_force(entry: QueueEntry) -> bool:
     return normalize_bool(entry.metadata.get("force", False))
-
-
-def queue_entry_priority(entry: QueueEntry) -> int:
-    return int(entry.priority)
-
-
-def queue_entry_app_name(entry: QueueEntry) -> str:
-    return normalize_text(entry.app_name)
 
 
 def find_active_entry(entries: Sequence[_QueueEntryT], reaction_dir: str) -> _QueueEntryT | None:

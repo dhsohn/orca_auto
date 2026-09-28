@@ -10,6 +10,7 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
 )
 from orca_auto.orca import submission
+from orca_auto.orca.config import load_config
 from orca_auto.orca.queue import adapter, publication_repair
 from orca_auto.orca.queue.job_records import tracking_metadata_from_queue_entry
 from tests.conftest import make_app_cfg, make_queue_entry
@@ -18,9 +19,9 @@ from tests.orca.test_submission import _real_submission
 
 def test_repair_reproduces_submission_record_after_source_changes(tmp_path, monkeypatch):
     reaction_dir, args = _real_submission(tmp_path, monkeypatch)
-    result = submission.submit_reaction_dir_to_queue(args)
+    result = submission.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
     assert result.status == "submitted"
-    cfg = submission.load_config(args.config)
+    cfg = load_config(args.config)
     index = tmp_path / "job_locations.json"
     [original] = json.loads(index.read_text())
     [entry] = adapter.list_queue(tmp_path)

@@ -7,9 +7,7 @@ from typing import Any
 from ..statuses import (
     ACTIVE_STATUSES,
     STATUS_CANCEL_REQUESTED,
-    STATUS_UNKNOWN,
     TERMINAL_STATUSES,
-    normalize_status,
 )
 
 
@@ -33,6 +31,8 @@ ACTIVE_QUEUE_STATUSES: frozenset[QueueStatus] = frozenset(
 
 @dataclass(frozen=True)
 class QueueEntry:
+    """A canonical in-memory row: disk readers validate; producers supply typed fields."""
+
     queue_id: str
     app_name: str
     task_id: str
@@ -48,15 +48,6 @@ class QueueEntry:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-def queue_status_value(entry: QueueEntry) -> str:
-    """Return the persisted status string of ``entry`` (``unknown`` when absent)."""
-
-    status = getattr(entry, "status", None)
-    if isinstance(status, QueueStatus):
-        return status.value
-    return normalize_status(status) or STATUS_UNKNOWN
-
-
 def effective_queue_status(entry: QueueEntry) -> str:
     """Return the display status of a queue row.
 
@@ -64,8 +55,8 @@ def effective_queue_status(entry: QueueEntry) -> str:
     every other row shows its persisted ``QueueStatus`` value.
     """
 
-    status = queue_status_value(entry)
-    if status == QueueStatus.RUNNING.value and bool(getattr(entry, "cancel_requested", False)):
+    status = entry.status.value
+    if status == QueueStatus.RUNNING.value and entry.cancel_requested:
         return STATUS_CANCEL_REQUESTED
     return status
 

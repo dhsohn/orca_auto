@@ -30,9 +30,7 @@ from .entries import (
     find_active_entry,
     is_orca_queue_entry,
     normalize_text,
-    queue_entry_id,
     queue_entry_reaction_dir,
-    queue_entry_status,
     same_generation,
 )
 from .terminal_marker import (
@@ -101,8 +99,8 @@ class DuplicateEntryError(ValueError):
         existing: QueueEntry,
     ) -> None:
         self.existing = existing
-        status = queue_entry_status(self.existing) or "?"
-        qid = queue_entry_id(self.existing) or "?"
+        status = self.existing.status.value or "?"
+        qid = self.existing.queue_id or "?"
         super().__init__(
             f"Reaction directory already queued: {reaction_dir} "
             f"(queue_id={qid}, status={status}). "
@@ -119,7 +117,7 @@ def _reject_duplicate_reaction_dir(
     for existing in owned_entries:
         if (
             queue_entry_reaction_dir(existing) == entry_key
-            and queue_entry_status(existing) in TERMINAL_STATUSES
+            and existing.status.value in TERMINAL_STATUSES
             and (_has_pending_terminal_replay(existing) or terminal_replay_is_fence_only(existing))
         ):
             # A terminal queue mark is only the first half of publication.  Until
@@ -167,7 +165,7 @@ def enqueue(
     def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
         queue_id = unique_timestamped_token("q", {entry.queue_id for entry in entries})
         resolved_task_id = normalized_task_id or unique_timestamped_token(
-            "orca", {normalize_text(entry.task_id) for entry in entries}
+            "orca", {entry.task_id for entry in entries}
         )
         queue_metadata = entry_metadata(
             reaction_dir=resolved,
@@ -215,10 +213,7 @@ def _same_orca_generation(
     return (
         is_orca_queue_entry(current)
         and (expected_entry is None or same_generation(current, expected_entry))
-        and (
-            expected_task_id is None
-            or normalize_text(current.task_id) == normalize_text(expected_task_id)
-        )
+        and (expected_task_id is None or current.task_id == normalize_text(expected_task_id))
     )
 
 
@@ -241,7 +236,7 @@ def dequeue_entry_if_pending(
     logger.info(
         "Dequeued: %s (queue_id=%s)",
         queue_entry_reaction_dir(entry),
-        queue_entry_id(entry),
+        entry.queue_id,
     )
     return entry
 
@@ -446,7 +441,7 @@ def list_queue(
     ]
     if status_filter:
         normalized_filter = normalize_text(status_filter).lower()
-        entries = [e for e in entries if queue_entry_status(e) == normalized_filter]
+        entries = [e for e in entries if e.status.value == normalized_filter]
     return entries
 
 

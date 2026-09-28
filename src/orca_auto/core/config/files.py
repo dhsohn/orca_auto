@@ -332,25 +332,3 @@ def usable_runs_root_text(root_text: str) -> str:
         return validated_runs_root_text(root_text)
     except ValueError:
         return ""
-
-
-def shared_runs_root_from_config(config_path: str | Path | None) -> str | None:
-    if config_path is None:
-        return None
-
-    try:
-        path = Path(config_path).expanduser().resolve()
-    except OSError:
-        return None
-    if not path.exists():
-        return None
-
-    try:
-        _, shared = load_shared_config(path)
-    except YAML_CONFIG_LOAD_EXCEPTIONS:
-        return None
-
-    root_text = usable_runs_root_text(shared.runs_root)
-    if not root_text:
-        return None
-    return str(Path(root_text).expanduser().resolve())

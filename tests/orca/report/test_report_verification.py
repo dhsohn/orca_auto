@@ -119,13 +119,13 @@ def test_report_hashes_each_available_file_once_per_load(
     }
     report.write_text(json.dumps(observation))
     reads: Counter[str] = Counter()
-    real_consume = machine_observation.ReceiptDigest.consume
+    real_digest = report_verifier.hashlib.file_digest
 
-    def count_hash(self: Any, stream: Any) -> None:
+    def count_hash(stream: Any, digest: str) -> Any:
         reads[Path(stream.name).name] += 1
-        real_consume(self, stream)
+        return real_digest(stream, digest)
 
-    monkeypatch.setattr(machine_observation.ReceiptDigest, "consume", count_hash)
+    monkeypatch.setattr(report_verifier.hashlib, "file_digest", count_hash)
     monkeypatch.setattr(
         "orca_auto.orca.file_identity.file_content_identity",
         lambda *_args: pytest.fail("report verification must reuse the input receipt"),
@@ -237,14 +237,47 @@ def test_final_input_hash_observes_same_tick_writes(
 
         monkeypatch.setattr(report_verifier, "verified_generation_artifact_target", after_ownership)
     else:
-        consume = machine_observation.ReceiptDigest.consume
+        hash_file = report_verifier.hashlib.file_digest
 
-        def after_output(self: Any, stream: Any) -> None:
-            consume(self, stream)
+        def after_output(stream: Any, digest: str) -> Any:
+            result = hash_file(stream, digest)
             if Path(stream.name).name == "sample.out":
                 change_input()
+            return result
 
-        monkeypatch.setattr(machine_observation.ReceiptDigest, "consume", after_output)
+        monkeypatch.setattr(report_verifier.hashlib, "file_digest", after_output)
     assert load_report_json(generation) is None
     assert len(mutations) == 1
     assert selected.read_bytes() == mutations[0]
+
+
+def test_report_verifier_rejects_a_digest_bug_in_the_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected = tmp_path / "sample.inp"
+    selected.write_text("! HF STO-3G\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
+    state = dict(new_state(tmp_path, selected))
+    generation = bind_report_generation(tmp_path, state)
+    output = generation / "sample.out"
+    output.write_text("output\n" * 20000 + "****ORCA TERMINATED NORMALLY****\n")
+    state.update(
+        status="completed",
+        attempts=[{"index": 1, "inp_path": state["selected_inp"], "out_path": str(output)}],
+        final_result={
+            "status": "completed",
+            "analyzer_status": "completed",
+            "reason": "normal_termination",
+            "last_out_path": str(output),
+        },
+    )
+    save_state(tmp_path, state)
+    original = machine_observation.ReceiptDigest.hexdigest
+
+    def wrong_large_digest(self: Any) -> str:
+        return "0" * 64 if self.size > 65536 else original(self)
+
+    monkeypatch.setattr(machine_observation.ReceiptDigest, "hexdigest", wrong_large_digest)
+    report = write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state))
+    assert report is not None
+    assert json.loads(report.read_text())["artifacts"]["orca-output"]["byte_sha256"] == "0" * 64
+    assert load_report_json(generation, require_consumable_success=True) is None

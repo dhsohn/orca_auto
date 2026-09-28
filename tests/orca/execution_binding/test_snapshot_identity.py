@@ -183,22 +183,22 @@ _DIGEST = hashlib.sha256(b"x").hexdigest()
 
 
 @pytest.mark.parametrize(
-    ("sha256", "size_bytes"),
+    ("sha256", "size_bytes", "valid_content"),
     [
-        (_DIGEST, 1),
-        (_DIGEST.upper(), 1),
-        (f" {_DIGEST} ", 0),
-        (_DIGEST[:-1], 1),
-        ("z" * 64, 1),
-        (_DIGEST, True),
-        (_DIGEST, -1),
-        (_DIGEST, "1"),
-        (None, 1),
+        (_DIGEST, 1, True),
+        (_DIGEST.upper(), 1, True),
+        (f" {_DIGEST} ", 0, True),
+        (_DIGEST[:-1], 1, False),
+        ("z" * 64, 1, False),
+        (_DIGEST, True, False),
+        (_DIGEST, -1, False),
+        (_DIGEST, "1", False),
+        (None, 1, False),
     ],
 )
 @pytest.mark.parametrize("path_form", ["canonical", "dotdot", "relative", "nul", "outside"])
 def test_verify_and_recovery_accept_the_same_content_descriptors(
-    tmp_path: Path, sha256: Any, size_bytes: Any, path_form: str
+    tmp_path: Path, sha256: Any, size_bytes: Any, valid_content: bool, path_form: str
 ) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -232,9 +232,12 @@ def test_verify_and_recovery_accept_the_same_content_descriptors(
         lambda: _validated_submitted_dependency_identity(job_dir, source_text, descriptor)
     )
 
-    assert (verified == "refused") == (recovered == "refused")
-    if recovered != "refused":
+    if valid_content and path_form == "canonical":
+        assert verified == (descriptor, job_dir / "dep.xyz")
         assert recovered == {"sha256": _DIGEST, "size_bytes": size_bytes}
+    else:
+        assert verified == "refused"
+        assert recovered == "refused"
 
 
 @pytest.mark.parametrize("identity", ["job_dir_identity", "execution_dir_identity"])

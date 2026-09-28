@@ -11,13 +11,14 @@ import pytest
 
 from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.commands.run_inp import cmd_run_inp
+from orca_auto.orca.config import load_config
 from orca_auto.orca.queue import enqueue_publication
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_metadata
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.submission import submit_reaction_dir_to_queue
-from tests.conftest import make_queue_entry
+from tests.conftest import make_app_cfg, make_queue_entry
 
 DEFAULT_INP = "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
 
@@ -70,7 +71,7 @@ def submit_to_queue(monkeypatch: pytest.MonkeyPatch) -> Callable[[SimpleNamespac
     def install(result: SimpleNamespace) -> list[Any]:
         calls: list[Any] = []
 
-        def fake_submit(args: Any) -> SimpleNamespace:
+        def fake_submit(args: Any, *, cfg: Any) -> SimpleNamespace:
             calls.append(args)
             return result
 
@@ -106,20 +107,6 @@ def worker_seams(monkeypatch: pytest.MonkeyPatch) -> _WorkerSeams:
     return seams
 
 
-def test_submit_always_enqueues_without_attempting_direct_execution(
-    tmp_path: Path,
-    reaction_dir: Path,
-    submit_to_queue: Callable[[SimpleNamespace], list[Any]],
-) -> None:
-    entry = make_queue_entry(reaction_dir=reaction_dir)
-    calls = submit_to_queue(_submitted(reaction_dir, entry))
-
-    rc = cmd_run_inp(_make_args(tmp_path / "orca_auto.yaml", reaction_dir))
-
-    assert rc == 0
-    assert len(calls) == 1
-
-
 def test_json_submission_emits_one_parseable_document(
     submit_to_queue: Callable[[SimpleNamespace], list[Any]],
     capsys: pytest.CaptureFixture[str],
@@ -130,7 +117,10 @@ def test_json_submission_emits_one_parseable_document(
     )
     submit_to_queue(_submitted(reaction_dir, entry, status="inactive", log_file="/tmp/q-json.log"))
 
-    rc = cmd_run_inp(SimpleNamespace(config="/tmp/orca.yaml", priority=7, json=True))
+    rc = cmd_run_inp(
+        SimpleNamespace(config="/tmp/orca.yaml", priority=7, json=True),
+        cfg=make_app_cfg(reaction_dir.parent),
+    )
 
     assert rc == 0
     assert json.loads(capsys.readouterr().out) == {
@@ -166,7 +156,7 @@ def test_submit_rejects_when_active_queue_entry_exists_for_same_reaction_dir(
 ) -> None:
     enqueue(tmp_path, str(reaction_dir))
 
-    rc = cmd_run_inp(_make_args(config, reaction_dir))
+    rc = cmd_run_inp(_make_args(config, reaction_dir), cfg=load_config(str(config)))
 
     assert rc == 1
     assert refuse_queued_submission == []
@@ -178,25 +168,10 @@ def test_submit_rejects_when_same_reaction_dir_is_already_running_directly(
     refuse_queued_submission: list[Any],
 ) -> None:
     with acquire_run_lock(reaction_dir):
-        rc = cmd_run_inp(_make_args(config, reaction_dir))
+        rc = cmd_run_inp(_make_args(config, reaction_dir), cfg=load_config(str(config)))
 
     assert rc == 1
     assert refuse_queued_submission == []
-
-
-def test_submit_queues_completed_output_for_worker_reconciliation(
-    tmp_path: Path,
-    reaction_dir: Path,
-    submit_to_queue: Callable[[SimpleNamespace], list[Any]],
-) -> None:
-    (reaction_dir / "rxn.out").write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
-    entry = make_queue_entry(reaction_dir=reaction_dir)
-    calls = submit_to_queue(_submitted(reaction_dir, entry))
-
-    rc = cmd_run_inp(_make_args(tmp_path / "orca_auto.yaml", reaction_dir))
-
-    assert rc == 0
-    assert len(calls) == 1
 
 
 def test_submit_reaction_dir_to_queue_reports_inactive_worker_without_autostart(
@@ -207,7 +182,9 @@ def test_submit_reaction_dir_to_queue_reports_inactive_worker_without_autostart(
 ) -> None:
     root = tmp_path
 
-    submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir, priority=3))
+    submission = submit_reaction_dir_to_queue(
+        _make_args(config, reaction_dir, priority=3), cfg=load_config(str(config))
+    )
 
     entries = list_queue(root)
 
@@ -266,7 +243,9 @@ def test_submit_reaction_dir_to_queue_reports_running_worker_pid(
 ) -> None:
     worker_seams.worker_pid = 4321
 
-    submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir))
+    submission = submit_reaction_dir_to_queue(
+        _make_args(config, reaction_dir), cfg=load_config(str(config))
+    )
 
     assert submission.status == "submitted"
     result = submission.queued_result
@@ -289,7 +268,9 @@ def test_submit_reaction_dir_to_queue_separates_inp_and_xyzfile_artifacts(
     _write_inp(reaction_dir, "! Opt\n* xyzfile 0 1 geom.xyz\n")
     (reaction_dir / "geom.xyz").write_text("2\ncomment\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
 
-    submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir))
+    submission = submit_reaction_dir_to_queue(
+        _make_args(config, reaction_dir), cfg=load_config(str(config))
+    )
 
     assert submission.status == "submitted"
     entry = list_queue(tmp_path)[0]
@@ -323,7 +304,9 @@ def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
 
     monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", failing_upsert)
 
-    submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir, priority=3))
+    submission = submit_reaction_dir_to_queue(
+        _make_args(config, reaction_dir, priority=3), cfg=load_config(str(config))
+    )
 
     entries = list_queue(tmp_path)
 
@@ -350,7 +333,8 @@ def test_submit_reaction_dir_to_queue_reads_metadata_from_input_even_when_flags_
     )
 
     submission = submit_reaction_dir_to_queue(
-        _make_args(config, reaction_dir, max_cores=20, max_memory_gb=80)
+        _make_args(config, reaction_dir, max_cores=20, max_memory_gb=80),
+        cfg=load_config(str(config)),
     )
 
     entries = list_queue(tmp_path)

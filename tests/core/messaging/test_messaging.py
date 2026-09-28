@@ -96,7 +96,15 @@ def test_render_discord_embed_enforces_aggregate_budget_and_marks_omissions() ->
     )
     assert total <= 6000
     assert "description" not in embed
-    assert len(embed["fields"]) <= 25
+    # The budget must preserve useful content, not merely emit an omission marker.
+    assert embed["fields"][:5] == [
+        {"name": f"field-{index}", "value": "V" * 1024, "inline": False} for index in range(5)
+    ]
+    assert len(embed["fields"]) == 7
+    truncated = embed["fields"][5]
+    assert truncated["name"] == "field-5"
+    assert truncated["value"].startswith("V")
+    assert truncated["value"].endswith("…")
     assert embed["fields"][-1] == {"name": "More", "value": "…", "inline": False}
 
 

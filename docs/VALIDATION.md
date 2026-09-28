@@ -56,5 +56,19 @@ installed consumers; distinguish historical evidence from active behavior.
 Run independent review for public contracts, durable ownership or scientific evidence.
 Finish with `git diff --check`, source inventory and secret scanning.
 
+Test quality is checked against observable behavior. Expected values come from
+fixed contract values or independent input fixtures, not the function under test.
+When two readers are compared, also state which inputs must succeed and which
+must fail; agreement alone does not prove correctness. Artifact checks require
+every reported file to exist before comparing its contents.
+
+Prefer real boundary paths over successful stubs when testing submission or
+persistence. Remove wrapper-only duplicates only after locating the behavior test
+that protects the same contract. Demonstrate that stronger assertions reject a
+representative faulty implementation. Keep static type and ownership checks:
+a test module with only type-checking code can still be exercised by mypy.
+Environment-gated real-ORCA cases are intentional; impossible parameter
+combinations should not be collected as permanent skips.
+
 Tests do not update an installed runtime. Release publication and idle deployment
 require the separate checks in [RELEASE](RELEASE.md) and [RUNTIME](RUNTIME.md).

@@ -39,14 +39,7 @@ from .adapter import (
     update_metadata,
     update_terminal,
 )
-from .entries import (
-    TERMINAL_REPLAY_METADATA_KEY,
-    queue_entry_id,
-    queue_entry_metadata,
-    queue_entry_reaction_dir,
-    queue_entry_status,
-    queue_entry_task_id,
-)
+from .entries import TERMINAL_REPLAY_METADATA_KEY, queue_entry_metadata, queue_entry_reaction_dir
 from .models import TerminalReplayWorkItem
 from .terminal_marker import (
     TerminalGenerationVerdict,
@@ -85,7 +78,7 @@ def mark_terminal_row(
     the row; a row that is no longer this generation's running row is left.
     """
     current = get_entry_by_id(queue_root, queue_id)
-    current_task_id = queue_entry_task_id(current) if current is not None else None
+    current_task_id = current.task_id if current is not None else None
     expected_job_id = current_task_id or task_id
     if current is None or not entry_status_is_running(current):
         logger.info("Skipping terminal mark for %s; entry is no longer running", queue_id)
@@ -158,11 +151,11 @@ def new_work_item(
         )
     return TerminalReplayWorkItem(
         queue_root=Path(queue_root).expanduser().resolve(),
-        queue_id=queue_entry_id(entry),
+        queue_id=entry.queue_id,
         reaction_dir=reaction_dir,
         reaction_key=reaction_key,
-        task_id=str((marker or {}).get("task_id") or queue_entry_task_id(entry) or "").strip(),
-        observed_status=queue_entry_status(entry),
+        task_id=str((marker or {}).get("task_id") or entry.task_id or "").strip(),
+        observed_status=entry.status.value,
         selected_inp=selected_inp,
         error=str((marker or {}).get("error") or entry.error or "queue_failed"),
         execution_provenance=execution_provenance,
@@ -179,7 +172,7 @@ def work_item_for_row(queue_root: Path, entry: QueueEntry | None) -> TerminalRep
     reaction_key = reaction_dir_key(entry)
     if not reaction_dir or not reaction_key:
         raise RuntimeError(
-            f"terminal replay marker has no durable reaction identity: {queue_entry_id(entry)}"
+            f"terminal replay marker has no durable reaction identity: {entry.queue_id}"
         )
     return new_work_item(queue_root, entry, reaction_dir=reaction_dir, reaction_key=reaction_key)
 
@@ -273,7 +266,7 @@ def prepare(item: TerminalReplayWorkItem) -> TerminalReplayWorkItem:
 def bind_row(item: TerminalReplayWorkItem) -> TerminalReplayWorkItem:
     """Bind the queue row to the prepared run's actual outcome and identity."""
     current = get_entry_by_id(item.queue_root, item.queue_id)
-    current_status = queue_entry_status(current) if current is not None else ""
+    current_status = current.status.value if current is not None else ""
     if item.resolved_status != current_status or (
         item.run_id and item.recorded_run_id != item.run_id
     ):

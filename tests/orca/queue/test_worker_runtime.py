@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
+from orca_auto.core.queue.persistence import load_entries
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.orca.queue import worker as worker_mod
@@ -168,8 +170,10 @@ def test_running_identity_prevents_reclaiming_normalized_queue_id(
         "orca",
         metadata={"reaction_dir": str(tmp_path)},
     )
+    (tmp_path / "queue.json").write_text(json.dumps([asdict(entry)]))
+    entry = load_entries(tmp_path)[0]
     assert worker._start_job(tmp_path, entry, admission_token="slot-1")
     assert list(worker._running) == ["queue-1"]
     assert worker._running["queue-1"].queue_id == "queue-1"
     assert worker._skip_entry(entry)
-    assert worker._skip_entry(replace(entry, queue_id="queue-1"))
+    assert worker._skip_entry(load_entries(tmp_path)[0])

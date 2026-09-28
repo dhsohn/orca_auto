@@ -723,9 +723,13 @@ def test_real_orca_electronic_state_and_input_echo_acceptance_when_configured(
     assert load_report_json(generation, require_consumable_success=True) is not None
 
 
-@pytest.mark.parametrize("converged", [True, False], ids=["opt-freq", "opt-iteration-limit"])
+@pytest.mark.parametrize(
+    ("converged", "constrained"),
+    [(True, False), (False, False), (True, True)],
+    ids=["opt-freq", "opt-iteration-limit", "constrained-opt"],
+)
 def test_real_orca_water_optimization_acceptance_when_configured(
-    tmp_path: Path, converged: bool
+    tmp_path: Path, converged: bool, constrained: bool
 ) -> None:
     executable_text = os.environ.get("ORCA_REAL_EXECUTABLE", "").strip()
     if not executable_text:
@@ -744,10 +748,11 @@ def test_real_orca_water_optimization_acceptance_when_configured(
         allowed_root=allowed_root,
         orca_executable=executable,
     )
-    freq = " Freq" if converged else ""
+    freq = " Freq" if converged and not constrained else ""
     max_iter = 30 if converged else 1
+    constraints = " Constraints { B 0 1 1.1 C } end" if constrained else ""
     (reaction_dir / "water.inp").write_text(
-        f"! HF STO-3G Opt{freq} TightSCF\n%geom MaxIter {max_iter} end\n"
+        f"! HF STO-3G Opt{freq} TightSCF\n%geom MaxIter {max_iter}{constraints} end\n"
         "* xyz 0 1\nO 0 0 0\nH 0 0 1.1\nH 1.1 0 0\n*\n",
         encoding="utf-8",
     )
@@ -782,13 +787,19 @@ def test_real_orca_water_optimization_acceptance_when_configured(
     parts = collect_html_report_parts(reaction_dir, state)
     assert parts is not None and parts.opt is not None
     assert parts.opt.opt_converged is converged
+    assert parts.opt.kind == ("partial" if constrained else "opt")
     assert report_json_path(generation).is_file()
     assert (generation / RUN_REPORT_HTML_FILE).is_file()
     assert load_report_json(generation, require_consumable_success=converged) is not None
     evidence = collect_structure_evidence(
         reaction_dir, state, route_facts(Path(state["selected_inp"]))
     )
-    if converged:
+    validate_common_machine(report_json_path(generation))
+    if constrained:
+        assert evidence is not None and evidence.kind == "sp"
+        assert (generation / SI_BLOCK_MD_FILE).is_file()
+        assert not route_facts(Path(state["selected_inp"])).is_full_opt
+    elif converged:
         assert evidence is not None and evidence.kind == "min"
         assert evidence.imaginary_count == 0
         assert evidence.analysis is not None and len(evidence.analysis.frequencies) == 9

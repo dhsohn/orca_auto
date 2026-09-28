@@ -241,9 +241,9 @@ def _fault(name: str, entry: QueueEntry, root: Path, token: str | None) -> Itera
             yield
 
 
-@pytest.mark.parametrize("fault", ["none", "prepare", "bind", "release", "finish", "clear"])
 @pytest.mark.parametrize(
-    "path", ["exit", "cancel", "cancel_marked", "cancel_killed", "restart", "cancel_restart"]
+    ("path", "fault"),
+    [(path, fault) for path, outcomes in _EXPECTED.items() for fault in outcomes],
 )
 def test_settlement_fault_matrix(
     make_worker: Callable[..., OrcaQueueWorker],
@@ -253,8 +253,6 @@ def test_settlement_fault_matrix(
     path: str,
     fault: str,
 ) -> None:
-    if path in ("restart", "cancel_restart") and fault == "release":
-        pytest.skip("restart replay holds no execution slot")
     status = "failed" if path in ("exit", "restart") else "cancelled"
     worker = make_worker(max_concurrent=1)
     rxn = queue_root / "job"

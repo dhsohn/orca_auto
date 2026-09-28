@@ -157,7 +157,7 @@ def _reserve_recovery_rebind_claim(
         }
         if not update_metadata(
             queue_root,
-            str(entry.queue_id),
+            entry.queue_id,
             {
                 RECOVERY_REBIND_COUNT_METADATA_KEY: rebind_count,
                 RECOVERY_REBIND_CLAIM_METADATA_KEY: pending_claim,
@@ -167,7 +167,7 @@ def _reserve_recovery_rebind_claim(
             raise ValueError(
                 "ORCA crash recovery could not reserve its durable rebind claim on the queue row"
             )
-        claimed = get_entry_by_id(queue_root, str(entry.queue_id))
+        claimed = get_entry_by_id(queue_root, entry.queue_id)
         claimed_metadata = getattr(claimed, "metadata", None)
         if (
             claimed is None
@@ -205,7 +205,7 @@ def _publish_recovery_generation(
         )
         if not update_metadata(
             queue_root,
-            str(entry.queue_id),
+            entry.queue_id,
             {
                 "execution_snapshot": new_snapshot,
                 "selected_inp": str(new_snapshot.get("selected_inp") or ""),
@@ -221,7 +221,7 @@ def _publish_recovery_generation(
     marker_warning = mark_snapshot_intent_owned(
         queue_root, intent_token, intent_label="queued ORCA snapshot"
     )
-    updated = get_entry_by_id(queue_root, str(entry.queue_id))
+    updated = get_entry_by_id(queue_root, entry.queue_id)
     updated_metadata = getattr(updated, "metadata", None)
     updated_snapshot = (
         updated_metadata.get("execution_snapshot") if isinstance(updated_metadata, dict) else None
@@ -235,7 +235,7 @@ def _publish_recovery_generation(
         raise ValueError("ORCA crash recovery lost its replacement queue row")
     logger.warning(
         "Recovered crashed ORCA job %s into replacement generation %s (rebind %d/%d)%s",
-        str(entry.queue_id),
+        entry.queue_id,
         str(new_snapshot.get("generation_name") or ""),
         rebind_count,
         RECOVERY_REBIND_LIMIT,
@@ -287,15 +287,15 @@ def maybe_rebind_recovery_generation(
             # its recorded attempt verdict, else by adopting the output)
             # instead of re-running the whole calculation in a rebind.
             return entry
-    if get_cancel_requested(queue_root, str(entry.queue_id), expected_entry=entry):
+    if get_cancel_requested(queue_root, entry.queue_id, expected_entry=entry):
         # Cancellation is a generation-fenced monotonic user decision. Honor it
         # before inspecting recovery-only metadata or creating replacement state.
         requeue_running_entry(
             queue_root,
-            str(entry.queue_id),
+            entry.queue_id,
             expected_entry=entry,
         )
-        refreshed = get_entry_by_id(queue_root, str(entry.queue_id))
+        refreshed = get_entry_by_id(queue_root, entry.queue_id)
         return refreshed if refreshed is not None else entry
     count, pending_claim = _validated_recovery_rebind_claim(metadata, snapshot)
     recovery_executable = verify_orca_snapshot_executable(

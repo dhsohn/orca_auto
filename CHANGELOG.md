@@ -100,6 +100,15 @@ procedure; upgrading needs an idle window (`active_simulations: 0`). See
 
 ### Fixed
 
+- Constrained optimizations, including geometry constraints, fixed or rigid
+  fragments and hydrogen restrictions, now report as partial optimizations
+  without a full-surface minimum claim.
+- The report contract verifier measures receipt hashes independently of the
+  writer, so a defect in the writer cannot validate itself.
+- `run-dir` loads configuration once and uses the same object for the
+  directory guard and queue submission, even if the file changes in between.
+  The config-load info log occurs before submission logging is configured.
+
 - The queue worker no longer stops every running calculation when one poll pass
   fails. A queue-lock timeout or an unreadable queue or admission file during
   admission, cancellation or the periodic reconcile used to end the worker
@@ -194,6 +203,10 @@ procedure; upgrading needs an idle window (`active_simulations: 0`). See
   exits 1, like the other commands, instead of a `TypeError` traceback.
 
 ### Changed
+
+- Internal queue consumers read validated row fields directly; repeated field
+  normalization and duplicate status accessors are removed. Persistent queue
+  validation, identity labels and metadata-copy behavior are unchanged.
 
 - Public contract: one generation identity now decides whether a queue row is
   still the generation a writer read

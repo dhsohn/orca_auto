@@ -9,6 +9,7 @@ payload only when all of them agree. The release smoke
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -33,8 +34,6 @@ from orca_auto.orca.machine_observation import (
     RESULT_KIND,
     RESULTS_PAYLOAD_CONTRACT_NAME,
     RESULTS_PAYLOAD_CONTRACT_VERSION,
-    ReceiptDigest,
-    artifact_receipt,
     machine_json_bytes,
     machine_lifecycle,
     report_json_path,
@@ -119,6 +118,51 @@ def _file_identity(details: os.stat_result) -> tuple[int, ...]:
     )
 
 
+def _artifact_receipt(
+    package_root: Path,
+    candidate: Path | None,
+    *,
+    required: bool,
+    role: str,
+    media_type: str,
+) -> dict[str, Any]:
+    """Measure the v1 receipt independently of the production writer."""
+    receipt: dict[str, Any] = {
+        "status": "missing",
+        "required": required,
+        "role": role,
+        "path": None,
+        "media_type": media_type,
+        "bytes": None,
+        "byte_sha256": None,
+    }
+    if candidate is None:
+        return receipt
+    try:
+        root = package_root.resolve(strict=True)
+        path = candidate if candidate.is_absolute() else root / candidate
+        before = path.lstat()
+        resolved = require_confined_regular_file(root, path, label="report receipt")
+        if path != resolved:
+            raise ValueError("receipt path is not canonical")
+        with resolved.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        after = resolved.stat()
+        if _file_identity(before) != _file_identity(after):
+            raise ValueError("artifact changed while hashing")
+    except FileNotFoundError:
+        return receipt
+    except (OSError, RuntimeError, ValueError):
+        return {**receipt, "status": "invalid"}
+    return {
+        **receipt,
+        "status": "available",
+        "path": resolved.relative_to(root).as_posix(),
+        "bytes": after.st_size,
+        "byte_sha256": digest,
+    }
+
+
 @dataclass(frozen=True)
 class VerifiedArtifact:
     """Content read in this verification, bound to a file that can be rechecked."""
@@ -179,7 +223,7 @@ def read_verified_artifacts(
             previous = by_path.get(candidate)
             if previous is None:
                 identity = _file_identity(candidate.lstat())
-                observed = artifact_receipt(
+                observed = _artifact_receipt(
                     package_root,
                     candidate,
                     required=bool(receipt.get("required")),
@@ -208,18 +252,13 @@ def read_verified_artifacts(
     return verified
 
 
-def _receipt_binds(digest: ReceiptDigest, receipt: object) -> bool:
-    """Whether an ``available`` receipt binds exactly the bytes ``digest`` accumulated.
-
-    Anything else is a refusal: a receipt that is absent, malformed, or
-    recorded ``missing``/``invalid`` binds no content at all, so bytes can
-    never be shown to be the ones it covers.
-    """
+def _receipt_binds(content: bytes, receipt: object) -> bool:
+    """Check serialized provenance with an independent digest and byte count."""
     return (
         isinstance(receipt, Mapping)
         and receipt.get("status") == "available"
-        and receipt.get("bytes") == digest.size
-        and receipt.get("byte_sha256") == digest.hexdigest()
+        and receipt.get("bytes") == len(content)
+        and receipt.get("byte_sha256") == hashlib.sha256(content).hexdigest()
     )
 
 
@@ -248,7 +287,7 @@ def _report_artifact_receipt(
     role, media_type = ARTIFACT_ROLES[artifact_id]
     artifact = verified.get(artifact_id)
     if artifact is None:
-        return artifact_receipt(
+        return _artifact_receipt(
             generation_dir, candidate, required=required, role=role, media_type=media_type
         )
     if candidate is None or generation_dir / candidate != artifact.path:
@@ -409,12 +448,11 @@ def load_report_json_with_output_receipt(
             )
             # A self-consistent replacement receipt must still match the
             # submission evidence persisted in this generation's state.
-            expected_digest = ReceiptDigest()
-            expected_digest.update(machine_json_bytes(provenance))
+            expected_content = machine_json_bytes(provenance)
             if (
                 EXECUTION_PROVENANCE_ARTIFACT_ID not in result_data["artifact_refs"]
                 or artifacts.get(EXECUTION_PROVENANCE_ARTIFACT_ID) != expected_provenance
-                or not _receipt_binds(expected_digest, expected_provenance)
+                or not _receipt_binds(expected_content, expected_provenance)
             ):
                 return None
     except (OSError, RuntimeError, TypeError, ValueError):

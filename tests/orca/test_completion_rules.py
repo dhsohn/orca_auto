@@ -156,3 +156,50 @@ def test_route_facts_of_an_unreadable_input_have_no_route(tmp_path: Path) -> Non
 
     assert facts.route_lines == ()
     assert not any(getattr(facts, flag) for flag in _FLAGS)
+
+
+@pytest.mark.parametrize(
+    ("directives", "full"),
+    [
+        ("%geom Constraints { B 0 1 C } end end", False),
+        ("%geom\n Constraints\n { C 0 C }\n end\nend", False),
+        ("%geom optimizehydrogens true end", False),
+        ("%geom OptimizeHydrogens = TRUE end", False),
+        ("%geom freezehydrogens true end", False),
+        ("! RigidBodyOpt", False),
+        ("%geom ConstrainFragments { 1 } end end", False),
+        ("%geom FixFrags { 1 } end end", False),
+        ("%geom RigidFrags { 1 } end end", False),
+        ("%geom RelaxHFrags { 1 } end end", False),
+        (
+            "%geom modify_internal { B 0 1 A } end\n Constraints { B 0 1 C } end end",
+            False,
+        ),
+        ("%geom optimizehydrogens false end", True),
+        ("%geom optimizehydrogens true optimizehydrogens false end", True),
+        ("%geom Constraints end end", True),
+        ("# %geom Constraints { B 0 1 C } end end", True),
+        ("%geom # optimizehydrogens true # MaxIter 10 end", True),
+        ('%scf MOInp "optimizehydrogens" end', True),
+    ],
+)
+def test_geometry_restrictions_do_not_claim_full_optimization(
+    tmp_path: Path, directives: str, full: bool
+) -> None:
+    from orca_auto.orca.evidence import structure_kind
+    from orca_auto.orca.report.composer import collect_html_report_parts
+
+    inp = tmp_path / "job.inp"
+    inp.write_text(
+        f"! HF STO-3G Opt Freq\n{directives}\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+        encoding="utf-8",
+    )
+    facts = route_facts(inp)
+    assert facts.is_opt
+    assert facts.is_full_opt is full
+    assert structure_kind(facts) == ("min" if full else "sp")
+    parts = collect_html_report_parts(
+        tmp_path, {"selected_inp": str(inp), "status": "completed", "attempts": []}
+    )
+    assert parts is not None and parts.opt is not None
+    assert parts.opt.kind == ("opt" if full else "partial")

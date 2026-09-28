@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -13,18 +11,10 @@ from orca_auto.orca.config import (
     validate_orca_shared_config,
 )
 
-Loader = Callable[[str], Any]
 
-_SHARED_CONFIG_LOADERS: tuple[tuple[str, Loader], ...] = (("orca", load_orca_config),)
-
-
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
-def test_shared_engine_loaders_use_orca_runtime_scratch_policy(
+def test_orca_loader_use_orca_runtime_scratch_policy(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
 ) -> None:
-    del loader_name
     config_path = _write_shared_config(
         tmp_path,
         {
@@ -40,7 +30,7 @@ def test_shared_engine_loaders_use_orca_runtime_scratch_policy(
         },
     )
 
-    cfg = loader(str(config_path))
+    cfg = load_orca_config(str(config_path))
 
     assert cfg.scratch.root == "/dev/shm/orca_auto"
     assert cfg.scratch.min_free_gb == 7
@@ -67,35 +57,21 @@ def _write_shared_config(tmp_path: Path, override: dict[str, object]) -> Path:
     return config_path
 
 
-@pytest.mark.parametrize(
-    ("loader", "override", "field_name"),
-    [
-        pytest.param(
-            load_orca_config,
-            {"orca": {"paths": {"orca_executable": "misplaced-executable-secret"}}},
-            "orca_executable",
-            id="orca",
-        ),
-    ],
-)
-def test_configured_executable_errors_do_not_echo_raw_values(
-    tmp_path: Path,
-    loader: Loader,
-    override: dict[str, object],
-    field_name: str,
-) -> None:
-    config_path = _write_shared_config(tmp_path, override)
+def test_configured_executable_errors_do_not_echo_raw_values(tmp_path: Path) -> None:
+    config_path = _write_shared_config(
+        tmp_path,
+        {"orca": {"paths": {"orca_executable": "misplaced-executable-secret"}}},
+    )
 
     with pytest.raises(ValueError) as captured:
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
     message = str(captured.value)
-    assert field_name in message
+    assert "orca_executable" in message
     assert "absolute Linux path" in message
     assert "misplaced-executable-secret" not in message
 
 
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize("invalid", [None, "disabled", []])
 @pytest.mark.parametrize(
     ("section_path", "message"),
@@ -121,15 +97,12 @@ def test_configured_executable_errors_do_not_echo_raw_values(
         ),
     ],
 )
-def test_shared_engine_loaders_reject_non_mapping_execution_sections(
+def test_orca_loader_reject_non_mapping_execution_sections(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
     invalid: object,
     section_path: str,
     message: str,
 ) -> None:
-    del loader_name
     override: dict[str, object]
     if section_path == "orca.runtime":
         override = {"orca": {"runtime": invalid}}
@@ -142,10 +115,9 @@ def test_shared_engine_loaders_reject_non_mapping_execution_sections(
     config_path = _write_shared_config(tmp_path, override)
 
     with pytest.raises(ValueError, match=message):
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
 
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize(
     ("override", "message"),
     [
@@ -161,21 +133,17 @@ def test_shared_engine_loaders_reject_non_mapping_execution_sections(
         ),
     ],
 )
-def test_shared_engine_loaders_reject_null_explicit_paths(
+def test_orca_loader_reject_null_explicit_paths(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
     override: dict[str, object],
     message: str,
 ) -> None:
-    del loader_name
     config_path = _write_shared_config(tmp_path, override)
 
     with pytest.raises(ValueError, match=message):
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
 
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize(
     ("override", "message"),
     [
@@ -216,29 +184,22 @@ def test_shared_engine_loaders_reject_null_explicit_paths(
         ),
     ],
 )
-def test_shared_engine_loaders_reject_unknown_config_fields(
+def test_orca_loader_reject_unknown_config_fields(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
     override: dict[str, object],
     message: str,
 ) -> None:
-    del loader_name
     config_path = _write_shared_config(tmp_path, override)
 
     with pytest.raises(ValueError, match=message):
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
 
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize("invalid", [None, "", "bad", -1, True, 1.5, 0, 1, 3])
-def test_shared_engine_loaders_reject_removed_orca_retry_setting(
+def test_orca_loader_reject_removed_orca_retry_setting(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
     invalid: object,
 ) -> None:
-    del loader_name
     config_path = _write_shared_config(
         tmp_path,
         {"orca": {"runtime": {"default_max_retries": invalid}}},
@@ -248,18 +209,14 @@ def test_shared_engine_loaders_reject_removed_orca_retry_setting(
         ValueError,
         match="Unknown orca.runtime config fields",
     ):
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
 
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize("invalid", [None, "", 1, True])
-def test_shared_engine_loaders_reject_invalid_explicit_scratch_root(
+def test_orca_loader_reject_invalid_explicit_scratch_root(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
     invalid: object,
 ) -> None:
-    del loader_name
     config_path = _write_shared_config(
         tmp_path,
         {"orca": {"runtime": {"scratch_root": invalid}}},
@@ -269,10 +226,9 @@ def test_shared_engine_loaders_reject_invalid_explicit_scratch_root(
         ValueError,
         match="orca.runtime.scratch_root must be a non-empty string",
     ):
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
 
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize(
     ("messenger", "message"),
     [
@@ -298,36 +254,29 @@ def test_shared_engine_loaders_reject_invalid_explicit_scratch_root(
         ),
     ],
 )
-def test_shared_engine_loaders_reject_invalid_explicit_messenger_values(
+def test_orca_loader_reject_invalid_explicit_messenger_values(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
     messenger: dict[str, object],
     message: str,
 ) -> None:
-    del loader_name
     config_path = _write_shared_config(tmp_path, {"messenger": messenger})
 
     with pytest.raises(ValueError, match=message):
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
 
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize("raw_path", ["/tmp/pool", "relative/pool", "", None])
-def test_shared_engine_loaders_reject_the_removed_admission_root(
+def test_orca_loader_reject_the_removed_admission_root(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
     raw_path: object,
 ) -> None:
-    del loader_name
     config_path = _write_shared_config(
         tmp_path,
         {"scheduler": {"admission_root": raw_path}},
     )
 
     with pytest.raises(ValueError, match=r"scheduler\.admission_root was removed"):
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
 
 def test_orca_loader_rejects_runs_root_that_canonicalizes_to_windows_mount(
@@ -344,7 +293,6 @@ def test_orca_loader_rejects_runs_root_that_canonicalizes_to_windows_mount(
         load_orca_config(str(config_path))
 
 
-@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize("invalid", [None, "", "bad", 0, -1, True, 1.5])
 @pytest.mark.parametrize(
     ("section", "key", "message"),
@@ -369,20 +317,17 @@ def test_orca_loader_rejects_runs_root_that_canonicalizes_to_windows_mount(
         ),
     ],
 )
-def test_shared_engine_loaders_reject_invalid_execution_limits(
+def test_orca_loader_reject_invalid_execution_limits(
     tmp_path: Path,
-    loader_name: str,
-    loader: Loader,
     invalid: object,
     section: str,
     key: str,
     message: str,
 ) -> None:
-    del loader_name
     config_path = _write_shared_config(tmp_path, {section: {key: invalid}})
 
     with pytest.raises(ValueError, match=message):
-        loader(str(config_path))
+        load_orca_config(str(config_path))
 
 
 def test_orca_sections_return_every_configured_model() -> None:

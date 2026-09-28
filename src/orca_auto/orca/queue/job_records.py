@@ -17,7 +17,7 @@ from orca_auto.core.statuses import TERMINAL_STATUSES, normalize_status
 from ..config import AppConfig
 from ..job_locations import record_from_artifacts, resource_dict, upsert_job_record
 from ..state_reading import load_state, payload_matches_expected_job_id
-from .entries import queue_entry_metadata, queue_entry_reaction_dir, queue_entry_task_id
+from .entries import queue_entry_metadata, queue_entry_reaction_dir
 
 
 def upsert_row_job_record(
@@ -32,7 +32,7 @@ def upsert_row_job_record(
     A row without a task id raises when ``require_task_id`` (publication) and
     is skipped otherwise (the worker's advisory running record).
     """
-    task_id = queue_entry_task_id(entry)
+    task_id = entry.task_id
     if not task_id:
         if require_task_id:
             raise ValueError("ORCA publication repair requires a queue task_id")

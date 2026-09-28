@@ -74,6 +74,8 @@ def test_unchanged_detection_compares_the_normalized_row(tmp_path: Path) -> None
         original_run_dir="/runs/a",
         resource_request={"max_cores": "4"},  # type: ignore[dict-item]
     )
-    upsert_job_location(tmp_path, denormalized)
+    returned = upsert_job_location(tmp_path, denormalized)
 
+    assert returned == _record("a")
+    assert list_job_locations(tmp_path) == [_record("a")]
     assert _identity(index) == before

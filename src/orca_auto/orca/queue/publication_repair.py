@@ -39,7 +39,7 @@ from orca_auto.core.utils.persistence import timestamped_token
 from ..config import AppConfig
 from . import roots
 from .adapter import get_entry_by_id, list_queue, mark_failed
-from .entries import is_orca_queue_entry, queue_entry_id, queue_entry_reaction_dir, same_generation
+from .entries import is_orca_queue_entry, queue_entry_reaction_dir, same_generation
 from .job_records import upsert_row_job_record
 
 logger = logging.getLogger(__name__)
@@ -448,7 +448,7 @@ def repair_queue_publication(
         logger.error(
             "Cannot repair ORCA queue publication with invalid state %r: %s",
             state,
-            queue_entry_id(entry),
+            entry.queue_id,
         )
         return _record_publication_blocker(queue_root, entry, f"invalid publication state: {state}")
     # The repair holds one publication-lock acquisition across claim,
@@ -480,7 +480,7 @@ def repair_queue_publications(cfg: AppConfig) -> frozenset[str] | None:
         logger.exception("Failed to inspect ORCA publication repairs: %s", root)
         return None
     return frozenset(
-        queue_entry_id(entry) for entry in entries if not repair_queue_publication(cfg, root, entry)
+        entry.queue_id for entry in entries if not repair_queue_publication(cfg, root, entry)
     )
 
 

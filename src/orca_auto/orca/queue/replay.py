@@ -19,14 +19,7 @@ from orca_auto.core.queue.types import QueueEntry
 
 from ..config import AppConfig
 from . import roots, settlement
-from .entries import (
-    ACTIVE_STATUSES,
-    TERMINAL_STATUSES,
-    queue_entry_id,
-    queue_entry_reaction_dir,
-    queue_entry_status,
-    queue_entry_task_id,
-)
+from .entries import ACTIVE_STATUSES, TERMINAL_STATUSES, queue_entry_reaction_dir
 from .models import OrcaWorkerReplayState, TerminalReplayWorkItem
 from .terminal_marker import (
     StateGenerationFingerprint,
@@ -137,9 +130,9 @@ def _collect_durable_terminal_replays(
 ) -> set[str]:
     blocked_marker_keys: set[str] = set()
     for entry in after_entries:
-        if queue_entry_status(entry) not in TERMINAL_STATUSES:
+        if entry.status.value not in TERMINAL_STATUSES:
             continue
-        queue_id = queue_entry_id(entry)
+        queue_id = entry.queue_id
         marker_kind = terminal_replay_marker_kind(entry)
         if marker_kind is TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED:
             blocked_marker_keys.add(queue_id)
@@ -210,12 +203,12 @@ def _select_replay_generation_owners(
         reaction_key = settlement.reaction_dir_key(entry)
         if reaction_key is None:
             continue
-        owner = queue_entry_id(entry)
+        owner = entry.queue_id
         before_status = before_statuses.get(owner, "")
         pending_item = pending_replays.get(owner)
         current_generation_keys.add(owner)
         marker_kind = terminal_replay_marker_kind(entry)
-        if queue_entry_status(entry) in TERMINAL_STATUSES and (
+        if entry.status.value in TERMINAL_STATUSES and (
             terminal_replay_is_fence_only(entry)
             or marker_kind is TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED
         ):
@@ -228,8 +221,8 @@ def _select_replay_generation_owners(
         generation_rows.setdefault(reaction_key, []).append(
             ReactionGenerationRow(
                 owner=owner,
-                task_id=str(queue_entry_task_id(entry) or "").strip(),
-                status=queue_entry_status(entry),
+                task_id=entry.task_id,
+                status=entry.status.value,
                 # If state preparation failed after this generation was selected,
                 # keep the observed active -> terminal edge with its immutable
                 # snapshot.  The next poll otherwise sees a terminal -> terminal
@@ -303,8 +296,8 @@ def _replay_current_terminal_entries(
     after_statuses: dict[str, str] = {}
     retry_keys: set[str] = set()
     for entry in after_entries:
-        queue_id = queue_entry_id(entry)
-        status = queue_entry_status(entry)
+        queue_id = entry.queue_id
+        status = entry.status.value
         after_statuses[queue_id] = status
         if status not in TERMINAL_STATUSES:
             pending_replays.pop(queue_id, None)
@@ -439,7 +432,7 @@ def reconcile_terminal_replays(
     pass's outcome.
     """
     queue_root = roots.queue_root(cfg)
-    before_statuses = {queue_entry_id(entry): queue_entry_status(entry) for entry in before_rows}
+    before_statuses = {entry.queue_id: entry.status.value for entry in before_rows}
     # Process startup has no observed status edge.  Treat the first queue
     # snapshot as the replay cursor instead of inventing RUNNING origins for
     # historical terminal rows.  A terminal row that really has unfinished

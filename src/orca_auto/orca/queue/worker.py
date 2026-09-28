@@ -74,13 +74,7 @@ from .adapter import (
     requeue_running_entry,
     worker_log_path,
 )
-from .entries import (
-    queue_entry_app_name,
-    queue_entry_id,
-    queue_entry_reaction_dir,
-    queue_entry_status,
-    queue_entry_task_id,
-)
+from .entries import queue_entry_reaction_dir
 from .job_records import upsert_row_job_record
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .notifications import notify_queued_jobs
@@ -119,13 +113,13 @@ def _child_run_concluded(job: OrcaRunningJob) -> bool:
     while it handled the stop) did not conclude; it keeps the resume path.
     """
     current = get_entry_by_id(job.queue_root, job.queue_id)
-    if current is None or queue_entry_status(current) != STATUS_RUNNING:
+    if current is None or current.status.value != STATUS_RUNNING:
         return True
     reaction_dir = job.reaction_dir.strip()
     if not reaction_dir:
         return False
     state = load_state(Path(reaction_dir).expanduser().resolve())
-    expected_job_id = (job.task_id or "").strip() or queue_entry_task_id(current) or None
+    expected_job_id = (job.task_id or "").strip() or current.task_id or None
     if not state or not payload_matches_expected_job_id(state, expected_job_id):
         return False
     return str(state.get("status") or "").strip().lower() in TERMINAL_STATUSES
@@ -480,8 +474,8 @@ class OrcaQueueWorker(QueueWorkerLoop):
         # that exit has been finalized here, starting the row again would
         # replace the tracked job and strand its admission slot.
         return (
-            queue_entry_id(entry) in self._running
-            or queue_entry_id(entry) in self._publication_withheld_ids
+            entry.queue_id in self._running
+            or entry.queue_id in self._publication_withheld_ids
             or self._entry_waits_for_terminal_replay(entry)
         )
 
@@ -514,12 +508,12 @@ class OrcaQueueWorker(QueueWorkerLoop):
         admission_token: str,
     ) -> ManagedProcess:
         """Spawn the detached ORCA child for *entry*; tests substitute this seam."""
-        log_path = str(worker_log_path(queue_root, queue_entry_id(entry)))
+        log_path = str(worker_log_path(queue_root, entry.queue_id))
         return start_background_process(
             build_worker_child_command(
                 config_path=self.config_path,
                 queue_root=queue_root,
-                queue_id=queue_entry_id(entry),
+                queue_id=entry.queue_id,
                 admission_token=admission_token,
             ),
             log_path=log_path,
@@ -571,7 +565,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             )
             return False
 
-        self._running[queue_entry_id(entry)] = self._make_running_job(
+        self._running[entry.queue_id] = self._make_running_job(
             queue_root=queue_root,
             entry=entry,
             process=proc,
@@ -593,9 +587,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
     ) -> OrcaRunningJob:
         return OrcaRunningJob(
             queue_root=queue_root,
-            queue_id=queue_entry_id(entry),
+            queue_id=entry.queue_id,
             reaction_dir=queue_entry_reaction_dir(entry),
-            task_id=queue_entry_task_id(entry) or None,
+            task_id=entry.task_id or None,
             process=process,
             admission_token=admission_token,
         )
@@ -607,7 +601,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         admission_token: str,
         exc: OSError,
     ) -> None:
-        logger.error("Failed to start job %s: %s", queue_entry_id(entry), exc)
+        logger.error("Failed to start job %s: %s", entry.queue_id, exc)
         self._mark_entry_failed_and_release(queue_root, entry, admission_token, error=str(exc))
 
     def _mark_entry_failed_and_release(
@@ -622,7 +616,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         try:
             mark_failed(
                 queue_root,
-                queue_entry_id(entry),
+                entry.queue_id,
                 error=error,
                 expected_entry=entry,
             )
@@ -637,14 +631,14 @@ class OrcaQueueWorker(QueueWorkerLoop):
         process: ManagedProcess,
         admission_token: str,
     ) -> bool:
-        queue_id = queue_entry_id(entry)
+        queue_id = entry.queue_id
         attached = update_slot_metadata(
             self.admission_root,
             admission_token,
             state=SLOT_STATE_ACTIVE,
             queue_id=queue_id,
-            app_name=queue_entry_app_name(entry),
-            task_id=queue_entry_task_id(entry),
+            app_name=entry.app_name,
+            task_id=entry.task_id,
             owner_pid=process.pid,
             work_dir=queue_entry_reaction_dir(entry) or None,
         )
@@ -736,8 +730,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             )
         deferral_reason = (
             queue_entry_admission_deferral_reason(current_after_mark)
-            if current_after_mark is not None
-            and queue_entry_status(current_after_mark) == STATUS_PENDING
+            if current_after_mark is not None and current_after_mark.status.value == STATUS_PENDING
             else ""
         )
         if deferral_reason:
