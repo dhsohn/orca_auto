@@ -18,6 +18,7 @@ orca_auto init [--config PATH] [--force]
 ```
 - `--config PATH`: 생성할 설정 파일 경로 (기본값: `~/orca_auto/config/orca_auto.yaml`)
 - `--force`: 기존 설정 파일이 있으면 덮어쓰기
+- 알림: 마법사는 기존 `messenger` 설정을 유지할 수 있습니다. 그렇지 않으면 먼저 Discord를 묻고, Discord를 거절한 경우에만 Slack(10.0.0 신규)을 제안합니다. 선택한 제공자의 섹션만 기록되며, 둘 다 거절하면 비활성화된 Discord 기본값이 기록됩니다. 토큰은 화면에 표시하지 않고 입력받으며 파일은 `0600` 권한으로 기록됩니다. [Discord 알림 설정](DISCORD_SETUP.ko.md)과 [Slack 알림 설정](SLACK_SETUP.ko.md)을 참고하세요.
 
 ---
 
@@ -119,8 +120,8 @@ orca_auto service restart [--force]
 | :--- | :--- |
 | `pending` | 작업이 큐에 등록되어 가용 워커와 실행 슬롯을 기다리는 상태 (RAM Scratch 메모리 부족 등 일시적 자원 제약 시 대기 상태를 유지하며 `metadata.admission_deferral_reason`에 사유가 기록됨) |
 | `running` | 워커가 슬롯을 예약하고 격리된 generation 디렉터리에서 ORCA를 실행 중인 상태 |
-| `completed` | ORCA 정상 종료 배너(`ORCA TERMINATED NORMALLY`)가 확인되고 진단 오류 마커가 발견되지 않은 상태 (모든 수치적 속성의 수렴을 보장하지는 않으며, SCF 미수렴 시 해당 에너지 값은 null로 생략됨) |
-| `failed` | 수렴 실패, 프로세스 비정상 종료 등으로 계산이 종료된 상태 (자동 재시도 없음) |
+| `completed` | ORCA가 정상 종료(`ORCA TERMINATED NORMALLY`)하고 해결되지 않은 오류 마커가 없으며 필요한 근거가 있는 상태: 유한한 최종 단일점 에너지, Opt/TS의 명시적 최종 최적화 수렴 판정, Freq 요청 시 또는 TS의 최종 진동수 섹션(TS는 허수 진동수 정확히 1개 필요). 10.0부터 적용되며 [PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.ko.md)를 참고합니다. 이전 버전에서 완료된 실행은 재분류하지 않음 |
+| `failed` | 오류 종료, SCF·구조 미수렴, 완료 근거 누락(예: `energy_evidence_missing`), 0이 아닌 종료 코드로 계산이 종료된 상태 (자동 재시도 없음) |
 | `cancelled` | 사용자가 명시적으로 취소한 상태 |
 
 ---

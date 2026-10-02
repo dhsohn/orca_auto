@@ -349,7 +349,7 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0009: 재개는 새 generation으로의 재바인딩으로만 한다](adr/0009-resume-only-by-rebind.md)
 - [ADR 0010: 큐 명령은 큐 행을 직접 읽는다](adr/0010-queue-commands-read-queue-rows.md)
 - [ADR 0011: PID 조회는 읽기 전용](adr/0011-read-only-pid-lookups.md)
-
-[ADR 0012: 명시적 과학 완료 근거](adr/0012-positive-scientific-completion-evidence.md)
-
-[ADR 0013: 설치 환경 서비스와 입력 명시](adr/0013-installed-service-and-explicit-input.md)
+- [ADR 0012: 명시적 과학 완료 근거](adr/0012-positive-scientific-completion-evidence.md)
+- [ADR 0013: 설치 환경 서비스와 입력 명시](adr/0013-installed-service-and-explicit-input.md)
+- [ADR 0014: 추가 알림 제공자 Slack](adr/0014-slack-notification-provider.md)
+- [ADR 0015: 워커 자신의 runs root로 한정한 admission 복구](adr/0015-admission-recovery-scoped-to-own-runs-root.md)

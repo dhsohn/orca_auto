@@ -2,7 +2,8 @@
 
 Domain notifiers build a :class:`Message` describing *what* to say (a title, a
 severity, an optional author, and groups of labelled fields). Per-messenger
-renderers (:mod:`.render_discord`) turn it into the native markup. This keeps
+renderers (:mod:`.render_discord`, :mod:`.render_slack`) turn it into the native
+markup. This keeps
 Markdown out of the domain code.
 
 Span construction bakes the value-vs-literal distinction in at build time so the

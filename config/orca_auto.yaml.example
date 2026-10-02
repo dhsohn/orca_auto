@@ -31,3 +31,12 @@ messenger:
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
+# Slack instead of Discord (new in 10.0.0; see docs/SLACK_SETUP.md). Only the selected
+# provider's section may be present, so replace the whole messenger block above.
+# messenger:
+#   provider: slack
+#   slack:
+#     bot_token: ""            # bot token with chat:write; blank disables
+#     default_channel_id: ""   # channel ID such as C0123456789, not a name
+#     timeout_seconds: 5.0
+#     max_attempts: 1          # only HTTP 429 with Retry-After is retried; at most 10

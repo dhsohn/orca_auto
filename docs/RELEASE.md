@@ -28,6 +28,79 @@ checkout. They also verify a prepared immutable runtime. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to 10.0
+
+Version 10.0 changes a public contract: a run is `completed` only with present
+completion evidence (a finite final single-point energy, final optimization
+convergence for Opt/TS, a final frequency section when Freq is requested), and a
+run without it fails ([ADR 0012](adr/0012-positive-scientific-completion-evidence.md),
+[PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.md#scientific-evidence-and-compatibility)).
+It also adds the optional Slack provider; Discord settings are unchanged
+([ADR 0014](adr/0014-slack-notification-provider.md)). Publishing the package
+performs none of the steps below.
+
+Before the maintenance window:
+
+1. Review consumers of `queue list --json`, `job_state.json` and `machine.json`
+   that select `completed` runs or resubmit `failed` ones. After the switch some
+   runs that 9.0.x would have completed fail instead, and none of them is retried
+   automatically. Runs finished under 9.0.x keep their recorded status; nothing
+   reclassifies them.
+2. Keep the current 9.0.x runtime (its environment or prepared runtime
+   directory), its installed units and its configuration file unchanged so that
+   they can be restored.
+
+In the idle window:
+
+3. Wait until `queue list --json` shows `active_simulations: 0` and
+   `<runs_root>/.admission/admission_slots.json` holds no reserved or active
+   slot; `service restart` checks again under the admission lock. No job may run
+   across the switch. Then stop the 9.0.x worker and every submitter (`run-dir`
+   callers, scripts and automation) so that nothing writes the queue or job
+   states while the snapshot is taken; take it only while no slot is reserved or
+   active and no submission, cancellation or result publication is unfinished.
+4. Copy this frozen pre-cutover evidence to a dated location outside `runs_root` and
+   keep it with the retained runtime, units and configuration: the
+   configuration file, `<runs_root>/queue.json`,
+   `<runs_root>/.admission/admission_slots.json`,
+   `<runs_root>/job_locations.json` and every `job_state.json` under
+   `runs_root` (job roots and generation directories), keeping their relative
+   paths. Do not move or delete calculation data.
+5. Install 10.0 and its units as for any release (a new environment or a
+   [prepared runtime](RUNTIME.md)), restart under the guard and verify
+   `service status --json`: the running worker's version, build and source root
+   must match the installed unit, and the worker must have started after the
+   last configuration change.
+
+After the switch:
+
+- `queue_generation` digests are comparable only within one major version. Do
+  not compare 9.x and 10.x digests, and do not let a 9.0.x worker take over rows
+  or job states written by 10.0 unless their compatibility has been shown.
+- Rolling back to 9.0.x is an explicit owner decision made in an idle window.
+  Stop the 10.0 worker; a 9.0.x worker must not continue work that 10.0
+  started. Before restoring anything, copy aside every `job_state.json`, result
+  and queue row that 10.0 created or changed, and leave the job and generation
+  directories in place. Then restore together the step 4 copies (`queue.json`,
+  `admission_slots.json`, `job_locations.json` and every `job_state.json`), the
+  9.0.x configuration (9.0.x rejects `messenger.provider: slack`) and the
+  retained 9.0.x runtime and units. Never restore the old `queue.json` alone on
+  top of job states that 10.0 changed. Keep the 9.0.x worker and submitters
+  stopped after restoring. Before any 9.0.x worker starts, compare every
+  restored `pending` row (queue ID, job directory, generation and selected
+  input identity) with the 10.0 outcomes and generation evidence copied aside.
+  A row proven not claimed, run or resubmitted under 10.0 may resume as that
+  same existing row, not as a new submission or generation, but only by an
+  explicit owner decision after this reconciliation is complete. A row that
+  10.0 already ran, completed or advanced stays blocked, and so does a row
+  whose identity cannot be matched unambiguously; settle those only through
+  supported queue commands such as `queue cancel`, after an explicit owner
+  decision, and never by editing a status by hand. Nothing is replayed or
+  requeued automatically. Start the 9.0.x worker only after every restored
+  pending row is either approved to resume or settled. This procedure relies on the
+  pre-cutover copies, not on 9.0.x reading state written by 10.0, and it
+  deletes no data.
+
 ## Upgrading to 9.0
 
 Version 9.0 changes public contracts (the CHANGELOG entries marked *public

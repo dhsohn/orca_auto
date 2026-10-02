@@ -23,8 +23,8 @@ class MessageChannel(Protocol):
     """A destination that renders and delivers :class:`Message` notifications.
 
     Implementations own their own native rendering and transport (Discord embeds
-    over the Bot API). Callers build a provider-neutral :class:`Message` and
-    never see the wire format.
+    over the Bot API, Slack plain text over ``chat.postMessage``). Callers build
+    a provider-neutral :class:`Message` and never see the wire format.
     """
 
     @property
@@ -50,13 +50,18 @@ def build_channel(
     *,
     logger: logging.Logger | None = None,
 ) -> MessageChannel:
-    """Return the Discord bot channel when its config is complete, else a null channel.
+    """Return the selected provider's channel when its config is complete, else a null channel.
 
-    The adapter is imported here, not at module import, so importing the
-    messaging package never loads transport code.
+    Only the selected provider's settings are used. Adapters are imported here,
+    not at module import, so importing the messaging package never loads
+    transport code.
     """
-    if not messenger.discord.bot_notification_enabled:
+    if not messenger.enabled:
         return DisabledChannel()
+    if messenger.provider == "slack":
+        from .slack_bot import SlackBotChannel
+
+        return SlackBotChannel(messenger.slack, logger=logger)
     from .discord_bot import DiscordBotChannel
 
     return DiscordBotChannel(messenger.discord, logger=logger)

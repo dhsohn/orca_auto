@@ -22,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from orca_auto.core.admission import (
+    SlotOwnership,
     admission_dir,
     list_all_slots,
     list_slots,
@@ -31,6 +32,7 @@ from orca_auto.core.admission import (
     recover_slot_engine_process,
     release_slot,
     reserve_slot,
+    runs_root_ownership,
     update_slot_metadata,
 )
 from orca_auto.core.admission.records import (
@@ -87,7 +89,9 @@ _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
 _WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
 
 
-def _try_reserve_admission_slot(admission_root: Path, limit: int) -> str | None:
+def _try_reserve_admission_slot(
+    admission_root: Path, limit: int, *, owned: SlotOwnership
+) -> str | None:
     admission_token = reserve_slot(
         admission_root,
         limit,
@@ -96,6 +100,7 @@ def _try_reserve_admission_slot(admission_root: Path, limit: int) -> str | None:
         state=SLOT_STATE_RESERVED,
         engine_process_state=ENGINE_PROCESS_IDLE,
         engine_launch_gated=ORCA_ENGINE_LAUNCH_GATED,
+        owned=owned,
     )
     if admission_token is None:
         logger.debug(
@@ -156,6 +161,10 @@ class OrcaQueueWorker(QueueWorkerLoop):
         self.config_path = str(config_path or "").strip()
         self.queue_root = roots.queue_root(cfg)
         self.admission_root = admission_dir(cfg.runtime.allowed_root)
+        # Dead-owner slots this worker may recover or drop: those whose work
+        # directory lies inside its own runs root. Other records in a store it
+        # shares are left as written and still count toward the limit.
+        self._owns_slot = runs_root_ownership(cfg.runtime.allowed_root)
         self.replay_state = OrcaWorkerReplayState()
         self._worker_state_last_reconcile: float | None = None
         self._snapshot_intent_last_reconcile: float | None = None
@@ -302,12 +311,12 @@ class OrcaQueueWorker(QueueWorkerLoop):
         """
         self._reconcile_snapshot_intents_if_due()
         self._release_unattached_admission_slots()
-        recover_orphaned_engine_slots(self.admission_root, strict=False)
+        recover_orphaned_engine_slots(self.admission_root, strict=False, owned=self._owns_slot)
         before_rows = roots.list_orca_rows(self.cfg)
         protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
-            list_slots(self.admission_root)
+            list_slots(self.admission_root, owned=self._owns_slot)
         )
-        reconcile_stale_slots(self.admission_root)
+        reconcile_stale_slots(self.admission_root, owned=self._owns_slot)
         reconcile_orphaned_running_entries(
             self.queue_root,
             ignore_worker_pid=True,
@@ -408,7 +417,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
             return "blocked", None
         if roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry) is None:
             return "idle", None
-        admission_token = _try_reserve_admission_slot(self.admission_root, self.max_concurrent)
+        admission_token = _try_reserve_admission_slot(
+            self.admission_root, self.max_concurrent, owned=self._owns_slot
+        )
         if admission_token is None:
             return "blocked", None
         try:
@@ -641,6 +652,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             task_id=entry.task_id,
             owner_pid=process.pid,
             work_dir=queue_entry_reaction_dir(entry) or None,
+            owned=self._owns_slot,
         )
         if not attached:
             logger.error(

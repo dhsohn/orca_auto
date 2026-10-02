@@ -18,6 +18,7 @@ orca_auto init [--config PATH] [--force]
 ```
 - `--config PATH`: Path for the configuration file (default: `~/orca_auto/config/orca_auto.yaml`).
 - `--force`: Overwrite existing configuration if present.
+- Notifications: the wizard can keep the existing `messenger` settings. Otherwise it asks about Discord first and, only when Discord is declined, offers Slack (new in 10.0.0); only the chosen provider's section is written, and declining both writes the disabled Discord default. Tokens are read without echo and the file is written with mode `0600`. See [Discord Setup](DISCORD_SETUP.md) and [Slack Setup](SLACK_SETUP.md).
 
 ---
 
@@ -119,8 +120,8 @@ orca_auto service restart [--force]
 | :--- | :--- |
 | `pending` | Job is durably recorded in the queue, awaiting worker admission and an available slot. (If admission is temporarily deferred due to transient host constraints like RAM scratch capacity, the job remains in `pending` with `metadata.admission_deferral_reason` set and display detail showing resource deferral). |
 | `running` | Worker has claimed an execution slot and ORCA is running inside an isolated generation directory. |
-| `completed` | ORCA calculation finished with normal termination (`ORCA TERMINATED NORMALLY`) and verified diagnostic checks. Does not guarantee convergence of every numerical property (e.g., unconverged SCF energy lines are omitted as null). |
-| `failed` | Calculation terminated with an error, SCF convergence failure, or non-zero exit code (no automatic retries). |
+| `completed` | ORCA terminated normally (`ORCA TERMINATED NORMALLY`) with no unresolved failure marker, and the required evidence is present: a finite final single-point energy, an explicit final optimization convergence verdict for Opt/TS, and a final frequency section when Freq is requested or for TS (a TS also needs exactly one imaginary mode). Since 10.0; see [PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.md). Runs completed under earlier versions are not reclassified. |
+| `failed` | Calculation terminated with an error, SCF or geometry non-convergence, missing completion evidence (for example `energy_evidence_missing`) or a non-zero exit code (no automatic retries). |
 | `cancelled` | Calculation was explicitly aborted by the user. |
 
 ---

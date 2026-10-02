@@ -3,10 +3,10 @@
 Builders turn a lifecycle event into a messenger-neutral
 :class:`~orca_auto.core.messaging.Message`; the ``notify_*`` helpers deliver it
 through the :class:`~orca_auto.core.messaging.MessageChannel` that
-:func:`notification_channel` resolves from the app config. The Discord renderer
-owns the native markup, so these builders never see it. The identity is carried
-on ``Message.author`` (the Discord embed author line), keeping it out of the
-title.
+:func:`notification_channel` resolves from the app config (Discord or Slack).
+Each provider's renderer owns its native markup, so these builders never see
+it. The identity is carried on ``Message.author`` (the Discord embed author
+line, the leading ``author:`` of the Slack text), keeping it out of the title.
 """
 
 from __future__ import annotations

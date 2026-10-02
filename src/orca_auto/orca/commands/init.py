@@ -23,6 +23,7 @@ from orca_auto.core.config.schema import (
     SchedulerConfig,
     discord_config_from_mapping,
     explicit_positive_int,
+    slack_config_from_mapping,
 )
 from orca_auto.core.paths import validate_configured_executable_path
 from orca_auto.core.paths.validation import validated_absolute_linux_path_text
@@ -181,8 +182,31 @@ def _prompt_discord_config() -> dict[str, object]:
         print("A Discord bot token and a default notification channel id are required.")
 
 
+def _prompt_slack_config() -> dict[str, object]:
+    while True:
+        raw: dict[str, object] = {
+            "bot_token": _prompt_secret_text("Slack bot token"),
+            "default_channel_id": _prompt_text("Slack default notification channel id"),
+        }
+        try:
+            config = slack_config_from_mapping(raw)
+        except ValueError as exc:
+            print(f"Invalid Slack notification configuration: {exc}")
+            continue
+        if config.slack_notification_enabled:
+            return raw
+        print("A Slack bot token and a default notification channel id are required.")
+
+
 def _prompt_messenger_config() -> dict[str, object]:
-    return {"provider": "discord", "discord": _prompt_discord_config()}
+    # Discord is asked first and stays the default; Slack is offered only when
+    # Discord is declined, and only the chosen provider's section is written.
+    discord = _prompt_discord_config()
+    if not discord["bot_token"] and _prompt_yes_no(
+        "Configure Slack notifications now?", default=False
+    ):
+        return {"provider": "slack", "slack": _prompt_slack_config()}
+    return {"provider": "discord", "discord": discord}
 
 
 def _prompt_runs_root() -> str:

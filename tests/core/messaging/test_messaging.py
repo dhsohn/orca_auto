@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import socket
 import subprocess
 import sys
+import urllib.request
+from typing import Literal, Self
 
 import pytest
 
@@ -25,6 +30,38 @@ from orca_auto.core.messaging import (
     text,
 )
 from orca_auto.core.messaging.discord_bot import DiscordBotChannel
+
+# Obviously synthetic values: no real Slack workspace, token or channel.
+_SLACK_TOKEN = "xoxb-synthetic-test-token"
+_SLACK_CHANNEL = "C0SYNTHETIC1"
+
+
+def _refuse_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a messenger test must not open a network connection")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+
+
+class _FakeSlackResponse:
+    status = 200
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self, *_args: object) -> bytes:
+        return self._body
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_args: object) -> Literal[False]:
+        return False
 
 
 def test_neutral_messaging_import_does_not_eagerly_load_adapters() -> None:
@@ -166,6 +203,91 @@ def test_build_channel_returns_null_channel_when_config_incomplete(
     assert not channel.enabled
     result = channel.send(Message(title="T"))
     assert (result.sent, result.skipped, result.error) == (False, True, "messenger_disabled")
+
+
+def test_configured_slack_channel_posts_one_message_to_chat_post_message(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _refuse_network(monkeypatch)
+    requests: list[tuple[urllib.request.Request, object]] = []
+
+    def fake_open(
+        _opener: object,
+        request: urllib.request.Request,
+        data: object = None,
+        timeout: object = None,
+    ) -> _FakeSlackResponse:
+        requests.append((request, timeout))
+        return _FakeSlackResponse(
+            b'{"ok": true, "channel": "C0SYNTHETIC1", "ts": "1700000000.000100"}'
+        )
+
+    # Every urlopen call, whichever module imported it, goes through an opener.
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", fake_open)
+
+    config = messenger_config_from_mapping(
+        {
+            "provider": "slack",
+            "slack": {
+                "bot_token": _SLACK_TOKEN,
+                "default_channel_id": _SLACK_CHANNEL,
+                "timeout_seconds": 3,
+                "max_attempts": 1,
+            },
+        }
+    )
+    assert config.provider == "slack"
+    assert config.enabled
+    channel = build_channel(config)
+    assert channel.enabled
+    assert not isinstance(channel, DisabledChannel | DiscordBotChannel)
+
+    message = Message(
+        title="ORCA completed",
+        severity="success",
+        groups=(group(field_row("Job", text("water-opt"))),),
+        author="orca_auto",
+    )
+    with caplog.at_level(logging.DEBUG):
+        result = channel.send(message)
+
+    assert (result.sent, result.skipped, result.error) == (True, False, "")
+    [(request, timeout)] = requests
+    assert isinstance(request, urllib.request.Request)
+    assert request.full_url == "https://slack.com/api/chat.postMessage"
+    assert request.get_method() == "POST"
+    assert request.get_header("Authorization") == f"Bearer {_SLACK_TOKEN}"
+    assert str(request.get_header("Content-type", "")).startswith("application/json")
+    assert timeout == 3.0
+    assert isinstance(request.data, bytes)
+    body = json.loads(request.data)
+    assert body["channel"] == _SLACK_CHANNEL
+    assert "ORCA completed" in body["text"]
+    assert "water-opt" in json.dumps(body)
+    assert _SLACK_TOKEN not in json.dumps(body)
+    # Neither the token nor the message payload is logged.
+    assert _SLACK_TOKEN not in caplog.text
+    assert "water-opt" not in caplog.text
+
+
+def test_selected_slack_without_slack_settings_never_routes_through_discord(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _refuse_network(monkeypatch)
+    complete_discord = DiscordConfig(bot_token="synthetic-discord-token", default_channel_id="123")
+
+    selected_slack = MessengerConfig(provider="slack", discord=complete_discord)
+    assert not selected_slack.enabled
+    channel = build_channel(selected_slack)
+    assert isinstance(channel, DisabledChannel)
+    result = channel.send(Message(title="T"))
+    assert (result.sent, result.skipped) == (False, True)
+
+    # The matching provider still builds Discord; nothing is sent.
+    discord = build_channel(MessengerConfig(provider="discord", discord=complete_discord))
+    assert isinstance(discord, DiscordBotChannel)
+    assert discord.enabled
 
 
 def test_messenger_config_from_mapping() -> None:

@@ -368,7 +368,7 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0009: Resume only by rebinding into a fresh generation](adr/0009-resume-only-by-rebind.md)
 - [ADR 0010: Queue commands read queue rows directly](adr/0010-queue-commands-read-queue-rows.md)
 - [ADR 0011: Read-only PID lookups](adr/0011-read-only-pid-lookups.md)
-
-[ADR 0012: Positive scientific completion evidence](adr/0012-positive-scientific-completion-evidence.md)
-
-[ADR 0013: Installed services and explicit input](adr/0013-installed-service-and-explicit-input.md)
+- [ADR 0012: Positive scientific completion evidence](adr/0012-positive-scientific-completion-evidence.md)
+- [ADR 0013: Installed services and explicit input](adr/0013-installed-service-and-explicit-input.md)
+- [ADR 0014: Slack as an additional notification provider](adr/0014-slack-notification-provider.md)
+- [ADR 0015: Admission recovery scoped to the worker's own runs root](adr/0015-admission-recovery-scoped-to-own-runs-root.md)

@@ -13,6 +13,7 @@ from .store import (
     AdmissionSlot,
     AdmissionStore,
     AdmissionStoreCorruptError,
+    SlotOwnership,
     activate_reserved_slot,
     admission_lock,
     clear_slot_engine_process,
@@ -26,6 +27,7 @@ from .store import (
     reconcile_stale_slots,
     release_slot,
     reserve_slot,
+    runs_root_ownership,
     set_slot_engine_process,
     update_slot_metadata,
 )
@@ -35,6 +37,7 @@ __all__ = [
     "AdmissionSlot",
     "AdmissionStore",
     "AdmissionStoreCorruptError",
+    "SlotOwnership",
     "EngineProcessRecordError",
     "EngineProcessRecordPendingError",
     "admission_dir",
@@ -56,6 +59,7 @@ __all__ = [
     "register_slot_engine_process",
     "release_slot",
     "reserve_slot",
+    "runs_root_ownership",
     "set_slot_engine_process",
     "update_slot_metadata",
 ]

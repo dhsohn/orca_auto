@@ -52,7 +52,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 > **설정 검증 원칙**:
 > 유효하지 않은 매핑, 명시적 null, 알 수 없는 키(`workflow` 섹션 포함)는 기본값을 적용하기 전에 거부(fail-closed)됩니다. 전체 설정 항목 예시는 [config/orca_auto.yaml.example](../config/orca_auto.yaml.example)를 참고하세요.
 
-실행권(admission) 상태는 항상 `<runs_root>/.admission`에 있고 한도는 `scheduler.max_active_simulations`입니다. 제거된 `scheduler.admission_root` 키는 삭제하라는 안내와 함께 거부됩니다([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)).
+실행권(admission) 상태는 항상 `<runs_root>/.admission`에 있고 한도는 `scheduler.max_active_simulations`입니다. 제거된 `scheduler.admission_root` 키는 삭제하라는 안내와 함께 거부됩니다([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)). 워커는 작업 디렉터리가 자신의 `runs_root` 안에 있는 slot에 대해서만 엔진 기록을 복구하고 소유자가 죽은 slot을 제거합니다. store의 다른 기록은 그대로 두며 계속 한도에 포함됩니다([ADR 0015](adr/0015-admission-recovery-scoped-to-own-runs-root.md)).
 
 ---
 
@@ -68,7 +68,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 7. **종료 처리 책임**: 부모는 자식·엔진 종료를 확인하고 실제 실행의 종료 근거를 준비한 뒤 실행권을 반환합니다. 종료 코드가 0이어도 해당 작업의 종료 상태가 필요합니다. 인덱스 발행과 복구 표식 제거는 실행 슬롯 없이 재시도할 수 있으며 워커 재시작 후에도 이어집니다. 디스크의 표식은 발행이 끝날 때까지 같은 폴더의 다음 제출을 보류하고, 준비된 다른 작업은 진행할 수 있습니다. 상태 확정이나 슬롯 반환이 실패하면 감독 중인 작업의 재시도 책임을 유지합니다. 알림 전달은 best-effort 방식입니다.
 
-8. **참고용 알림의 책임**: 부모는 새 제출의 디스크 큐 항목에서 위치 기록 발행 후 제출 알림 전송권을 확보합니다. 자식은 시도 상태를 저장한 뒤 캡처한 시작 알림을 별도로 전달합니다. 동시 전송 수가 제한된 백그라운드 전송은 발행 완료나 계산 시작을 기다리게 하지 않습니다. 전송권 기록·전송 실패와 프로세스 종료로 메시지가 유실될 수 있습니다. 과거 항목을 소급 전송하지 않으며 알림 전송은 실행 근거를 변경하지 않습니다.
+8. **참고용 알림의 책임**: 부모는 새 제출의 디스크 큐 항목에서 위치 기록 발행 후 제출 알림 전송권을 확보합니다. 자식은 시도 상태를 저장한 뒤 캡처한 시작 알림을 별도로 전달합니다. 동시 전송 수가 제한된 백그라운드 전송은 발행 완료나 계산 시작을 기다리게 하지 않습니다. 전송권 기록·전송 실패와 프로세스 종료로 메시지가 유실될 수 있습니다. 과거 항목을 소급 전송하지 않으며 알림 전송은 실행 근거를 변경하지 않습니다. 메시지는 선택한 `messenger.provider`로만 갑니다. 기본값은 Discord이고, 10.0.0부터 Slack을 선택할 수 있습니다([ADR 0014](adr/0014-slack-notification-provider.md)). 선택한 제공자의 설정이 불완전하면 아무것도 보내지 않습니다.
 
 9. **종료 발행 대기 표시**: 종료 복구 표시가 남으면 실행 종료 상태를 유지하고 상세에 `result publication pending`을 표시합니다. 메타데이터의 `publication_blocked_scope=orca_terminal_publication`, `publication_owner=orca_queue_worker`, 사유·다음 조치로 책임을 설명합니다. 해당 폴더의 제한은 상태 필터와 페이지 범위 밖에서도 `admission_blockers`에 남으며, 실행 슬롯 점유를 뜻하지 않습니다.
 
@@ -98,6 +98,12 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 섹션을 추가로 요구합니다. 나중의 명시적 SCF 수렴은 앞선 SCF 실패를 해소합니다.
 근거 누락은 incomplete 분석과 failed 실행으로 남으며 자동 재시도하지 않습니다.
 
+10.0의 공개 규격 변경([ADR 0012](adr/0012-positive-scientific-completion-evidence.md)):
+정상 종료만 하고 이 근거가 없던 실행은 9.0.x에서 `completed`였지만 10.0부터는
+`failed`입니다. `completed` 실행을 고르는 소비자는 더 적은 실행을 받게 되고,
+실패 실행을 다시 제출하는 자동화는 근거 누락만이 문제인 실행도 보게 됩니다. 이런
+실행은 자동으로 재시도하지 않습니다. 이전 버전에서 끝난 실행은 재분류하지 않습니다.
+
 새 machine 관측은 공통 v1 엔벨로프를 바꾸지 않고 payload.data.results.science를
 추가합니다. 필드는 status (verified/unknown/failed), reason, energy_hartree,
 scf_converged, optimization_converged, frequencies_available,
@@ -116,8 +122,10 @@ unknown을 0 또는 true로 해석하면 안 됩니다.
 
 과거 terminal 관측은 불변이며 science가 없을 수 있습니다. 소비자는 필드 존재와
 검증 상태를 확인해야 하며 과거 성공을 소급해 확정하면 안 됩니다. 공개 JSON 추가는
-기존 필드 이름·의미, CLI 기본값과 공통 엔벨로프를 유지합니다. 파괴적 제거에는 ADR,
-마이그레이션 안내와 메이저 릴리스가 필요합니다. 패키지 분류는 Beta이며 실제
+기존 필드 이름, CLI 기본값과 공통 엔벨로프를 유지합니다. 필드 의미도 유지하되,
+메이저 릴리스가 변경을 기록한 경우는 예외입니다. 10.0에서 `completed` 값은 위의 완료
+근거를 요구합니다. 파괴적 제거와 의미 변경에는 ADR, 마이그레이션 안내와 메이저
+릴리스가 필요합니다. 패키지 분류는 Beta이며 실제
 acceptance 검증 범위는 현재 ORCA 6.1.1입니다.
 
 systemd install에서 --repo를 생략하면 현재 격리된 가상환경과 패키지 템플릿을 사용합니다. --repo는 체크아웃 또는 준비된 런타임을 명시할 때 선택적으로 사용합니다.

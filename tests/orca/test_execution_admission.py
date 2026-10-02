@@ -12,6 +12,7 @@ from orca_auto.core.admission import (
     list_all_slots,
     list_slots,
     prepare_slot_engine_process,
+    runs_root_ownership,
     set_slot_engine_process,
 )
 from orca_auto.core.admission import persistence as admission_persistence
@@ -63,7 +64,8 @@ def _slot_rule_outcome(
     job = tmp_path / f"{activation}-{engine}-{body}"
     job.mkdir()
     admission = job / ".admission"
-    token = _try_reserve_admission_slot(admission, 1)
+    # The store under test is ``<job>/.admission``, so ``job`` is its runs root.
+    token = _try_reserve_admission_slot(admission, 1, owned=runs_root_ownership(job))
     assert token is not None
     if activation == "owner_gone":
         [slot] = list_all_slots(admission)

@@ -18,6 +18,7 @@ from .records import (
     AdmissionSlot,
 )
 from .store import (
+    SlotOwnership,
     clear_slot_engine_process,
     complete_slot_engine_process,
     get_slot,
@@ -363,11 +364,19 @@ def recover_slot_engine_process(
     return True
 
 
-def recover_orphaned_engine_slots(root: str | Path, *, strict: bool) -> int:
-    """Recover dead-owner engine groups before generic stale-slot cleanup."""
+def recover_orphaned_engine_slots(
+    root: str | Path, *, strict: bool, owned: SlotOwnership | None = None
+) -> int:
+    """Recover dead-owner engine groups before generic stale-slot cleanup.
+
+    With ``owned``, only slots it accepts are recovered; any other record is
+    neither signalled nor changed.
+    """
     recovered = 0
     orphaned: list[AdmissionSlot] = []
     for slot in list_all_slots(root):
+        if owned is not None and not owned(slot):
+            continue
         if process_utils.process_identity_alive(
             slot.owner_pid, slot.process_start_ticks, slot.owner_boot_id
         ):

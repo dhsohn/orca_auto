@@ -32,6 +32,7 @@ from orca_auto.core.admission import (
     AdmissionLimitReachedError,
     admission_dir,
     prepare_slot_engine_process,
+    runs_root_ownership,
     set_slot_engine_process,
 )
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
@@ -178,7 +179,12 @@ def test_child_slot_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         for engine_state in _ENGINE_STATES:
             admission = tmp_path / f"admission-{exc_name}-{engine_state}"
             cfg = make_app_cfg(runs)
-            token = queue_worker._try_reserve_admission_slot(admission, cfg.runtime.max_concurrent)
+            # The worker reserves with its own runs root's ownership predicate.
+            token = queue_worker._try_reserve_admission_slot(
+                admission,
+                cfg.runtime.max_concurrent,
+                owned=runs_root_ownership(cfg.runtime.allowed_root),
+            )
             assert token is not None
 
             monkeypatch.setattr(

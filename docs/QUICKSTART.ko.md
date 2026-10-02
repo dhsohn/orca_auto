@@ -20,6 +20,7 @@ orca_auto init --config ~/orca_auto.yaml
 > - ORCA 실행 바이너리 절대 경로 (`orca.paths.orca_executable`)
 > - 작업 디렉터리가 위치할 최상위 경로 (`runs_root`)
 > - 동시 실행 허용 수 (`scheduler.max_active_simulations`)
+> - 선택 사항인 발신 알림 (`messenger`): [Discord](DISCORD_SETUP.ko.md) 또는 [Slack](SLACK_SETUP.ko.md) (10.0.0 신규)
 
 ---
 

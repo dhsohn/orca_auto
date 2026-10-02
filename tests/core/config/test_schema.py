@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from typing import Any
 
 import pytest
@@ -11,6 +12,16 @@ from orca_auto.core.config.schema import (
     messenger_config_from_mapping,
     positive_int_mapping,
 )
+from orca_auto.core.messaging import DisabledChannel, Message, build_channel
+from orca_auto.core.messaging.discord_bot import DiscordBotChannel
+
+
+def _refuse_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a messenger test must not open a network connection")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket.socket, "connect", refuse)
 
 
 def test_positive_int_mapping_keeps_only_positive_integer_values() -> None:
@@ -249,3 +260,51 @@ def test_discord_config_preserves_empty_string_disable() -> None:
     assert config.bot_token == ""
     assert config.default_channel_id == ""
     assert not config.bot_notification_enabled
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"provider": "slack"},
+        {"provider": " Slack "},
+        {"provider": "slack", "slack": {}},
+    ],
+)
+def test_slack_provider_without_slack_settings_is_accepted_and_cannot_send(
+    raw: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _refuse_network(monkeypatch)
+
+    config = messenger_config_from_mapping(raw)
+
+    # Without Slack settings nothing is configured to deliver to.
+    assert not config.enabled
+    channel = build_channel(config)
+    assert isinstance(channel, DisabledChannel)
+    assert not channel.enabled
+    result = channel.send(Message(title="ORCA queued"))
+    assert (result.sent, result.skipped) == (False, True)
+
+
+def test_discord_provider_and_unknown_providers_keep_their_behavior_alongside_slack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _refuse_network(monkeypatch)
+
+    complete = messenger_config_from_mapping(
+        {
+            "provider": "discord",
+            "discord": {"bot_token": "synthetic-token", "default_channel_id": "123"},
+        }
+    )
+    assert complete.enabled
+    # Built only; nothing is sent.
+    assert isinstance(build_channel(complete), DiscordBotChannel)
+
+    unset = messenger_config_from_mapping({"provider": "discord"})
+    assert not unset.enabled
+    assert isinstance(build_channel(unset), DisabledChannel)
+
+    with pytest.raises(ValueError, match="Unsupported messenger.provider"):
+        messenger_config_from_mapping({"provider": "telegram"})

@@ -23,6 +23,7 @@ from orca_auto.core.admission import (
     build_slot_engine_process_registrar,
     complete_slot_engine_process,
     release_slot,
+    runs_root_ownership,
 )
 from orca_auto.core.admission.records import ADMISSION_SOURCE_QUEUE_RUN, SLOT_STATE_ACTIVE
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
@@ -65,6 +66,7 @@ def _child_admission_slot(context: RunExecutionContext) -> Iterator[None]:
         source=ADMISSION_SOURCE_QUEUE_RUN,
         app_name=context.admission_app_name,
         task_id=context.admission_task_id,
+        owned=runs_root_ownership(context.cfg.runtime.allowed_root),
     )
     if activated is None:
         release_slot(context.admission_root, token)

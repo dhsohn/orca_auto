@@ -1,6 +1,6 @@
 # ADR 0007: One admission store per installation under `<runs_root>/.admission`
 
-- Status: Accepted
+- Status: Extended by ADR 0015
 - Date: 2026-09-27
 
 ## Problem
