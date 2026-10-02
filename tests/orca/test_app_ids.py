@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from orca_auto import cli
-from orca_auto.core.admission import admission_dir
+from orca_auto.core.admission import admission_dir, runs_root_ownership
 from orca_auto.orca import app_ids
 
 
@@ -103,10 +103,14 @@ def test_orca_worker_reservation_uses_the_persisted_identity(
 
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path), max_concurrent=2))
     admission_root = admission_dir(cfg.runtime.allowed_root)
+    owned = runs_root_ownership(cfg.runtime.allowed_root)
     assert (
-        orca_worker._try_reserve_admission_slot(admission_root, cfg.runtime.max_concurrent)
+        orca_worker._try_reserve_admission_slot(
+            admission_root, cfg.runtime.max_concurrent, owned=owned
+        )
         == "slot-1"
     )
+    assert captured[0]["owned"] is owned
     assert captured[0]["source"] == "orca_auto.orca.queue_worker"
     assert captured[0]["app_name"] == "orca_auto_orca"
     assert captured[0]["engine_launch_gated"] is True

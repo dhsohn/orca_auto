@@ -20,6 +20,7 @@ orca_auto init --config ~/orca_auto.yaml
 > - Absolute path to your ORCA executable (`orca.paths.orca_executable`)
 > - Root directory for calculation workspaces (`runs_root`)
 > - Maximum concurrent simulations (`scheduler.max_active_simulations`)
+> - Optional outbound notifications (`messenger`): [Discord](DISCORD_SETUP.md), or [Slack](SLACK_SETUP.md) (new in 10.0.0)
 
 ---
 

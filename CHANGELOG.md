@@ -8,23 +8,60 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [10.0.0] - 2026-10-02
+
+Version 10.0 is a major release. The entry marked *public contract* changes what
+a `completed` run means; the other changes, including optional Slack
+notifications, are additive or fixes. Discord notifications are retained
+unchanged and remain the default. Upgrading needs an idle window; see
+[Upgrading to 10.0](docs/RELEASE.md#upgrading-to-100).
+
+- Completion is stricter ([ADR 0012](docs/adr/0012-positive-scientific-completion-evidence.md)).
+  A normally terminated run completes only when the evidence is present: a
+  finite final single-point energy (any sign), an explicit final optimization
+  convergence verdict for Opt/TS, a final frequency section when Freq is
+  requested or for TS, and IRC evidence when IRC is requested. Otherwise the run
+  fails with an incomplete analysis such as `energy_evidence_missing`. A run
+  that 9.0.x reported as completed can therefore fail, consumers that select
+  `completed` runs see fewer of them, automation that resubmits `failed` runs
+  also sees runs whose only problem is missing evidence, and minimum and
+  first-order saddle labels are narrower. Failed runs are not retried
+  automatically. Results already written are not reclassified or rewritten.
+- 9.0.x rejects a configuration that selects `messenger.provider: slack`; before
+  rolling back, return the `messenger` block to its Discord or disabled form,
+  with the owner's approval of that configuration change.
+
 ### Fixed
 
-- Require positive final energy, optimization and requested frequency evidence
-  before completing an ORCA job; accept explicitly recovered SCF convergence.
 - Publish scientific facts bound to the same artifact bytes in machine.json,
   preserving null for missing measurements and historical terminal observations.
 - Restrict stationary-point claims to unconstrained optimizations with harmonic
   frequency evidence. Add authentic ORCA 6.1.1 output regressions.
+- A worker recovers and removes only admission slots whose work directory lies
+  inside its own runs root; other records in a shared store are no longer
+  signalled, cleared or deleted and still count toward the limit
+  ([ADR 0015](docs/adr/0015-admission-recovery-scoped-to-own-runs-root.md)).
 
 ### Added
 
 - run-dir --input NAME.inp selects an explicit input in the job directory.
 - Ship systemd templates in the wheel; systemd install without --repo uses the
   current isolated virtual environment without a source clone.
+- Optional Slack notifications next to the retained Discord provider
+  ([ADR 0014](docs/adr/0014-slack-notification-provider.md)):
+  `messenger.provider: slack` with `messenger.slack.bot_token` and
+  `default_channel_id` posts plain text through `chat.postMessage`. Discord stays
+  the default and its settings and behavior are unchanged. Only HTTP 429 with
+  `Retry-After` is retried, redirects are never followed and delivery remains
+  best effort. `orca_auto init` offers Slack when Discord is declined. See
+  [Slack Setup](docs/SLACK_SETUP.md).
 
 ### Changed
 
+- Public contract: require a present, finite final energy, optimization and
+  requested frequency evidence before completing an ORCA job; accept explicitly
+  recovered SCF convergence. A run without this evidence, `completed` in 9.0.x,
+  is now `failed`.
 - Declare Beta maturity and distinguish tested ORCA 6.1.1 from unverified versions.
 - Align the GitHub description with standalone queue execution; remove the
   unsupported agent-ready workflow-engine claim.

@@ -1,7 +1,7 @@
 # Security policy
 
 ORCA_auto runs local processes, reads configuration files, writes calculation
-artifacts, and can optionally send Discord notifications. Treat credentials,
+artifacts, and can optionally send Discord (or, from 10.0.0, Slack) notifications. Treat credentials,
 private structures, and raw calculation outputs as sensitive unless they are
 explicitly public.
 
@@ -36,7 +36,7 @@ Please include:
 
 Before posting issues, PRs, logs, fixtures, or examples, remove:
 
-- Discord bot tokens and channel IDs;
+- Discord or Slack bot tokens and channel IDs;
 - shell environment variables containing credentials;
 - private workstation or cluster usernames when not needed;
 - proprietary ORCA output or unpublished structures;

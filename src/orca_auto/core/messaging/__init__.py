@@ -1,9 +1,10 @@
-"""Messenger-neutral notification contracts (Discord outbound).
+"""Messenger-neutral notification contracts (outbound only: Discord or Slack).
 
 Domain code builds a :class:`Message` (see :mod:`.richtext`) and sends it through
-the :class:`MessageChannel` returned by :func:`build_channel`: the Discord bot
-adapter when its config is complete, otherwise a null channel that skips every
-send. Discord markup and transport live in the adapter modules.
+the :class:`MessageChannel` returned by :func:`build_channel`: the adapter of the
+selected provider (Discord by default, or Slack) when its config is complete,
+otherwise a null channel that skips every send. Provider markup and transport
+live in the adapter modules, which are imported only when selected.
 """
 
 from __future__ import annotations

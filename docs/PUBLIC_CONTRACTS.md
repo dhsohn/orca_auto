@@ -52,7 +52,7 @@ A source checkout is not probed.
 > **Validation Policy**:
 > Invalid mappings, explicit nulls and unrecognized keys (including a `workflow` section) are rejected before default values are applied. See [config/orca_auto.yaml.example](../config/orca_auto.yaml.example) for accepted settings.
 
-Admission state always lives in `<runs_root>/.admission`, and its limit is `scheduler.max_active_simulations`. The removed `scheduler.admission_root` key is rejected with a hint to delete it ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)).
+Admission state always lives in `<runs_root>/.admission`, and its limit is `scheduler.max_active_simulations`. The removed `scheduler.admission_root` key is rejected with a hint to delete it ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)). A worker recovers engine records and removes dead-owner slots only for slots whose work directory lies inside its own `runs_root`; any other record in the store is left unchanged and still counts toward the limit ([ADR 0015](adr/0015-admission-recovery-scoped-to-own-runs-root.md)).
 
 ---
 
@@ -68,7 +68,7 @@ Admission state always lives in `<runs_root>/.admission`, and its limit is `sche
 
 7. **Terminal Completion Ownership**: The parent confirms child/engine termination and prepares the actual terminal run evidence before returning execution capacity. A zero exit code still requires a matching terminal state. Index publication and replay-marker removal can retry without an execution slot, including after worker restart. The durable marker fences subsequent submissions in the same directory until publication completes; unrelated eligible jobs may proceed. State preparation and slot-release failures retain supervised retry ownership. Notification delivery remains best effort.
 
-8. **Advisory Notification Ownership**: The parent claims queued notifications from a newly submitted durable row after queued publication completes; the child dispatches its captured start event after saving attempt state. Bounded background delivery does not hold publication completion or runner launch. Claim/send failures and process exit can lose advisory messages. Historical rows are not backfilled, and notification delivery never changes execution evidence.
+8. **Advisory Notification Ownership**: The parent claims queued notifications from a newly submitted durable row after queued publication completes; the child dispatches its captured start event after saving attempt state. Bounded background delivery does not hold publication completion or runner launch. Claim/send failures and process exit can lose advisory messages. Historical rows are not backfilled, and notification delivery never changes execution evidence. Messages go only to the selected `messenger.provider`: Discord (the default) or Slack (new in 10.0.0) ([ADR 0014](adr/0014-slack-notification-provider.md)); an incomplete selected provider sends nothing.
 
 9. **Terminal Publication Visibility**: A terminal replay marker preserves the row's execution status and adds `result publication pending` detail. Metadata identifies `publication_blocked_scope=orca_terminal_publication` and `publication_owner=orca_queue_worker`, with reason and next action. These directory-specific fences also appear in `admission_blockers` across status filters and pagination; they do not imply an occupied execution slot.
 
@@ -99,6 +99,13 @@ convergence verdict; requested Freq requires a final frequency section. A later
 explicit SCF convergence clears an earlier SCF failure. Missing evidence returns
 an incomplete analysis and a failed run; no retry or inferred success occurs.
 
+Public contract change in 10.0 ([ADR 0012](adr/0012-positive-scientific-completion-evidence.md)):
+a run that only terminated normally without this evidence was `completed` in
+9.0.x and is `failed` from 10.0. Consumers that select `completed` runs receive
+fewer of them, and automation that resubmits failed runs now also sees runs
+whose only problem is missing evidence; such runs are never retried
+automatically. Runs finished under earlier versions are not reclassified.
+
 New machine observations add payload.data.results.science without changing the
 common v1 envelope: status (verified/unknown/failed), reason, energy_hartree,
 scf_converged, optimization_converged, frequencies_available,
@@ -118,9 +125,11 @@ scientific validation. Unknown data must never be interpreted as zero or true.
 
 Historical terminal observations remain immutable and can lack science. Consumers
 must check field presence and verification status rather than backfill historical
-success. Public JSON additions are additive; existing field names and meanings,
-CLI defaults and the common envelope remain stable. Breaking removals require an
-ADR, migration instructions and a major release. The package classifier is Beta;
+success. Public JSON additions are additive; existing field names, CLI defaults
+and the common envelope remain stable. Field meanings remain stable except where
+a major release records a change: in 10.0 the value `completed` requires the
+completion evidence above. Breaking removals and meaning changes require an ADR,
+migration instructions and a major release. The package classifier is Beta;
 acceptance evidence currently covers ORCA 6.1.1 only.
 
 Omitting --repo from systemd install selects the current isolated virtual environment and packaged templates. An explicit --repo selects a checkout or prepared runtime.

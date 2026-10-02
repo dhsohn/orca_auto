@@ -28,7 +28,7 @@ source ~/.local/share/orca_auto/venv/bin/activate
 
 # Install ORCA_auto
 pip install --upgrade pip
-pip install orca_auto==9.0.0
+pip install orca_auto==10.0.0
 
 # Verify installation
 orca_auto --version
@@ -44,6 +44,8 @@ After installation, initialize your configuration file:
 # Initialize configuration
 orca_auto init --config ~/orca_auto.yaml
 ```
+
+Outbound notifications are optional: see [Discord Setup](DISCORD_SETUP.md), or [Slack Setup](SLACK_SETUP.md) for the Slack provider new in 10.0.0.
 
 ### Background Execution with systemd
 

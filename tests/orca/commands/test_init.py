@@ -317,7 +317,7 @@ def test_cmd_init_handles_write_or_load_failure(
     config_path = blocker / "orca_auto.yaml"
     monkeypatch.setenv(ORCA_AUTO_CONFIG_ENV_VAR, str(config_path))
     orca_allowed_root = tmp_path / "orca_allowed"
-    console.type(str(orca_allowed_root), "y", str(fake_orca), "4", "n")
+    console.type(str(orca_allowed_root), "y", str(fake_orca), "4", "n", "n")
 
     assert init.cmd_init(Namespace(force=True)) == 1
 

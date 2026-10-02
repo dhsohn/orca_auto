@@ -28,7 +28,7 @@ source ~/.local/share/orca_auto/venv/bin/activate
 
 # ORCA_auto 설치
 pip install --upgrade pip
-pip install orca_auto==9.0.0
+pip install orca_auto==10.0.0
 
 # 정상 설치 확인
 orca_auto --version
@@ -44,6 +44,8 @@ orca_auto --version
 # 기본 설정 파일 생성
 orca_auto init --config ~/orca_auto.yaml
 ```
+
+발신 알림은 선택 사항입니다. [Discord 알림 설정](DISCORD_SETUP.ko.md)을 참고하거나, 10.0.0에 새로 추가된 Slack 제공자는 [Slack 알림 설정](SLACK_SETUP.ko.md)을 참고하세요.
 
 ### systemd 백그라운드 실행
 

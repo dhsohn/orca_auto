@@ -4,8 +4,10 @@ from .schema import (
     DiscordConfig,
     MessengerConfig,
     SchedulerConfig,
+    SlackConfig,
     discord_config_from_mapping,
     messenger_config_from_mapping,
+    slack_config_from_mapping,
 )
 
 __all__ = [
@@ -14,7 +16,9 @@ __all__ = [
     "MessengerConfig",
     "SchedulerConfig",
     "SharedConfig",
+    "SlackConfig",
     "discord_config_from_mapping",
     "messenger_config_from_mapping",
+    "slack_config_from_mapping",
     "validate_shared_config_sections",
 ]

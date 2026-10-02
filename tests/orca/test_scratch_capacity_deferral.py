@@ -10,7 +10,7 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from orca_auto.core.admission import admission_dir
+from orca_auto.core.admission import admission_dir, runs_root_ownership
 from orca_auto.core.config import CommonResourceConfig
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
@@ -586,7 +586,11 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     )
 
     def run_child() -> int:
-        token = _try_reserve_admission_slot(admission_root, cfg.runtime.max_concurrent)
+        token = _try_reserve_admission_slot(
+            admission_root,
+            cfg.runtime.max_concurrent,
+            owned=runs_root_ownership(cfg.runtime.allowed_root),
+        )
         assert token is not None
         return worker_execution.run_worker_child_job(
             config_path=str(config),

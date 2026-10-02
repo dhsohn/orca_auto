@@ -36,6 +36,50 @@ from .records import (
 ADMISSION_FILE_NAME = _admission_persistence.ADMISSION_FILE_NAME
 ADMISSION_LOCK_NAME = _admission_persistence.ADMISSION_LOCK_NAME
 _MutationResultT = TypeVar("_MutationResultT")
+# Which records a caller may recover or drop when their owner is dead. ``None``
+# means every record, the behavior of a store used by one runs root only.
+SlotOwnership = Callable[[AdmissionSlot], bool]
+
+
+def runs_root_ownership(runs_root: str | Path) -> SlotOwnership:
+    """Slots whose work directory resolves inside ``runs_root``.
+
+    Paths are compared after resolving both sides, never as text prefixes. A
+    slot without a work directory, or with one that cannot be resolved, is not
+    owned: a worker leaves it unchanged instead of guessing.
+    """
+    root = Path(runs_root).expanduser().resolve()
+
+    def owned(slot: AdmissionSlot) -> bool:
+        text = str(slot.work_dir or "").strip()
+        if not text:
+            return False
+        try:
+            work_dir = Path(text).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return False
+        return work_dir.is_relative_to(root)
+
+    return owned
+
+
+def _live_and_retained_slots(
+    recorded: Iterable[AdmissionSlot], owned: SlotOwnership | None
+) -> tuple[list[AdmissionSlot], list[AdmissionSlot]]:
+    """Split records into live ones and dead-owner ones ``owned`` excludes.
+
+    Each owner is observed once, so a record cannot count as dead and then be
+    kept as live (or the reverse) within one locked pass. Any other record has
+    a dead owner and may be dropped.
+    """
+    live: list[AdmissionSlot] = []
+    retained: list[AdmissionSlot] = []
+    for slot in recorded:
+        if _slot_owner_alive(slot):
+            live.append(slot)
+        elif owned is not None and not owned(slot):
+            retained.append(slot)
+    return live, retained
 
 
 class _ExpectationUnset:
@@ -185,29 +229,32 @@ class AdmissionStore:
     def path(self) -> Path:
         return _admission_persistence.admission_path(self.root)
 
-    def _load_live_slots(self) -> list[AdmissionSlot]:
-        return [slot for slot in _load_slots(self.root) if _slot_owner_alive(slot)]
-
-    def list_slots(self, *, normalize_file: bool = False) -> list[AdmissionSlot]:
+    def list_slots(
+        self, *, normalize_file: bool = False, owned: SlotOwnership | None = None
+    ) -> list[AdmissionSlot]:
         with admission_lock(self.root):
             recorded = _load_slots(self.root)
-            slots = [slot for slot in recorded if _slot_owner_alive(slot)]
+            slots, retained = _live_and_retained_slots(recorded, owned)
+            dropped = len(recorded) - len(slots) - len(retained)
             # Rewrite only when a dead owner is being dropped; every worker
             # poll and reconcile reads this file, and an unchanged rewrite is
             # an fsync for nothing.
-            if normalize_file and self.path.exists() and slots != recorded:
-                _admission_persistence.save_slots(self.root, slots)
+            if normalize_file and self.path.exists() and dropped:
+                _admission_persistence.save_slots(self.root, [*slots, *retained])
             return slots
 
     def mutate_live_slots(
         self,
         mutator: Callable[[list[AdmissionSlot]], tuple[_MutationResultT, bool]],
+        *,
+        owned: SlotOwnership | None = None,
     ) -> _MutationResultT:
+        """Mutate the live records; dead records ``owned`` excludes are saved unchanged."""
         with admission_lock(self.root):
-            slots = self._load_live_slots()
+            slots, retained = _live_and_retained_slots(_load_slots(self.root), owned)
             result, changed = mutator(slots)
             if changed:
-                _admission_persistence.save_slots(self.root, slots)
+                _admission_persistence.save_slots(self.root, [*slots, *retained])
             return result
 
     def mutate_all_slots(
@@ -233,6 +280,7 @@ class AdmissionStore:
         *,
         missing_result: _MutationResultT,
         save_on_missing: bool = False,
+        owned: SlotOwnership | None = None,
     ) -> _MutationResultT:
         def mutate(slots: list[AdmissionSlot]) -> tuple[_MutationResultT, bool]:
             for index, slot in enumerate(slots):
@@ -245,14 +293,18 @@ class AdmissionStore:
                 return result, True
             return missing_result, save_on_missing
 
-        return self.mutate_live_slots(mutate)
+        return self.mutate_live_slots(mutate, owned=owned)
 
 
-def reconcile_stale_slots(root: str | Path) -> int:
-    """Drop slots whose owner is dead; return how many were removed."""
+def reconcile_stale_slots(root: str | Path, *, owned: SlotOwnership | None = None) -> int:
+    """Drop dead-owner slots (only those ``owned`` accepts); return how many were removed."""
 
     def reconcile(slots: list[AdmissionSlot]) -> tuple[int, bool]:
-        kept = [slot for slot in slots if _slot_owner_alive(slot)]
+        kept = [
+            slot
+            for slot in slots
+            if _slot_owner_alive(slot) or (owned is not None and not owned(slot))
+        ]
         removed = len(slots) - len(kept)
         if removed:
             slots[:] = kept
@@ -261,8 +313,8 @@ def reconcile_stale_slots(root: str | Path) -> int:
     return AdmissionStore.for_root(root).mutate_all_slots(reconcile)
 
 
-def list_slots(root: str | Path) -> list[AdmissionSlot]:
-    return AdmissionStore.for_root(root).list_slots(normalize_file=True)
+def list_slots(root: str | Path, *, owned: SlotOwnership | None = None) -> list[AdmissionSlot]:
+    return AdmissionStore.for_root(root).list_slots(normalize_file=True, owned=owned)
 
 
 def list_all_slots(root: str | Path) -> list[AdmissionSlot]:
@@ -326,6 +378,7 @@ def reserve_slot(
     owner_pid: int | None = None,
     engine_process_state: str = ENGINE_PROCESS_IDLE,
     engine_launch_gated: bool = False,
+    owned: SlotOwnership | None = None,
 ) -> str | None:
     store = AdmissionStore.for_root(root)
 
@@ -363,7 +416,7 @@ def reserve_slot(
         )
         return token, True
 
-    return store.mutate_live_slots(reserve)
+    return store.mutate_live_slots(reserve, owned=owned)
 
 
 def activate_reserved_slot(
@@ -378,6 +431,7 @@ def activate_reserved_slot(
     app_name: str | None = None,
     task_id: str | None = None,
     engine_process_state: str | None = None,
+    owned: SlotOwnership | None = None,
 ) -> AdmissionSlot | None:
     def activate(slot: AdmissionSlot) -> tuple[AdmissionSlot, AdmissionSlot]:
         (
@@ -410,6 +464,7 @@ def activate_reserved_slot(
         token,
         activate,
         missing_result=None,
+        owned=owned,
     )
 
 
@@ -691,6 +746,7 @@ def update_slot_metadata(
     work_dir: str | Path | None = None,
     owner_pid: int | None = None,
     engine_process_state: str | None = None,
+    owned: SlotOwnership | None = None,
 ) -> AdmissionSlot | None:
     def update_metadata(slot: AdmissionSlot) -> tuple[AdmissionSlot, AdmissionSlot]:
         (
@@ -723,4 +779,5 @@ def update_slot_metadata(
         update_metadata,
         missing_result=None,
         save_on_missing=True,
+        owned=owned,
     )
