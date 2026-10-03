@@ -118,10 +118,11 @@ def parse_coordinates(text: str) -> list[AtomRow]:
                 break
             match = _COORD_XYZ_LINE_RE.match(raw_line)
             if match is None or raw_line[match.end() :].strip():
-                first_token = raw_line.strip().split()[0] if raw_line.strip() else ""
-                if first_token.isalpha() and len(first_token) <= 2:
-                    return None
-                break
+                # Besides a blank line, only the final energy line closes the
+                # table; any other non-row line is a malformed row.
+                if FINAL_SINGLE_POINT_ENERGY_RE.match(raw_line):
+                    break
+                return None
             atoms.append(
                 (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
             )
