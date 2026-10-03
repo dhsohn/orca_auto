@@ -637,7 +637,9 @@ def test_si_block_fails_closed_on_row_boundary_truncated_final_coordinates(tmp_p
             "                             ****ORCA TERMINATED NORMALLY****",
         ]
     )
-    reaction_dir, state = _job_dir(tmp_path, "row_boundary_coords", inp_text=_SP_INP, out_text=out_text)
+    reaction_dir, state = _job_dir(
+        tmp_path, "row_boundary_coords", inp_text=_SP_INP, out_text=out_text
+    )
 
     with pytest.raises(OrcaEvidenceError, match="lacks a final energy or geometry"):
         _evidence(reaction_dir, state)

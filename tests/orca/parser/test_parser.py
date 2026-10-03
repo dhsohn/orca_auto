@@ -527,7 +527,10 @@ def test_parser_extracts_si_fields(tmp_path: Path) -> None:
     ("final_rows", "out_name"),
     [
         ([], "empty_final_coords.out"),
-        (["  C      0.500000    0.000000    0.000000", "  H      BROKEN"], "truncated_final_coords.out"),
+        (
+            ["  C      0.500000    0.000000    0.000000", "  H      BROKEN"],
+            "truncated_final_coords.out",
+        ),
     ],
     ids=["empty", "truncated"],
 )

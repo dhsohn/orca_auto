@@ -124,7 +124,12 @@ def parse_coordinates(text: str) -> list[AtomRow]:
                     break
                 return None
             atoms.append(
-                (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
+                (
+                    match.group(1),
+                    float(match.group(2)),
+                    float(match.group(3)),
+                    float(match.group(4)),
+                )
             )
             line_index += 1
         return atoms
