@@ -6,7 +6,6 @@ from collections.abc import Iterator, Sequence
 
 from .patterns import (
     _BASIS_KEYWORDS,
-    _COORD_SECTION_RE,
     _COORD_XYZ_LINE_RE,
     _CPCM_TOKEN_RE,
     _INPUT_LINE_RE,
@@ -90,15 +89,70 @@ def parse_coordinates(text: str) -> list[AtomRow]:
     The last section holds the final geometry after an optimization; for a
     single point it is the input geometry echoed back.
     """
-    sections = list(_COORD_SECTION_RE.finditer(text))
-    if not sections:
+    header = "CARTESIAN COORDINATES (ANGSTROEM)"
+    section_starts: list[int] = []
+    section_start = text.find(header)
+    while section_start >= 0:
+        section_starts.append(section_start)
+        section_start = text.find(header, section_start + len(header))
+    if not section_starts:
         return []
 
-    last_section = sections[-1].group(1)
-    return [
-        (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
-        for match in _COORD_XYZ_LINE_RE.finditer(last_section)
-    ]
+    def _parse_section(start: int, end: int) -> list[AtomRow] | None:
+        section_lines = text[start + len(header) : end].splitlines()
+        line_index = 0
+        while line_index < len(section_lines) and not section_lines[line_index].strip():
+            line_index += 1
+        if line_index >= len(section_lines):
+            return []
+
+        separator = section_lines[line_index].strip()
+        if not separator or set(separator) != {"-"}:
+            return None
+        line_index += 1
+
+        atoms: list[AtomRow] = []
+        while line_index < len(section_lines):
+            raw_line = section_lines[line_index]
+            if not raw_line.strip():
+                break
+            match = _COORD_XYZ_LINE_RE.match(raw_line)
+            if match is None or raw_line[match.end() :].strip():
+                # Besides a blank line, only the final energy line closes the
+                # table; any other non-row line is a malformed row.
+                if FINAL_SINGLE_POINT_ENERGY_RE.match(raw_line):
+                    break
+                return None
+            atoms.append(
+                (
+                    match.group(1),
+                    float(match.group(2)),
+                    float(match.group(3)),
+                    float(match.group(4)),
+                )
+            )
+            line_index += 1
+        return atoms
+
+    last_index = len(section_starts) - 1
+    last_start = section_starts[last_index]
+    last_end = section_starts[last_index + 1] if last_index + 1 < len(section_starts) else len(text)
+    atoms = _parse_section(last_start, last_end)
+    if atoms is None or not atoms:
+        return []
+
+    expected_n_atoms: int | None = None
+    for index in range(last_index - 1, -1, -1):
+        previous_start = section_starts[index]
+        previous_end = section_starts[index + 1]
+        previous_atoms = _parse_section(previous_start, previous_end)
+        if previous_atoms:
+            expected_n_atoms = len(previous_atoms)
+            break
+
+    if expected_n_atoms is not None and len(atoms) != expected_n_atoms:
+        return []
+    return atoms
 
 
 def parse_program_version(text: str) -> str:
