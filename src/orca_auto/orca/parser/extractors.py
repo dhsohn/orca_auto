@@ -6,7 +6,6 @@ from collections.abc import Iterator, Sequence
 
 from .patterns import (
     _BASIS_KEYWORDS,
-    _COORD_SECTION_RE,
     _COORD_XYZ_LINE_RE,
     _CPCM_TOKEN_RE,
     _INPUT_LINE_RE,
@@ -90,15 +89,36 @@ def parse_coordinates(text: str) -> list[AtomRow]:
     The last section holds the final geometry after an optimization; for a
     single point it is the input geometry echoed back.
     """
-    sections = list(_COORD_SECTION_RE.finditer(text))
-    if not sections:
+    header = "CARTESIAN COORDINATES (ANGSTROEM)"
+    section_start = text.rfind(header)
+    if section_start < 0:
         return []
 
-    last_section = sections[-1].group(1)
-    return [
-        (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
-        for match in _COORD_XYZ_LINE_RE.finditer(last_section)
-    ]
+    section_lines = text[section_start + len(header) :].splitlines()
+    line_index = 0
+    while line_index < len(section_lines) and not section_lines[line_index].strip():
+        line_index += 1
+    if line_index >= len(section_lines):
+        return []
+
+    separator = section_lines[line_index].strip()
+    if not separator or set(separator) != {"-"}:
+        return []
+    line_index += 1
+
+    atoms: list[AtomRow] = []
+    while line_index < len(section_lines):
+        raw_line = section_lines[line_index]
+        if not raw_line.strip():
+            break
+        match = _COORD_XYZ_LINE_RE.match(raw_line)
+        if match is None or raw_line[match.end() :].strip():
+            return []
+        atoms.append(
+            (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
+        )
+        line_index += 1
+    return atoms
 
 
 def parse_program_version(text: str) -> str:

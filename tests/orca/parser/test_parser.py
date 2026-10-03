@@ -523,6 +523,50 @@ def test_parser_extracts_si_fields(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("final_rows", "out_name"),
+    [
+        ([], "empty_final_coords.out"),
+        (["  C      0.500000    0.000000    0.000000", "  H      BROKEN"], "truncated_final_coords.out"),
+    ],
+    ids=["empty", "truncated"],
+)
+def test_parser_fails_closed_on_empty_or_truncated_final_coordinates(
+    tmp_path: Path, final_rows: list[str], out_name: str
+) -> None:
+    out_file = tmp_path / out_name
+    out_file.write_text(
+        "\n".join(
+            [
+                "! B3LYP def2-SVP Opt",
+                "* xyz 0 1",
+                "C 0.0 0.0 0.0",
+                "*",
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                "  C      0.000000    0.000000    0.000000",
+                "  H      1.000000    0.000000    0.000000",
+                "FINAL SINGLE POINT ENERGY      -100.100000",
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                *final_rows,
+                "",
+                "FINAL SINGLE POINT ENERGY      -100.200000",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
+
+    assert result.energy_hartree == pytest.approx(-100.2)
+    assert result.coordinates == []
+    assert result.elements == []
+    assert result.n_atoms == 0
+    assert result.formula == ""
+
+
 def test_parser_detects_smd_solvation(tmp_path: Path) -> None:
     out_file = tmp_path / "smd.out"
     out_file.write_text(
