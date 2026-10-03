@@ -90,34 +90,62 @@ def parse_coordinates(text: str) -> list[AtomRow]:
     single point it is the input geometry echoed back.
     """
     header = "CARTESIAN COORDINATES (ANGSTROEM)"
-    section_start = text.rfind(header)
-    if section_start < 0:
+    section_starts: list[int] = []
+    section_start = text.find(header)
+    while section_start >= 0:
+        section_starts.append(section_start)
+        section_start = text.find(header, section_start + len(header))
+    if not section_starts:
         return []
 
-    section_lines = text[section_start + len(header) :].splitlines()
-    line_index = 0
-    while line_index < len(section_lines) and not section_lines[line_index].strip():
-        line_index += 1
-    if line_index >= len(section_lines):
-        return []
-
-    separator = section_lines[line_index].strip()
-    if not separator or set(separator) != {"-"}:
-        return []
-    line_index += 1
-
-    atoms: list[AtomRow] = []
-    while line_index < len(section_lines):
-        raw_line = section_lines[line_index]
-        if not raw_line.strip():
-            break
-        match = _COORD_XYZ_LINE_RE.match(raw_line)
-        if match is None or raw_line[match.end() :].strip():
+    def _parse_section(start: int, end: int) -> list[AtomRow] | None:
+        section_lines = text[start + len(header) : end].splitlines()
+        line_index = 0
+        while line_index < len(section_lines) and not section_lines[line_index].strip():
+            line_index += 1
+        if line_index >= len(section_lines):
             return []
-        atoms.append(
-            (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
-        )
+
+        separator = section_lines[line_index].strip()
+        if not separator or set(separator) != {"-"}:
+            return None
         line_index += 1
+
+        atoms: list[AtomRow] = []
+        while line_index < len(section_lines):
+            raw_line = section_lines[line_index]
+            if not raw_line.strip():
+                break
+            match = _COORD_XYZ_LINE_RE.match(raw_line)
+            if match is None or raw_line[match.end() :].strip():
+                first_token = raw_line.strip().split()[0] if raw_line.strip() else ""
+                if first_token.isalpha() and len(first_token) <= 2:
+                    return None
+                break
+            atoms.append(
+                (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
+            )
+            line_index += 1
+        return atoms
+
+    last_index = len(section_starts) - 1
+    last_start = section_starts[last_index]
+    last_end = section_starts[last_index + 1] if last_index + 1 < len(section_starts) else len(text)
+    atoms = _parse_section(last_start, last_end)
+    if atoms is None or not atoms:
+        return []
+
+    expected_n_atoms: int | None = None
+    for index in range(last_index - 1, -1, -1):
+        previous_start = section_starts[index]
+        previous_end = section_starts[index + 1]
+        previous_atoms = _parse_section(previous_start, previous_end)
+        if previous_atoms:
+            expected_n_atoms = len(previous_atoms)
+            break
+
+    if expected_n_atoms is not None and len(atoms) != expected_n_atoms:
+        return []
     return atoms
 
 
