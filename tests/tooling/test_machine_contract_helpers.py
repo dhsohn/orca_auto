@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
-from tests import machine_contract_helpers
 from tests.machine_contract_helpers import validate_common_machine
+
+_WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 
 
 def _refusal(path: Path) -> str:
@@ -17,24 +20,6 @@ def _refusal(path: Path) -> str:
     return str(refusal.value)
 
 
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo),
-            "-c",
-            "user.name=test",
-            "-c",
-            "user.email=test@example.invalid",
-            *args,
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
-
 def test_machine_contract_validation_rejects_a_nonconforming_observation(tmp_path: Path) -> None:
     machine = tmp_path / "machine.json"
     machine.write_text('{"delivery": "complete"}\n', encoding="utf-8")
@@ -42,38 +27,51 @@ def test_machine_contract_validation_rejects_a_nonconforming_observation(tmp_pat
     assert "machine-observation-v1.schema.json" in _refusal(machine)
 
 
-def test_machine_contract_validation_fails_without_the_pinned_clone(
+def test_machine_contract_validation_never_uses_a_clone_or_git(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FACTORY_MACHINE_CONTRACT_REPO", str(tmp_path / "missing"))
+    # A clone whose validator accepts everything must not be consulted.
+    clone = tmp_path / "machine_contracts"
+    (clone / "scripts").mkdir(parents=True)
+    (clone / "scripts" / "validate.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    monkeypatch.setenv("FACTORY_MACHINE_CONTRACT_REPO", str(clone))
+
+    def no_subprocess(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("machine contract validation started a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", no_subprocess)
     machine = tmp_path / "machine.json"
     machine.write_text('{"delivery": "complete"}\n', encoding="utf-8")
 
-    assert "cannot provide CI pin" in _refusal(machine)
+    assert "machine-observation-v1.schema.json" in _refusal(machine)
 
 
-def test_machine_contract_validation_uses_the_pinned_commit_not_the_clone_head(
+def test_machine_contract_validation_fails_on_an_unreadable_machine(tmp_path: Path) -> None:
+    assert "cannot read" in _refusal(tmp_path / "machine.json")
+
+
+@pytest.mark.parametrize("name", ["ci.yml", "release.yml"])
+def test_default_workflow_needs_no_machine_contracts_checkout(name: str) -> None:
+    text = (_WORKFLOWS / name).read_text(encoding="utf-8")
+    # BaseLoader keeps YAML's `on` key instead of coercing it to a boolean.
+    workflow = yaml.load(text, Loader=yaml.BaseLoader)
+    environments = [workflow.get("env", {})]
+    for job in workflow["jobs"].values():
+        environments.append(job.get("env", {}))
+        for step in job["steps"]:
+            environments.append(step.get("env", {}))
+            assert "machine-contracts" not in step.get("with", {}).get("repository", ""), step
+            assert "machine-contracts" not in step.get("run", ""), step
+    assert not [env for env in environments if "FACTORY_MACHINE_CONTRACT_REPO" in env]
+    assert "FACTORY_MACHINE_CONTRACT_REPO" not in text
+    assert "dhsohn/machine-contracts" not in text
+
+
+def test_machine_contract_validation_fails_without_jsonschema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    repo = tmp_path / "machine_contracts"
-    validator = repo / "scripts" / "validate.py"
-    validator.parent.mkdir(parents=True)
-    _git(tmp_path, "init", "--quiet", str(repo))
-    validator.write_text("raise SystemExit('pinned validator ran')\n", encoding="utf-8")
-    _git(repo, "add", "scripts/validate.py")
-    _git(repo, "commit", "--quiet", "-m", "pinned")
-    pinned = _git(repo, "rev-parse", "HEAD")
-    validator.write_text("raise SystemExit(0)\n", encoding="utf-8")
-    _git(repo, "commit", "--quiet", "-am", "later")
-    validator.write_text("raise SystemExit(0)  # uncommitted\n", encoding="utf-8")
-    monkeypatch.setenv("FACTORY_MACHINE_CONTRACT_REPO", str(repo))
-    monkeypatch.setattr(machine_contract_helpers, "machine_contract_pin", lambda: pinned)
+    monkeypatch.setitem(sys.modules, "jsonschema", None)
     machine = tmp_path / "machine.json"
     machine.write_text("{}\n", encoding="utf-8")
 
-    assert "pinned validator ran" in _refusal(machine)
-
-
-def test_machine_contract_validation_fails_without_jsonschema(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(machine_contract_helpers.importlib.util, "find_spec", lambda _name: None)
-    assert "cannot import jsonschema" in _refusal(tmp_path / "machine.json")
+    assert "cannot import jsonschema" in _refusal(machine)

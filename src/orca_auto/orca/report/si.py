@@ -5,8 +5,8 @@ and program version, electronic energy, thermochemistry (ZPE / H / G and the
 G-E(el) correction), the imaginary-mode summary, and the final Cartesian
 coordinates — as plain fixed-width text that pastes cleanly into Word or a
 LaTeX source. Lint warnings (``⚠`` lines) flag what a reviewer would: a
-minimum with imaginary modes, a TS without exactly one, missing
-thermochemistry. Non-stationary relaxed scans still get no block; IRC gets a
+minimum with imaginary modes, a TS without exactly one, a constrained TS
+search whose saddle is unverified, missing thermochemistry. Non-stationary relaxed scans still get no block; IRC gets a
 summary-only validation block with no coordinates, also rendered here. Like the
 HTML report, generation must never break run finalization: every error is
 logged and swallowed.
@@ -26,6 +26,12 @@ from orca_auto.core.confined_io import atomic_write_confined_bytes
 from .. import evidence
 from ..completion_rules import RouteFacts, route_facts
 from ..frequencies import ModeSummary, mode_summaries
+from ..machine_observation import (
+    REPORT_GENERATION_FAILED,
+    REPORT_NOT_APPLICABLE,
+    REPORT_PRODUCED,
+    record_report_generation,
+)
 from ..parser import OrcaResult
 from ..statuses import RunStatus
 from .irc import parse_irc_output
@@ -49,10 +55,19 @@ def _mode_note(summary: ModeSummary) -> str:
     return f"{note}, {atoms} dominant" if atoms else note
 
 
-def _lint_warnings(kind: str, result: OrcaResult, imaginary_count: int | None) -> tuple[str, ...]:
+def _lint_warnings(
+    kind: str,
+    result: OrcaResult,
+    imaginary_count: int | None,
+    geometry_scope: str | None = None,
+) -> tuple[str, ...]:
     warnings: list[str] = []
     if result.opt_converged is False:
         warnings.append("geometry optimization did NOT converge")
+    if kind == "ts" and geometry_scope == "partial":
+        # Still a TS record (route, Nimag, coordinates), but restricted
+        # coordinates cannot establish a first-order saddle of the full surface.
+        warnings.append(f"{evidence.CONSTRAINED_TS_SEARCH_NOTE} (geometry constraints applied)")
     if kind in ("min", "ts") and imaginary_count is None:
         warnings.append("no frequency calculation: stationary point is uncharacterized")
     if kind == "min" and imaginary_count is not None and imaginary_count > 0:
@@ -111,7 +126,7 @@ def render_si_block_md(block: evidence.OrcaStructureEvidence) -> str:
                 nimag_line += f"  ({'; '.join(notes)})"
         lines.append(nimag_line)
 
-    warnings = _lint_warnings(block.kind, result, block.imaginary_count)
+    warnings = _lint_warnings(block.kind, result, block.imaginary_count, block.geometry_scope)
     lines.extend(f"⚠ {warning}" for warning in warnings)
 
     # Multi-attempt runs keep several outputs (submitted and resumed outputs):
@@ -215,13 +230,17 @@ def write_si_block(
     state: Mapping[str, Any],
     *,
     generation_target: tuple[Path, tuple[int, int]],
+    report_generation: dict[str, str] | None = None,
 ) -> Path | None:
-    """Write ``si_block.md``; ``None`` when the job has no SI block.
+    """Write ``si_block.md``; ``None`` when the job has no SI block or it failed.
 
     Mirrors ``write_job_html_report``: the block lands inside the verified
     execution generation; a job type without a block removes any stale file
     there, while an unexpected error leaves the last valid block in place.
+    ``report_generation``, when given, receives this block's fixed outcome
+    (``machine_observation.record_report_generation``), never the error text.
     """
+    artifact_id = "supporting-information"
     path = si_block_path(generation_target[0])
 
     def _publish(markdown: str) -> None:
@@ -237,28 +256,36 @@ def write_si_block(
     def _remove_stale() -> None:
         path.unlink(missing_ok=True)
 
+    def _not_applicable() -> None:
+        _remove_stale()
+        record_report_generation(report_generation, artifact_id, REPORT_NOT_APPLICABLE)
+
+    def _produced(markdown: str) -> Path:
+        _publish(markdown)
+        record_report_generation(report_generation, artifact_id, REPORT_PRODUCED)
+        return path
+
     try:
         selected_raw = str(state.get("selected_inp") or "").strip()
         if not selected_raw:
-            _remove_stale()
+            _not_applicable()
             return None
         route = route_facts(Path(selected_raw))
         if route.is_irc:
             irc_block = collect_irc_si_block(reaction_dir, state, route)
             if irc_block is None:
-                _remove_stale()
+                _not_applicable()
                 return None
-            _publish(render_irc_si_block_md(irc_block))
-            return path
+            return _produced(render_irc_si_block_md(irc_block))
 
         block = evidence.collect_structure_evidence(reaction_dir, state, route)
         if block is None:
-            _remove_stale()
+            _not_applicable()
             return None
-        _publish(render_si_block_md(block))
-        return path
+        return _produced(render_si_block_md(block))
     except Exception:  # noqa: BLE001
         logger.warning("SI block generation failed for %s", reaction_dir, exc_info=True)
+        record_report_generation(report_generation, artifact_id, REPORT_GENERATION_FAILED)
         return None
 
 

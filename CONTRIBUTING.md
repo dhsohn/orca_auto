@@ -92,13 +92,12 @@ For a manual development install, use `python -m pip install -e '.[dev]'`.
 Run `make check-packages` for package or installation changes. Version 7 removes
 the former workflows extension; see the [upgrade guide](docs/RELEASE.md#upgrading-to-70).
 
-The `machine.json` conformance tests use the `machine-contracts` commit pinned
-in `.github/workflows/ci.yml`. Clone `https://github.com/dhsohn/machine-contracts.git`
-to `~/machine_contracts`, or set `FACTORY_MACHINE_CONTRACT_REPO` to an existing
-clone containing that commit. The tests read the pinned commit, not the clone's
-working tree, and fail if the clone, commit or `jsonschema` dependency is missing.
-CI and release checks provide the clone; `make check` installs `jsonschema` with
-the development dependencies. Fetch the clone when advancing the CI pin.
+The `machine.json` conformance tests use the validator in
+`src/orca_auto/machine_contracts/`, a source-owned copy of the ORCA_auto part of
+`dhsohn/machine-contracts` at `bc252035d01edddf1314e6641689c6d5cb88af92`
+([ADR 0014](docs/adr/0014-source-owned-machine-observation-validator.md)). No
+clone, git or network access is needed. The tests fail if `jsonschema` is
+missing; `make check` installs it with the development dependencies.
 
 For a narrower loop:
 

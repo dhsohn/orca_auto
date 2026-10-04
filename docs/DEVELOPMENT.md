@@ -64,13 +64,15 @@ interpreter explicitly. Before linting, the gate also checks that `orca_auto`
 is imported from this checkout's `src/` and stops otherwise, for example when
 `PYTHONPATH` points at another tree; unset it or recreate `.venv`.
 
-The `machine.json` conformance tests use the `machine-contracts` commit pinned
-in `.github/workflows/ci.yml`. Clone `https://github.com/dhsohn/machine-contracts.git`
-to `~/machine_contracts`, or set `FACTORY_MACHINE_CONTRACT_REPO` to an existing
-clone containing that commit. The tests read the pinned commit, not the clone's
-working tree, and fail if the clone, commit or `jsonschema` dependency is missing.
-CI and release checks provide the clone; `make check` installs `jsonschema` with
-the development dependencies. Fetch the clone when advancing the CI pin.
+The `machine.json` conformance tests use `orca_auto.machine_contracts`, the
+source-owned ORCA_auto subset of `dhsohn/machine-contracts` at
+`bc252035d01edddf1314e6641689c6d5cb88af92`: byte copies of the envelope and
+results-bundle schemas and the upstream MIT notice, with SHA-256 provenance in
+`src/orca_auto/machine_contracts/PROVENANCE.md`. No clone, git or network access
+is needed. Validation needs `jsonschema`, which `make check` installs with the
+development dependencies; without it the tests fail instead of skipping. To
+follow an upstream contract change, copy the new files, hashes and ORCA registry
+entries and update the hash tests in `tests/machine_contracts/`.
 
 - **Unit & Integration Tests**: Tests use lightweight fake ORCA binaries and isolated temporary fixtures (`tmp_path`). A licensed ORCA installation is not required to run the test suite.
 - **Test Layout**: Tests mirror `src/orca_auto`. A module's tests are named after it and sit in the directory of its package: `orca_auto/core/<pkg>/` in `tests/core/<pkg>/`, `orca_auto/orca/<pkg>/` in `tests/orca/<pkg>/`, a module directly under `core/` or `orca/` in `tests/core/` or `tests/orca/`, `orca_auto/activity/` in `tests/activity/`, and the top-level CLI and presentation modules in `tests/cli/` (the systemd commands in `tests/cli/systemd/`). For example `orca_auto/orca/queue/adapter.py` is tested by `tests/orca/queue/test_adapter.py`; the queue worker's tests are split by concern into `tests/orca/queue/test_worker_*.py`. `tests/integration/` holds flows that cross layers, `tests/tooling/` the checks of the repository scripts, git hooks, packaging and release metadata, and `tests/contracts/` the goldens and rule pins. Helper modules shared across directories (`conftest.py`, `*_helpers.py`) stay at the `tests/` root; fixtures shared by one directory live in its `conftest.py`. Test directories have no `__init__.py`: `--import-mode=importlib` (in `pytest.ini`) lets two directories hold test files with the same name, such as `tests/core/queue/test_store.py` and `tests/core/admission/test_store.py`.

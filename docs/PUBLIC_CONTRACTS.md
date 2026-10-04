@@ -37,6 +37,7 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 - Re-submitting an active calculation directory is rejected to prevent duplicate execution.
 - Passing `--force` triggers a new execution generation even if an earlier attempt succeeded.
 - Computational resources strictly honor `%pal` and `%maxcore` directives inside the `.inp` file; configuration values fill in missing defaults.
+- An active `%maxcore` directive without a readable value in MB (for example `%maxcore`, `%maxcore =512` or `%maxcore abc`) rejects the submission: the memory is not guessed, no second `%maxcore` is added, and the input file is left unchanged. A commented-out `%maxcore` is not a directive, and an input without an active `%maxcore` still receives the configured default. (Since 10.1.0.)
 
 ---
 
@@ -68,7 +69,7 @@ Admission state always lives in `<runs_root>/.admission`, and its limit is `sche
 
 7. **Terminal Completion Ownership**: The parent confirms child/engine termination and prepares the actual terminal run evidence before returning execution capacity. A zero exit code still requires a matching terminal state. Index publication and replay-marker removal can retry without an execution slot, including after worker restart. The durable marker fences subsequent submissions in the same directory until publication completes; unrelated eligible jobs may proceed. State preparation and slot-release failures retain supervised retry ownership. Notification delivery remains best effort.
 
-8. **Advisory Notification Ownership**: The parent claims queued notifications from a newly submitted durable row after queued publication completes; the child dispatches its captured start event after saving attempt state. Bounded background delivery does not hold publication completion or runner launch. Claim/send failures and process exit can lose advisory messages. Historical rows are not backfilled, and notification delivery never changes execution evidence. Messages go only to the selected `messenger.provider`: Discord (the default) or Slack (new in 10.0.0) ([ADR 0014](adr/0014-slack-notification-provider.md)); an incomplete selected provider sends nothing.
+8. **Advisory Notification Ownership**: The parent claims queued notifications from a newly submitted durable row after queued publication completes; the child dispatches its captured start event after saving attempt state. Bounded background delivery does not hold publication completion or runner launch. Claim/send failures and process exit can lose advisory messages. Historical rows are not backfilled, and notification delivery never changes execution evidence. Messages go only to the selected `messenger.provider`: Discord (the default) or Slack (new in 10.0.0) ([ADR 0016](adr/0016-slack-notification-provider.md)); an incomplete selected provider sends nothing.
 
 9. **Terminal Publication Visibility**: A terminal replay marker preserves the row's execution status and adds `result publication pending` detail. Metadata identifies `publication_blocked_scope=orca_terminal_publication` and `publication_owner=orca_queue_worker`, with reason and next action. These directory-specific fences also appear in `admission_blockers` across status filters and pagination; they do not imply an occupied execution slot.
 
@@ -79,6 +80,7 @@ Admission state always lives in `<runs_root>/.admission`, and its limit is `sche
 Upon completion, each job publishes a structured `machine.json` artifact in its generation directory for downstream tools (such as Chemvas and Chemleaf):
 
 - **Envelope Schema**: Conforms to the standard `factory/machine-observation` v1 contract.
+- **Bundled Validator**: The package ships `orca_auto.machine_contracts`, byte copies of the v1 envelope and `chemistry/results-bundle` v1 schemas from `dhsohn/machine-contracts` at `bc252035d01edddf1314e6641689c6d5cb88af92` with their MIT notice and provenance, and a validator for the ORCA_auto routes. `validate_machine_path` checks the envelope, route, payload and every available artifact's bytes and SHA-256; it does not judge scientific validity. It needs the optional `validation` extra (`pip install 'orca_auto[validation]'`, which adds `jsonschema`); running jobs never needs it, and without it validation raises `ImportError` rather than passing ([ADR 0014](adr/0014-source-owned-machine-observation-validator.md)).
 - **Operation & Payload**: Emits `chemistry/orca-run` with a `chemistry/results-bundle` v1 payload.
 - **Input Provenance**: When submission source identities are recorded, `payload.data.results.execution_provenance_artifact` references the required `execution-provenance` artifact (`execution_provenance.json`, `application/json`). It preserves the captured original input/dependency identities, bound input and materialized-copy identities, resolved resource request, executable identity and any crash-recovery origin. `artifacts.input` refers to the execution `.inp`, which can differ from the original after resource normalization and reference rewriting. The provenance file records identities, not an archive of original file contents. Its filename is reserved; referenced input files with that basename are rejected before execution. Any reader can verify its receipt without reopening source paths; the release smoke checks agreement with generation state. Historical reports lacking this evidence remain readable and are not backfilled; terminal publication and replay do not rewrite it.
 - **Verification**: Completion requires normal termination, no unresolved failure and finite final energy. Opt/TS additionally require explicit optimization convergence, and requested Freq requires a final frequency section. An energy annotated with SCF nonconvergence is null and cannot establish success. The scientific-evidence contract below defines the detailed conditions and missing measurements.
@@ -98,6 +100,16 @@ single-point energy. Opt/TS additionally require an explicit final optimization
 convergence verdict; requested Freq requires a final frequency section. A later
 explicit SCF convergence clears an earlier SCF failure. Missing evidence returns
 an incomplete analysis and a failed run; no retry or inferred success occurs.
+The last `VIBRATIONAL FREQUENCIES` section decides. It is unavailable when it
+prints no supported value, or when any of its lines prints `cm**-1` without a
+supported finite decimal value (such as `NaN cm**-1` or `Inf cm**-1`); the
+whole section is then discarded, never truncated and never replaced by an
+earlier one. Such values are not accepted. The result is missing frequency
+evidence (`frequency_evidence_missing`): the analysis is incomplete, machine
+science is unknown and handoff is blocked. A worker run fails as above, so its
+`lifecycle.outcome` is `failed`; only an observation whose recorded state is
+completed while science is unknown has the outcome `uncertain`. This narrows when success is granted; it adds no
+field, status or reason and leaves the common envelope unchanged.
 
 Public contract change in 10.0 ([ADR 0012](adr/0012-positive-scientific-completion-evidence.md)):
 a run that only terminated normally without this evidence was `completed` in
@@ -105,6 +117,15 @@ a run that only terminated normally without this evidence was `completed` in
 fewer of them, and automation that resubmits failed runs now also sees runs
 whose only problem is missing evidence; such runs are never retried
 automatically. Runs finished under earlier versions are not reclassified.
+
+Compatibility in 10.1 ([upgrade notes](RELEASE.md#upgrading-to-101)): no field,
+status, reason, CLI option or configuration key is removed or renamed, and
+`completed` keeps its 10.0 meaning. The last-frequency-section rule above
+corrects 10.0.0, which could complete a run on an earlier or truncated section;
+such a run now fails with `frequency_evidence_missing`.
+`payload.data.results.report_generation` is an additive key. The narrower
+report wording below leaves `machine.json` values unchanged. Runs finished under
+10.0.x are not reclassified.
 
 New machine observations add payload.data.results.science without changing the
 common v1 envelope: status (verified/unknown/failed), reason, energy_hartree,
@@ -114,13 +135,30 @@ one-based evidence_lines for energy/SCF/optimization. Missing measurements are
 null, including the imaginary count when no frequency section exists. Parsed
 bytes must match the input/output artifact receipts. A non-successful operation
 cannot produce verified science; insufficient science blocks successful handoff.
+The HTML report (`human-report`) and SI block (`supporting-information`) stay
+optional (`required: false`) and never affect delivery or handoff. A job type
+without one has no receipt for it. When one that the job type has could not be
+rendered or written in the first terminal publication, it has no receipt and
+payload.data.results.report_generation maps both optional artifact IDs to
+`produced`, `not-applicable` or `generation-failed`; the map is present only
+after such a failure and never carries error details. Earlier terminal
+observations are not backfilled. (Since 10.1.0.)
 
 A minimum requires an unconstrained full Opt and zero imaginary frequencies;
 a first_order_saddle requires an unconstrained TS optimization and exactly one.
 These labels describe the observed local harmonic evidence, not global stability.
 Constrained geometries, SP-only jobs and paths remain unverified stationary
-points. IRC evidence currently proves driver/path-summary presence, not complete
-path convergence. MD, NEB and compound/multi-job outputs are not covered by full
+points. A constrained TS search keeps the TS completion criteria and its TS
+report and SI record; its geometry_scope is partial, and the HTML report and SI
+block state "constrained TS search: first-order saddle unverified" rather than
+presenting its imaginary mode as expected. A TS report title names the
+operation and never by itself certifies a stationary point. (Since 10.1.0.)
+IRC evidence currently proves driver/path-summary presence, not complete
+path convergence. The HTML report's "IRC path found" badge, IRC setup,
+iterations and path profile come only from execution lines of the run's final
+output, never from input echoes, comments or another attempt's output; the
+badge is not path convergence or endpoint certification. (Since 10.1.0.)
+MD, NEB and compound/multi-job outputs are not covered by full
 scientific validation. Unknown data must never be interpreted as zero or true.
 
 Historical terminal observations remain immutable and can lack science. Consumers
@@ -130,6 +168,10 @@ and the common envelope remain stable. Field meanings remain stable except where
 a major release records a change: in 10.0 the value `completed` requires the
 completion evidence above. Breaking removals and meaning changes require an ADR,
 migration instructions and a major release. The package classifier is Beta;
-acceptance evidence currently covers ORCA 6.1.1 only.
+acceptance evidence currently covers ORCA 6.1.1 only. Coordinate and
+normal-mode association is characterized only on supported ORCA 6.1.1 outputs.
+Outputs with dummy, ghost or embedded atoms, or with numerical or partial
+Hessians, are not characterized, and the per-atom mode annotations in their HTML
+report and SI block are not established.
 
 Omitting --repo from systemd install selects the current isolated virtual environment and packaged templates. An explicit --repo selects a checkout or prepared runtime.

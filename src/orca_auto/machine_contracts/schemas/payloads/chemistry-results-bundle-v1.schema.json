@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory.local/schemas/payloads/chemistry-results-bundle-v1.schema.json",
+  "title": "Chemistry Results Bundle Payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "result_kind",
+    "engine",
+    "summary",
+    "results",
+    "artifact_refs"
+  ],
+  "properties": {
+    "result_kind": {
+      "enum": [
+        "engine-run",
+        "workflow"
+      ]
+    },
+    "engine": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "object"
+    },
+    "results": {
+      "type": "object"
+    },
+    "artifact_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

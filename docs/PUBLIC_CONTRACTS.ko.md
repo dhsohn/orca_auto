@@ -37,6 +37,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 - 이미 계산이 진행 중인 활성 디렉터리에 대한 중복 제출은 자동으로 차단됩니다.
 - `--force` 플래그를 지정하면 이전에 성공한 완료 기록이 있더라도 새로운 실행 디렉터리(`generation`)를 생성하여 재계산합니다.
 - 계산 자원은 ORCA 입력 파일의 `%pal`(코어 수)과 `%maxcore`(코어당 메모리) 지시어를 최우선으로 따르며, 설정 파일은 누락된 값에 대한 기본값을 보완합니다.
+- 활성 `%maxcore` 지시어에 읽을 수 있는 MB 값이 없으면(예: `%maxcore`, `%maxcore =512`, `%maxcore abc`) 제출을 거부합니다. 메모리 값을 추측하지 않고 두 번째 `%maxcore`를 추가하지도 않으며, 입력 파일은 바꾸지 않습니다. 주석 처리된 `%maxcore`는 지시어가 아니며, 활성 `%maxcore`가 없는 입력에는 계속 설정 기본값을 채웁니다. (10.1.0부터)
 
 ---
 
@@ -68,7 +69,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 7. **종료 처리 책임**: 부모는 자식·엔진 종료를 확인하고 실제 실행의 종료 근거를 준비한 뒤 실행권을 반환합니다. 종료 코드가 0이어도 해당 작업의 종료 상태가 필요합니다. 인덱스 발행과 복구 표식 제거는 실행 슬롯 없이 재시도할 수 있으며 워커 재시작 후에도 이어집니다. 디스크의 표식은 발행이 끝날 때까지 같은 폴더의 다음 제출을 보류하고, 준비된 다른 작업은 진행할 수 있습니다. 상태 확정이나 슬롯 반환이 실패하면 감독 중인 작업의 재시도 책임을 유지합니다. 알림 전달은 best-effort 방식입니다.
 
-8. **참고용 알림의 책임**: 부모는 새 제출의 디스크 큐 항목에서 위치 기록 발행 후 제출 알림 전송권을 확보합니다. 자식은 시도 상태를 저장한 뒤 캡처한 시작 알림을 별도로 전달합니다. 동시 전송 수가 제한된 백그라운드 전송은 발행 완료나 계산 시작을 기다리게 하지 않습니다. 전송권 기록·전송 실패와 프로세스 종료로 메시지가 유실될 수 있습니다. 과거 항목을 소급 전송하지 않으며 알림 전송은 실행 근거를 변경하지 않습니다. 메시지는 선택한 `messenger.provider`로만 갑니다. 기본값은 Discord이고, 10.0.0부터 Slack을 선택할 수 있습니다([ADR 0014](adr/0014-slack-notification-provider.md)). 선택한 제공자의 설정이 불완전하면 아무것도 보내지 않습니다.
+8. **참고용 알림의 책임**: 부모는 새 제출의 디스크 큐 항목에서 위치 기록 발행 후 제출 알림 전송권을 확보합니다. 자식은 시도 상태를 저장한 뒤 캡처한 시작 알림을 별도로 전달합니다. 동시 전송 수가 제한된 백그라운드 전송은 발행 완료나 계산 시작을 기다리게 하지 않습니다. 전송권 기록·전송 실패와 프로세스 종료로 메시지가 유실될 수 있습니다. 과거 항목을 소급 전송하지 않으며 알림 전송은 실행 근거를 변경하지 않습니다. 메시지는 선택한 `messenger.provider`로만 갑니다. 기본값은 Discord이고, 10.0.0부터 Slack을 선택할 수 있습니다([ADR 0016](adr/0016-slack-notification-provider.md)). 선택한 제공자의 설정이 불완전하면 아무것도 보내지 않습니다.
 
 9. **종료 발행 대기 표시**: 종료 복구 표시가 남으면 실행 종료 상태를 유지하고 상세에 `result publication pending`을 표시합니다. 메타데이터의 `publication_blocked_scope=orca_terminal_publication`, `publication_owner=orca_queue_worker`, 사유·다음 조치로 책임을 설명합니다. 해당 폴더의 제한은 상태 필터와 페이지 범위 밖에서도 `admission_blockers`에 남으며, 실행 슬롯 점유를 뜻하지 않습니다.
 
@@ -79,6 +80,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 계산이 완료되면 해당 generation 디렉터리에 다운스트림 도구(Chemvas, Chemleaf 등) 연동을 위한 구조화 데이터 파일 `machine.json`이 생성됩니다:
 
 - **메타데이터 래퍼 (Envelope)**: 공통 규격인 `factory/machine-observation` v1 메타데이터 스키마(Envelope)를 준수합니다.
+- **내장 validator**: 패키지는 `orca_auto.machine_contracts`를 포함합니다. `dhsohn/machine-contracts` `bc252035d01edddf1314e6641689c6d5cb88af92`의 v1 엔벨로프와 `chemistry/results-bundle` v1 스키마를 바이트 그대로 MIT 고지·출처와 함께 담고, ORCA_auto 경로용 validator를 제공합니다. `validate_machine_path`는 엔벨로프, 경로, 페이로드와 사용 가능한 모든 산출물의 바이트 수·SHA-256을 확인하며 과학적 타당성은 판정하지 않습니다. 선택 extra `validation`(`pip install 'orca_auto[validation]'`, `jsonschema` 추가)이 필요하고, 계산 실행에는 필요 없습니다. 없으면 통과시키지 않고 `ImportError`를 냅니다([ADR 0014](adr/0014-source-owned-machine-observation-validator.md)).
 - **오퍼레이션 및 페이로드**: `chemistry/orca-run` 작업 식별자와 `chemistry/results-bundle` v1 페이로드를 포함합니다.
 - **입력 출처**: 접수 당시 원본 식별 정보가 기록되어 있으면 `payload.data.results.execution_provenance_artifact`가 필수 artifact인 `execution-provenance`를 참조합니다(`execution_provenance.json`, `application/json`). 이 파일은 접수 당시 원본 입력·참조 파일, 실행 입력과 복사본, 확정된 자원 요청, 실행 파일, 장애 복구 시 이전 실행의 식별 정보를 보존합니다. `artifacts.input`은 실행용 `.inp`를 가리키며, 자원 지시어 보완과 참조 경로 변경으로 원본과 다를 수 있습니다. 출처 파일은 식별 정보 기록이며 원본 파일 내용의 보관본은 아닙니다. 이 파일 이름은 예약되어 있으므로 같은 이름의 참조 입력 파일은 실행 전에 거부합니다. 영수증은 원본 경로를 다시 열지 않고 어느 읽는 쪽이든 검증할 수 있고, generation 상태와의 일치는 릴리스 smoke가 확인합니다. 이 근거가 없는 과거 보고서는 그대로 읽을 수 있고 정보를 소급해서 채우지 않습니다. 종료 결과 발행·재처리도 당시 출처를 덮어쓰지 않습니다.
 - **결과 검증**: 완료에는 정상 종료, 해결되지 않은 오류의 부재, 유한한 최종 에너지가 필요합니다. Opt/TS는 명시적 최적화 수렴, 요청한 Freq는 최종 진동수 섹션을 추가로 요구합니다. SCF 미수렴 주석이 붙은 에너지는 null이며 성공 근거로 쓰지 않습니다. 자세한 조건과 측정하지 않은 값의 의미는 아래 과학적 근거 규격을 따릅니다.
@@ -97,12 +99,30 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 필요합니다. Opt/TS는 마지막 최적화 수렴 판정을, 요청한 Freq는 최종 진동수
 섹션을 추가로 요구합니다. 나중의 명시적 SCF 수렴은 앞선 SCF 실패를 해소합니다.
 근거 누락은 incomplete 분석과 failed 실행으로 남으며 자동 재시도하지 않습니다.
+마지막 `VIBRATIONAL FREQUENCIES` 섹션이 판정합니다. 지원하는 값이 하나도 없거나
+어느 줄이든 지원하는 유한 소수 없이 `cm**-1`을 출력하면(`NaN cm**-1`,
+`Inf cm**-1` 등) 그 섹션은 사용할 수 없으며, 잘라 쓰거나 앞선 섹션으로 대신하지
+않고 섹션 전체를 버립니다. 이런 값은 받아들이지 않습니다. 결과는 진동수 근거
+누락(`frequency_evidence_missing`)입니다. 분석은 incomplete, machine science는
+unknown, handoff는 blocked입니다. 워커 실행은 위와 같이 failed이므로
+`lifecycle.outcome`이 `failed`이고, 기록된 상태가 completed인데 science가 unknown인
+관측만 outcome이 `uncertain`입니다.
+성공 인정 기준을 좁힐 뿐 필드·상태·사유를 추가하지 않으며 공통 엔벨로프도 바꾸지 않습니다.
 
 10.0의 공개 규격 변경([ADR 0012](adr/0012-positive-scientific-completion-evidence.md)):
 정상 종료만 하고 이 근거가 없던 실행은 9.0.x에서 `completed`였지만 10.0부터는
 `failed`입니다. `completed` 실행을 고르는 소비자는 더 적은 실행을 받게 되고,
 실패 실행을 다시 제출하는 자동화는 근거 누락만이 문제인 실행도 보게 됩니다. 이런
 실행은 자동으로 재시도하지 않습니다. 이전 버전에서 끝난 실행은 재분류하지 않습니다.
+
+10.1의 호환성([업그레이드 안내](RELEASE.md#upgrading-to-101)): 필드, 상태, 사유,
+CLI 옵션, 설정 키를 제거하거나 이름을 바꾸지 않으며 `completed`는 10.0의 의미를
+유지합니다. 위의 마지막 진동수 섹션 규칙은 10.0.0을 바로잡습니다. 10.0.0은 앞선
+섹션이나 잘린 섹션으로도 실행을 완료할 수 있었으며, 그런 실행은 이제
+`frequency_evidence_missing`으로 실패합니다.
+`payload.data.results.report_generation`은 추가된 키입니다. 아래의 좁아진 보고서
+문구는 `machine.json` 값을 바꾸지 않습니다. 10.0.x에서 끝난 실행은 재분류하지
+않습니다.
 
 새 machine 관측은 공통 v1 엔벨로프를 바꾸지 않고 payload.data.results.science를
 추가합니다. 필드는 status (verified/unknown/failed), reason, energy_hartree,
@@ -112,11 +132,25 @@ imaginary_frequency_count, geometry_scope, stationary_point, output_artifact와
 진동수 섹션이 없을 때 허수 진동수 개수도 null입니다. 분석한 바이트는 입력·출력
 artifact 영수증과 일치해야 합니다. 실패 실행은 verified science를 게시할 수 없고
 과학 근거가 부족하면 성공 handoff를 차단합니다.
+HTML 보고서(`human-report`)와 SI 블록(`supporting-information`)은 선택
+artifact(`required: false`)로 남으며 delivery나 handoff에 영향을 주지 않습니다. 작업 종류에
+없는 보고서는 receipt가 없습니다. 작업 종류에 있는 보고서를 첫 terminal 발행에서 만들거나
+쓰지 못하면 receipt가 없고, payload.data.results.report_generation이 두 선택 artifact ID를
+`produced`, `not-applicable`, `generation-failed`로 기록합니다. 이 map은 그런 실패가 있을
+때만 나타나며 오류 내용을 담지 않습니다. 이전 terminal 관측은 소급해 채우지 않습니다.
+(10.1.0부터)
 
 minimum은 제약 없는 전체 Opt와 허수 진동수 0개, first_order_saddle은 제약 없는
 TS 최적화와 정확히 1개를 요구합니다. 이는 관측한 국소 조화 근거이며 전역 안정성의
 보장이 아닙니다. 제약 구조, SP 단독, 경로 계산의 정상점은 unverified입니다.
+제약된 TS 탐색은 TS 완료 조건과 TS 보고서·SI 레코드를 유지하지만 geometry_scope는
+partial이며, HTML 보고서와 SI 블록은 허수 모드를 기대대로라고 표시하지 않고
+"constrained TS search: first-order saddle unverified"라고 씁니다. TS 보고서 제목은
+작업 종류를 가리킬 뿐 그 자체로 정류점을 보증하지 않습니다. (10.1.0부터)
 현재 IRC 근거는 드라이버/경로 요약의 존재이며 전체 경로 수렴 검증이 아닙니다.
+HTML 보고서의 "IRC path found" 배지, IRC 설정, 반복, 경로 프로필은 실행의 최종 출력에
+있는 실행 줄에서만 나오며 입력 echo, 주석, 다른 attempt의 출력에서 가져오지 않습니다.
+배지는 경로 수렴이나 끝점 검증이 아닙니다. (10.1.0부터)
 MD, NEB와 compound/multi-job 출력은 완전한 과학적 검증 범위에 포함되지 않습니다.
 unknown을 0 또는 true로 해석하면 안 됩니다.
 
@@ -126,6 +160,9 @@ unknown을 0 또는 true로 해석하면 안 됩니다.
 메이저 릴리스가 변경을 기록한 경우는 예외입니다. 10.0에서 `completed` 값은 위의 완료
 근거를 요구합니다. 파괴적 제거와 의미 변경에는 ADR, 마이그레이션 안내와 메이저
 릴리스가 필요합니다. 패키지 분류는 Beta이며 실제
-acceptance 검증 범위는 현재 ORCA 6.1.1입니다.
+acceptance 검증 범위는 현재 ORCA 6.1.1입니다. 좌표와 정상 모드의 원자 대응은
+지원되는 ORCA 6.1.1 출력에서만 확인했습니다. 더미·고스트·임베딩 원자가 있거나
+수치·부분 Hessian을 쓴 출력은 확인하지 않았으며, 그런 출력의 HTML 보고서와 SI
+블록에 나오는 원자별 모드 주석은 아직 검증되지 않았습니다.
 
 systemd install에서 --repo를 생략하면 현재 격리된 가상환경과 패키지 템플릿을 사용합니다. --repo는 체크아웃 또는 준비된 런타임을 명시할 때 선택적으로 사용합니다.

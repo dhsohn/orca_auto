@@ -2,7 +2,9 @@
 
 The completion analyzer's mode, which report sections and which SI block a job
 gets, and whether its geometry is a stationary point all come from
-:func:`route_facts`, so those answers cannot disagree on one input. Each caller
+:func:`route_facts`, so those answers cannot disagree on one input; the
+geometry scope that bounds a stationary-point claim is :func:`geometry_scope`
+for machine.json, the HTML report and the SI block alike. Each caller
 reads the input file itself. The job-type label (``job_type``) and the runtime
 outputs an input requests (``execution_binding``) classify route lines on their
 own, from the keyword rules here plus a few of their own.
@@ -137,6 +139,34 @@ def route_facts(inp_path: Path, *, lines: list[str] | None = None) -> RouteFacts
         # The NEB alternative also matches the NEB of NEB-TS, a TS route.
         is_non_stationary=not is_ts and bool(_NON_STATIONARY_ROUTE_RE.search(routes)),
     )
+
+
+def geometry_scope(route: RouteFacts) -> str:
+    """What the final geometry of ``route`` can be, before any output evidence.
+
+    ``"transition_state"`` (an unconstrained TS search), ``"full"`` (a full
+    optimization), ``"partial"`` (a restricted optimization, a constrained TS
+    search included), ``"path"`` (scan, IRC, NEB or MD) or ``"single_point"``.
+    Only ``"transition_state"`` and ``"full"`` can earn a stationary-point
+    label, and only with matching frequency evidence. The TS operation itself
+    (``is_ts``, the ``ts`` completion mode, the ``TS`` report kind) is
+    unchanged by constraints: a constrained OptTS is still a TS search, never
+    a single point.
+    """
+    if route.is_ts:
+        return "partial" if route.has_constraints else "transition_state"
+    if route.is_relaxed_scan or route.is_irc or route.is_non_stationary:
+        return "path"
+    if route.is_full_opt:
+        return "full"
+    if route.is_opt:
+        return "partial"
+    return "single_point"
+
+
+def is_constrained_ts_search(route: RouteFacts) -> bool:
+    """A TS search whose coordinates are restricted: its saddle stays unverified."""
+    return route.is_ts and geometry_scope(route) == "partial"
 
 
 @dataclass

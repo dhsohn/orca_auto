@@ -1,0 +1,63 @@
+{
+  "contract": {
+    "name": "factory/machine-observation",
+    "version": 1
+  },
+  "producer": {
+    "name": "orca_auto",
+    "version": "1.0.0"
+  },
+  "operation": {
+    "id": "run-20260809-210000-01234567",
+    "kind": "chemistry/orca-run"
+  },
+  "lifecycle": {
+    "phase": "finished",
+    "outcome": "succeeded",
+    "codes": []
+  },
+  "handoff": {
+    "status": "ready",
+    "codes": []
+  },
+  "delivery": {
+    "status": "complete",
+    "codes": []
+  },
+  "artifacts": {
+    "human-report": {
+      "status": "missing",
+      "required": true,
+      "role": "human-report",
+      "path": null,
+      "media_type": "text/html",
+      "bytes": null,
+      "byte_sha256": null
+    }
+  },
+  "lineage": {
+    "trace_id": null,
+    "upstream": []
+  },
+  "payload": {
+    "contract": {
+      "name": "chemistry/results-bundle",
+      "version": 1
+    },
+    "data": {
+      "result_kind": "engine-run",
+      "engine": "orca",
+      "summary": {
+        "status": "completed",
+        "reason": "normal_termination"
+      },
+      "results": {
+        "analyzer_status": "completed",
+        "attempt_count": 1
+      },
+      "artifact_refs": [
+        "human-report"
+      ]
+    }
+  }
+}

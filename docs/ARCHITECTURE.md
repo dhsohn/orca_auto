@@ -41,6 +41,7 @@ graph TD
 | **`cli_systemd_*.py`, `systemd_plan.py`, `_process_evidence.py`** | `systemd install`, `service status` and `service restart`, layered bottom-up and enforced by import-linter: the unit plan (`systemd_plan`), unit rendering (`cli_systemd_units`), unit and `/proc` readers (`cli_systemd_evidence`), the freshness judges (`cli_systemd_freshness*`), the idle-only guard over the one admission store (`cli_systemd_restart_guard`), then the command owners (`cli_systemd_apply`, `cli_systemd_restart`, `cli_systemd_status`). `_process_evidence` records the import source a worker started from |
 | **`orca/`** | ORCA-specific domain logic: input parsing, resource extraction, execution setup, queue worker and runner execution, output log analysis, convergence verification, and result reporting (`machine.json`) |
 | **`core/`** | Shared infrastructure: disk queue store, admission slots, process supervision and the PID file, confined file I/O, configuration discovery and loading, location index store, RAM scratch workspaces, notification channels and filesystem locks |
+| **`machine_contracts/`** | Source-owned `factory/machine-observation` v1 validator for the ORCA_auto routes, with the envelope and `chemistry/results-bundle` schemas packaged in the wheel; it needs no external clone, and `jsonschema` comes from the optional `validation` extra. `orca/machine_observation` builds every `machine.json`; this package only verifies one, writes nothing, and is never imported by `core/` or `orca/` ([ADR 0014](adr/0014-source-owned-machine-observation-validator.md)) |
 
 The `[tool.importlinter]` contracts in `pyproject.toml` enforce these directions and the systemd layering; `make check` runs them through `scripts/check_imports.py`.
 
@@ -172,7 +173,7 @@ A result with captured source evidence publishes `execution_provenance.json` bef
 
 One rule decides what kind of job the selected input is. `completion_rules.route_facts` reads the `.inp` and records its route lines and flags: TS, IRC, NEB-TS, optimization (full or partial), relaxed scan (an optimization with a `%geom Scan` block) and non-stationary path or dynamics. The analyzer's completion mode, the HTML report's sections (`report/composer.py`), the structure kind (`evidence.structure_kind`) and the SI writer (`report/si.py`) all derive from that record, so they cannot classify one input differently. Each caller reads the input itself: the completion mode, the HTML writer and the SI writer each call `route_facts`, and the relaxed-scan report reads the input again for its scan coordinate. The job-type label (`job_type.detect_job_type`) and the runtime outputs an input requests (`execution_binding/_inputs.py`) classify route lines on their own, from the same keyword rules plus a few of their own. The composer builds one `ReportHeader` per page from the job state (title, status and reason, route lines, timestamps, last output) and passes it to each facet's collector: Opt, SP, relaxed scan, NEB-TS and IRC. Each facet renders one `ReportComponent` (its kind label, badges, meta line, metric cards and sections) from two facts: whether it is the primary facet, which names the page and alone carries the attempt chain, and whether an IRC facet is present, which then shows the vibrational summary. The IRC facet itself asks instead whether another facet already shows the optimization trace.
 
-Geometry constraints, fixed or rigid fragments, hydrogen-only or frozen-hydrogen settings, and `RigidBodyOpt` restrict the optimized coordinates. A non-TS optimization with these restrictions is partial and does not claim a full-surface minimum. Empty constraint blocks and explicitly false hydrogen flags do not impose a restriction.
+Geometry constraints, fixed or rigid fragments, hydrogen-only or frozen-hydrogen settings, and `RigidBodyOpt` restrict the optimized coordinates. A non-TS optimization with these restrictions is partial and does not claim a full-surface minimum. Empty constraint blocks and explicitly false hydrogen flags do not impose a restriction. A TS search with these restrictions stays a TS search (TS completion criteria, `TS` page, TS SI record), but `completion_rules.geometry_scope` gives it the `partial` scope: `machine.json` leaves its stationary point `unverified`, and the HTML report and SI block say "constrained TS search: first-order saddle unverified" instead of presenting one imaginary mode as expected. `machine_observation`, `evidence`, the composer, the Opt facet and the SI writer read that one function; the test verifier keeps its own copy of the rule.
 
 The completion analyzer distinguishes only sp/opt/ts requirements. IRC and frequency requirements are separate flags; RouteFacts retains scan, path and dynamics classifications for reports. The systemd installation plan resolves the service Python once; rendering, warnings and application use that same path.
 
@@ -180,7 +181,7 @@ The completion analyzer distinguishes only sp/opt/ts requirements. IRC and frequ
 | :--- | :--- | :--- |
 | NEB-TS, ZOOM-NEB-TS | NEB-TS (`NEB-TS`) | TS structure |
 | Relaxed scan: an optimization with a `%geom Scan` block | Relaxed scan (`Relaxed scan`) | None |
-| OptTS | Opt (`TS`) | TS structure |
+| OptTS | Opt (`TS`); with constraints, also a constrained TS search warning | TS structure; with constraints, it warns that the first-order saddle is unverified |
 | Full optimization: `Opt`, `TightOpt`, `COpt`, ... | Opt (`Opt`) | Minimum structure |
 | Partial optimization: `OptH`, `MECP-Opt`, constrained `Opt`, ... | Opt (`Partial Opt`) | Structure without a minimum or TS claim |
 | Any kind with `IRC`, or `IRC` alone | IRC facet added; it names the page (`IRC`) unless NEB-TS or a relaxed scan does | IRC validation summary instead |
@@ -370,5 +371,6 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0011: Read-only PID lookups](adr/0011-read-only-pid-lookups.md)
 - [ADR 0012: Positive scientific completion evidence](adr/0012-positive-scientific-completion-evidence.md)
 - [ADR 0013: Installed services and explicit input](adr/0013-installed-service-and-explicit-input.md)
-- [ADR 0014: Slack as an additional notification provider](adr/0014-slack-notification-provider.md)
+- [ADR 0014: Source-owned machine observation validator](adr/0014-source-owned-machine-observation-validator.md)
 - [ADR 0015: Admission recovery scoped to the worker's own runs root](adr/0015-admission-recovery-scoped-to-own-runs-root.md)
+- [ADR 0016: Slack as an additional notification provider](adr/0016-slack-notification-provider.md)

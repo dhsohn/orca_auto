@@ -408,6 +408,40 @@ def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
     return machines[0]
 
 
+def _installed_machine_validation(
+    python: Path, wheelhouse: Path, wheel: Path, machine: Path, *, package: Path, work: Path
+) -> None:
+    """The ``validation`` extra validates a published machine.json outside the checkout."""
+    work.mkdir()
+    _pip(python, wheelhouse, f"{wheel}[validation]", cwd=work)
+    code = """\
+    import json, shutil, sys
+    from pathlib import Path
+    import orca_auto.machine_contracts as contracts
+    from orca_auto.machine_contracts import ContractError, validate_machine_path
+
+    machine, work, package = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+    assert Path(contracts.__file__).resolve().parent == package.resolve() / "machine_contracts"
+    validate_machine_path(machine)
+    altered = work / machine.parent.name
+    shutil.copytree(machine.parent, altered, symlinks=True)
+    document = json.loads(machine.read_text(encoding="utf-8"))
+    receipt = next(r for r in document["artifacts"].values() if r["status"] == "available")
+    with (altered / receipt["path"]).open("ab") as stream:
+        stream.write(b"\\n")
+    try:
+        validate_machine_path(altered / "machine.json")
+    except ContractError as error:
+        assert "artifact byte count mismatch" in str(error), error
+    else:
+        raise AssertionError("installed validator accepted an altered artifact")
+    """
+    _run(
+        [str(python), "-I", "-c", textwrap.dedent(code), str(machine), str(work), str(package)],
+        cwd=work,
+    )
+
+
 def _installed_service_plan(python: Path, *, work: Path) -> None:
     """The wheel alone renders a usable service from an unrelated directory."""
     code = """
@@ -455,6 +489,9 @@ def run_matrix(work: Path) -> dict[str, object]:
             "PyYAML>=6.0.1",
             "setuptools>=68",
             "wheel",
+            # With its dependencies, for the ``validation`` extra only; the
+            # prepared runtime still takes just the core and PyYAML wheels.
+            "jsonschema>=4.23,<5",
         ],
         cwd=work,
     )
@@ -466,15 +503,27 @@ def run_matrix(work: Path) -> dict[str, object]:
     _prepared_runtime_smoke(wheel, wheelhouse, work=work)
     machine = _fake_orca(python, work / "fake-worker", package=package)
     _installed_service_plan(python, work=work)
+    _installed_machine_validation(
+        python, wheelhouse, wheel, machine, package=package, work=work / "wheel-validation"
+    )
     # A second fresh environment proves the source archive independently
     # rebuilds an installable distribution without the original checkout.
     rebuilt_python = _new_environment(work / "rebuilt-installed", wheelhouse, cwd=work)
     _pip(rebuilt_python, wheelhouse, str(rebuilt), cwd=work)
+    rebuilt_package = _site_package(rebuilt_python, cwd=work)
     _probe(
         rebuilt_python,
         cwd=work,
-        core_source=_site_package(rebuilt_python, cwd=work),
+        core_source=rebuilt_package,
         expected_version=expected_version,
+    )
+    _installed_machine_validation(
+        rebuilt_python,
+        wheelhouse,
+        rebuilt,
+        machine,
+        package=rebuilt_package,
+        work=work / "rebuilt-validation",
     )
     _run([str(python), "-m", "pip", "uninstall", "-y", "orca_auto"], cwd=work)
     _pip(python, wheelhouse, "-e", str(project), cwd=work)
@@ -484,7 +533,11 @@ def run_matrix(work: Path) -> dict[str, object]:
         core_source=project / "src" / "orca_auto",
         expected_version=expected_version,
     )
-    print("[distributions] wheel, rebuilt sdist and editable installation passed", flush=True)
+    print(
+        "[distributions] wheel, rebuilt sdist, installed validator and editable installation"
+        " passed",
+        flush=True,
+    )
     return {"work_dir": str(work), "core_wheel": str(wheel), "machine": str(machine)}
 
 

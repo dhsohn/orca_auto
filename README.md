@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v10.0.0/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
+  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v10.1.0/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
   <a href="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml"><img src="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/dhsohn/orca_auto/releases/latest"><img src="https://img.shields.io/github/v/release/dhsohn/orca_auto" alt="Release"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
-  <a href="https://github.com/dhsohn/orca_auto/blob/v10.0.0/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/dhsohn/orca_auto/blob/v10.1.0/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-<p align="center"><b>English</b> · <a href="https://github.com/dhsohn/orca_auto/blob/v10.0.0/README.ko.md">한국어</a></p>
+<p align="center"><b>English</b> · <a href="https://github.com/dhsohn/orca_auto/blob/v10.1.0/README.ko.md">한국어</a></p>
 
 ORCA_auto is a **queue-based runner for ORCA** on Linux/WSL.
 It provides background execution, queue scheduling, and structured result tracking for ORCA calculations and downstream tools.
@@ -26,15 +26,16 @@ Python **3.11+**, Linux/WSL2, and a separately installed ORCA engine are
 required. Workers are managed with `systemd`.
 
 ```bash
-python -m pip install orca_auto==10.0.0
+python -m pip install orca_auto==10.1.0
 ```
 
-- **[Installation details](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/INSTALLATION.md)** — install the standalone ORCA package.
-- **[Quickstart guide](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/QUICKSTART.md)** — configure settings, start background services, and submit your first calculation.
+- **[Installation details](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/INSTALLATION.md)** — install the standalone ORCA package.
+- **[Quickstart guide](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/QUICKSTART.md)** — configure settings, start background services, and submit your first calculation.
 
-Existing 9.0.x installations upgrade with the [10.0 upgrade guide](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/RELEASE.md#upgrading-to-100): 10.0 changes what a `completed` run means.
-For upgrades from 8.x or earlier, see the [9.0 upgrade guide](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/RELEASE.md#upgrading-to-90) first, then the 10.0 upgrade guide.
-For 6.x or earlier, complete the [7.0 migration](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/RELEASE.md#upgrading-to-70) first, then follow the 9.0 upgrade guide.
+Existing 10.0.x installations upgrade with the [10.1 upgrade notes](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/RELEASE.md#upgrading-to-101): the last frequency section now decides frequency evidence.
+Existing 9.0.x installations first follow the [10.0 upgrade guide](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/RELEASE.md#upgrading-to-100): 10.0 changes what a `completed` run means.
+For upgrades from 8.x or earlier, see the [9.0 upgrade guide](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/RELEASE.md#upgrading-to-90) first, then the 10.0 upgrade guide.
+For 6.x or earlier, complete the [7.0 migration](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/RELEASE.md#upgrading-to-70) first, then follow the 9.0 upgrade guide.
 
 ## Chemistry ecosystem
 
@@ -43,26 +44,26 @@ For 6.x or earlier, complete the [7.0 migration](https://github.com/dhsohn/orca_
 - [Chemleaf](https://github.com/dhsohn/Chemleaf) for drafting research documents.
 
 These are independent, local-first companion tools that connect through standard formats (`machine.json`, results bundles, and input files).
-[How the tools connect →](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/RELATED_WORK.md#local-first-companion-tools)
+[How the tools connect →](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/RELATED_WORK.md#local-first-companion-tools)
 
 ## Documentation
 
-[Command reference](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/REFERENCE.md) · [Public contracts](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/PUBLIC_CONTRACTS.md) ·
-[Architecture](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/ARCHITECTURE.md) · [systemd services](https://github.com/dhsohn/orca_auto/blob/v10.0.0/systemd/README.md) ·
-[Discord notifications](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/DISCORD_SETUP.md) ·
-[Slack notifications](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/SLACK_SETUP.md) (new in 10.0.0; 9.0.x does not support Slack)
+[Command reference](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/REFERENCE.md) · [Public contracts](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/PUBLIC_CONTRACTS.md) ·
+[Architecture](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/ARCHITECTURE.md) · [systemd services](https://github.com/dhsohn/orca_auto/blob/v10.1.0/systemd/README.md) ·
+[Discord notifications](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/DISCORD_SETUP.md) ·
+[Slack notifications](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/SLACK_SETUP.md) (new in 10.0.0; 9.0.x does not support Slack)
 
-[Development guide](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/DEVELOPMENT.md) · [Validation](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/VALIDATION.md) ·
-[Roadmap](https://github.com/dhsohn/orca_auto/blob/v10.0.0/ROADMAP.md) · [Changelog](https://github.com/dhsohn/orca_auto/blob/v10.0.0/CHANGELOG.md)
+[Development guide](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/DEVELOPMENT.md) · [Validation](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/VALIDATION.md) ·
+[Roadmap](https://github.com/dhsohn/orca_auto/blob/v10.1.0/ROADMAP.md) · [Changelog](https://github.com/dhsohn/orca_auto/blob/v10.1.0/CHANGELOG.md)
 
-[Citation](https://github.com/dhsohn/orca_auto/blob/v10.0.0/CITATION.cff) · [Contributing](https://github.com/dhsohn/orca_auto/blob/v10.0.0/CONTRIBUTING.md) ·
-[Support](https://github.com/dhsohn/orca_auto/blob/v10.0.0/SUPPORT.md) · [Security](https://github.com/dhsohn/orca_auto/blob/v10.0.0/SECURITY.md) · [Code of Conduct](https://github.com/dhsohn/orca_auto/blob/v10.0.0/CODE_OF_CONDUCT.md)
+[Citation](https://github.com/dhsohn/orca_auto/blob/v10.1.0/CITATION.cff) · [Contributing](https://github.com/dhsohn/orca_auto/blob/v10.1.0/CONTRIBUTING.md) ·
+[Support](https://github.com/dhsohn/orca_auto/blob/v10.1.0/SUPPORT.md) · [Security](https://github.com/dhsohn/orca_auto/blob/v10.1.0/SECURITY.md) · [Code of Conduct](https://github.com/dhsohn/orca_auto/blob/v10.1.0/CODE_OF_CONDUCT.md)
 
 ## How this was built
 
 I'm a chemist, not a programmer. AI coding agents write the code in this repository.
 I decide what ORCA_auto should do, keep its public behavior written down in the
-[public contracts](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/PUBLIC_CONTRACTS.md),
+[public contracts](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/PUBLIC_CONTRACTS.md),
 and set the checks a change must pass before it merges.
 
 I don't review the code line by line, so a change is accepted on evidence, not on an
@@ -70,11 +71,11 @@ agent's report that it works:
 
 - `make check` runs lint, formatting, type checks, import-boundary checks, a bilingual
   documentation check and the full test suite with coverage. CI runs the same gate and
-  validates emitted `machine.json` files against the shared
-  [machine-contracts](https://github.com/dhsohn/machine-contracts) validator.
+  validates emitted `machine.json` files with the bundled validator, a pinned copy of the
+  shared [machine-contracts](https://github.com/dhsohn/machine-contracts) v1 contract.
 - A change to public behavior updates the contract document in the same change.
 - A change to how ORCA_auto runs the engine also needs a bounded run with the real
   ORCA engine, judged by the calculation's own evidence such as termination, geometry
-  convergence or frequencies ([validation](https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/VALIDATION.md)).
+  convergence or frequencies ([validation](https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/VALIDATION.md)).
 - High-impact changes, such as recovery, queue state and result correctness, get an
   independent adversarial review from a separate agent.

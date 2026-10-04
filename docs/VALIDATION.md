@@ -11,10 +11,13 @@ The package gate checks wheel and source inventories, sdist-rebuilt wheels,
 metadata/CLI versions, fresh external imports, dependency consistency, editable
 installation and a prepared immutable runtime. Fake-engine tests exercise durable
 submission, real worker subprocesses and terminal output without running chemistry.
-The standard pytest suite validates emitted `machine.json` against the pinned
-common v1 contract. It requires a `machine-contracts` clone as described in
-[DEVELOPMENT](DEVELOPMENT.md); a missing validator fails the test instead of
-skipping validation. CI and release checks provide that clone.
+The standard pytest suite validates emitted `machine.json` with the source-owned
+`orca_auto.machine_contracts` validator, a pinned copy of the common v1 contract
+([ADR 0014](adr/0014-source-owned-machine-observation-validator.md)). It needs no
+external clone; a missing `jsonschema` fails the test instead of skipping
+validation. The package gate installs the wheel and the sdist-rebuilt wheel with
+the `validation` extra and checks that the installed validator accepts a fake-worker
+`machine.json` and rejects an altered artifact.
 
 ## Real-engine acceptance
 
@@ -80,6 +83,11 @@ retain authentic inputs and complete ORCA 6.1.1 outputs, with SHA256 provenance.
 Literal expected energies, convergence and imaginary-mode counts supplement
 synthetic edge cases; SCF recovery sequencing currently has synthetic evidence
 only. These are parser regressions, not a fresh execution of the current runner.
+`tests/orca/test_atom_mode_association.py` pins atom identity, order and
+normal-mode association on the water and ammonia outputs only. No authentic
+output with dummy, ghost or embedded atoms, or with a numerical or partial
+Hessian, is retained. The two coordinate readers are unchanged, and whether they
+agree on such outputs is not established.
 
 For the scientific-evidence change, the full repository and distribution gates
 are required. A new bounded real-engine run remains pending while both slots in

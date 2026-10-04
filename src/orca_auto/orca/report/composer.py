@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import RouteFacts, route_facts
-from ..evidence import final_out_name, structure_kind
+from ..completion_rules import RouteFacts, is_constrained_ts_search, route_facts
+from ..evidence import CONSTRAINED_TS_SEARCH_NOTE, final_out_name, structure_kind
 from .attempts import attempt_dicts, duration_text
 from .irc import IrcReportData, collect_irc_report_data, irc_report_component
 from .neb import NebReportData, collect_neb_report_data, neb_report_component
@@ -29,6 +29,8 @@ class HtmlReportParts:
     neb: NebReportData | None = None
     irc: IrcReportData | None = None
     sp: SpReportData | None = None
+    # The page's TS search runs on restricted coordinates (whatever facet names it).
+    constrained_ts_search: bool = False
 
 
 def compose_job_report_html(reaction_dir: Path, state: Mapping[str, Any]) -> str | None:
@@ -42,6 +44,10 @@ def compose_job_report_html(reaction_dir: Path, state: Mapping[str, Any]) -> str
         for badge in component.badges:
             if badge not in badges:
                 badges.append(badge)
+    # The page title names the TS search operation, which never by itself
+    # certifies a saddle; a constrained search says on every page it cannot.
+    if parts.constrained_ts_search:
+        badges.append((CONSTRAINED_TS_SEARCH_NOTE, "warn"))
 
     header = parts.header
     page = ReportPage(
@@ -88,7 +94,15 @@ def collect_html_report_parts(
             return None
         sp = collect_sp_report_data(reaction_dir, state, route, header)
 
-    return HtmlReportParts(header=header, opt=opt, scan=scan, neb=neb, irc=irc, sp=sp)
+    return HtmlReportParts(
+        header=header,
+        opt=opt,
+        scan=scan,
+        neb=neb,
+        irc=irc,
+        sp=sp,
+        constrained_ts_search=is_constrained_ts_search(route),
+    )
 
 
 def _report_header(reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts) -> ReportHeader:

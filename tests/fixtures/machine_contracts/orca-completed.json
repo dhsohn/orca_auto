@@ -1,0 +1,82 @@
+{
+  "contract": {
+    "name": "factory/machine-observation",
+    "version": 1
+  },
+  "producer": {
+    "name": "orca_auto",
+    "version": "1.0.0"
+  },
+  "operation": {
+    "id": "run-20260809-210000-01234567",
+    "kind": "chemistry/orca-run"
+  },
+  "lifecycle": {
+    "phase": "finished",
+    "outcome": "succeeded",
+    "codes": []
+  },
+  "handoff": {
+    "status": "ready",
+    "codes": []
+  },
+  "delivery": {
+    "status": "complete",
+    "codes": []
+  },
+  "artifacts": {
+    "human-report": {
+      "status": "available",
+      "required": false,
+      "role": "human-report",
+      "path": "job_report.html",
+      "media_type": "text/html",
+      "bytes": 4096,
+      "byte_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "supporting-information": {
+      "status": "available",
+      "required": false,
+      "role": "supporting-information",
+      "path": "si_block.md",
+      "media_type": "text/markdown",
+      "bytes": 800,
+      "byte_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  },
+  "lineage": {
+    "trace_id": "reaction-R17",
+    "upstream": [
+      {
+        "producer": {
+          "name": "chemvas",
+          "version": "1.0.0"
+        },
+        "operation_id": "step-S01-2d711642b726b044",
+        "byte_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ]
+  },
+  "payload": {
+    "contract": {
+      "name": "chemistry/results-bundle",
+      "version": 1
+    },
+    "data": {
+      "result_kind": "engine-run",
+      "engine": "orca",
+      "summary": {
+        "status": "completed",
+        "reason": "normal_termination"
+      },
+      "results": {
+        "analyzer_status": "completed",
+        "attempt_count": 1
+      },
+      "artifact_refs": [
+        "human-report",
+        "supporting-information"
+      ]
+    }
+  }
+}

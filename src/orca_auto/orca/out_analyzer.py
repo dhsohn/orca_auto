@@ -66,10 +66,11 @@ class OutMarkers(TypedDict):
 
 
 # Evidence that ORCA's IRC driver ran. The analyzer looks for the upper-case
-# IRC_PATH_FOUND_NEEDLES in each execution output line. The IRC report's badge
-# instead searches its whole raw text, input echoes included, for the driver
-# needle or IRC_PATH_SUMMARY_RE (whole words, any case, any whitespace between
-# them), the header it also reads the path summary table under.
+# IRC_PATH_FOUND_NEEDLES in each line that passes is_execution_output_line, so
+# input echoes and comments never count. The IRC report's badge applies the same
+# needles to the same execution lines of the final output; it means driver or
+# path-summary presence, not path convergence. IRC_PATH_SUMMARY_RE is only the
+# report's path-summary table header grammar.
 IRC_DRIVER_NEEDLE = "IRC-DRV"
 IRC_PATH_FOUND_NEEDLES = ("IRC PATH SUMMARY", IRC_DRIVER_NEEDLE)
 IRC_PATH_SUMMARY_RE = re.compile(r"\bIRC\s+PATH\s+SUMMARY\b", re.IGNORECASE)

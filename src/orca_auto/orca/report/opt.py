@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import RouteFacts
-from ..evidence import final_out_path, parsed_final_output
+from ..completion_rules import RouteFacts, is_constrained_ts_search
+from ..evidence import CONSTRAINED_TS_SEARCH_NOTE, final_out_path, parsed_final_output
 from ..frequencies import FrequencyAnalysis, ModeSummary, mode_summaries
 from .attempts import (
     AttemptReportRow,
@@ -49,6 +49,8 @@ class OptReportData:
     mode_summaries: tuple[ModeSummary, ...]
     frequency_attempt_index: int | None
     frequency_from_earlier_attempt: bool
+    # A TS search (kind "ts") with restricted coordinates: no saddle expectation.
+    constrained_ts_search: bool = False
 
 
 _KIND_LABELS = {"ts": "TS", "partial": "Partial Opt"}
@@ -116,6 +118,7 @@ def collect_opt_report_data(
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         frequency_attempt_index=frequency_attempt_index,
         frequency_from_earlier_attempt=frequency_from_earlier_attempt,
+        constrained_ts_search=is_constrained_ts_search(route),
     )
 
 
@@ -142,8 +145,12 @@ def _imaginary_note(data: OptReportData) -> str:
         return ""
     notes: list[str] = []
     # A partial optimization ends on no stationary point of the full surface,
-    # so its count carries no expectation.
-    if data.kind != "partial":
+    # so its count carries no expectation. A constrained TS search is still a
+    # TS search, but one imaginary mode on restricted coordinates is no
+    # first-order saddle of the full surface: say so instead of "as expected".
+    if data.kind == "ts" and data.constrained_ts_search:
+        notes.append(CONSTRAINED_TS_SEARCH_NOTE)
+    elif data.kind != "partial":
         expected = 1 if data.kind == "ts" else 0
         kind_text = "TS" if data.kind == "ts" else "minimum"
         if data.imaginary_count == expected:

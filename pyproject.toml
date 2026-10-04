@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orca_auto"
-version = "10.0.0"
+version = "10.1.0"
 description = "ORCA_auto: durable ORCA queues and supervised execution"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -38,8 +38,8 @@ dependencies = [
 Homepage = "https://github.com/dhsohn/orca_auto"
 Repository = "https://github.com/dhsohn/orca_auto"
 Issues = "https://github.com/dhsohn/orca_auto/issues"
-Documentation = "https://github.com/dhsohn/orca_auto/blob/v10.0.0/docs/INSTALLATION.md"
-Changelog = "https://github.com/dhsohn/orca_auto/blob/v10.0.0/CHANGELOG.md"
+Documentation = "https://github.com/dhsohn/orca_auto/blob/v10.1.0/docs/INSTALLATION.md"
+Changelog = "https://github.com/dhsohn/orca_auto/blob/v10.1.0/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
@@ -53,6 +53,10 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.15.5",
     "types-PyYAML>=6.0.12",
+]
+# Only orca_auto.machine_contracts needs it; the runtime never validates.
+validation = [
+    "jsonschema>=4.23,<5",
 ]
 
 [project.scripts]
@@ -114,6 +118,14 @@ no_implicit_optional = true
 strict_equality = true
 warn_return_any = true
 warn_unused_ignores = true
+
+# jsonschema is imported only by orca_auto.machine_contracts and ships no
+# type information the validator relies on. A "pkg.*" pattern also matches
+# "pkg" itself, and keeps this third-party name out of the source inventory
+# that tests/tooling/test_mypy_config.py checks concrete names against.
+[[tool.mypy.overrides]]
+module = ["jsonschema.*"]
+ignore_missing_imports = true
 
 # Layering is enforced by import-linter (`lint-imports`, run by scripts/check.sh
 # and therefore by CI). Worker entry points live in orca/commands; core never
@@ -238,6 +250,7 @@ forbidden_modules = [
     "orca_auto.cli_systemd_units",
     "orca_auto.cli_worker_supervision",
     "orca_auto.cli_workers",
+    "orca_auto.machine_contracts",
     "orca_auto.systemd_plan",
     "orca_auto.terminal",
     "orca_auto.terminal_table",
@@ -251,4 +264,12 @@ fail_under = 80
 show_missing = true
 
 [tool.setuptools.package-data]
-orca_auto = ["py.typed", "systemd_templates/*.service", "systemd_templates/*.target"]
+orca_auto = [
+    "py.typed",
+    "systemd_templates/*.service",
+    "systemd_templates/*.target",
+    "machine_contracts/LICENSE",
+    "machine_contracts/PROVENANCE.md",
+    "machine_contracts/schemas/*.json",
+    "machine_contracts/schemas/payloads/*.json",
+]

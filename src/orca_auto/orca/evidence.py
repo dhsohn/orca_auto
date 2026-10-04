@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from .completion_rules import RouteFacts
+from .completion_rules import RouteFacts, geometry_scope
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis_text
 from .orca_opt_progress import OptProgress, parse_opt_progress_text
 from .parser import OrcaResult, parse_orca_output_text
@@ -19,6 +19,12 @@ from .statuses import RunStatus
 
 class OrcaEvidenceError(Exception):
     """The job is missing its final output, energy, or geometry."""
+
+
+# What the HTML report and the SI block say about a TS search whose geometry is
+# restricted (completion_rules.is_constrained_ts_search). It stays a TS search,
+# but machine.json never labels it a first_order_saddle, and neither may they.
+CONSTRAINED_TS_SEARCH_NOTE = "constrained TS search: first-order saddle unverified"
 
 
 def final_out_path(state: Mapping[str, Any]) -> Path | None:
@@ -64,9 +70,12 @@ def structure_kind(route: RouteFacts) -> str | None:
     A plain relaxed scan (any optimization route + scan coordinate), IRC,
     plain NEB paths, and MD end on non-stationary geometries that must never
     enter the stationary-structure SI path; IRC has a separate summary-only
-    writer. TS routes (OptTS/NEB-TS) and full optimizations end on stationary
-    points. Everything else (single points, bare Freq, partial optimizations
-    such as OptH or MECP-Opt) is reported without a minimum/TS claim.
+    writer. TS routes (OptTS/NEB-TS) are TS searches and full optimizations
+    search a minimum; a constrained TS search stays ``"ts"`` (never ``"sp"``)
+    while its :func:`~orca_auto.orca.completion_rules.geometry_scope` is
+    ``"partial"``, so its record warns that the saddle is unverified.
+    Everything else (single points, bare Freq, partial optimizations such as
+    OptH or MECP-Opt) is reported without a minimum/TS claim.
     """
     if not route.route_lines or route.is_irc:
         return None
@@ -215,6 +224,8 @@ class OrcaStructureEvidence:
     analysis: FrequencyAnalysis | None
     imaginary_count: int | None
     last_out_name: str = ""
+    # completion_rules.geometry_scope of the job's route; None when unknown.
+    geometry_scope: str | None = None
 
 
 def collect_structure_evidence(
@@ -254,4 +265,5 @@ def collect_structure_evidence(
         analysis=analysis,
         imaginary_count=imaginary_count,
         last_out_name=out_path.name,
+        geometry_scope=geometry_scope(route),
     )

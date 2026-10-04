@@ -1,0 +1,51 @@
+{
+  "contract": {
+    "name": "factory/machine-observation",
+    "version": 1
+  },
+  "producer": {
+    "name": "orca_auto",
+    "version": "1.0.0"
+  },
+  "operation": {
+    "id": "workflow-20260809-211000-89abcdef",
+    "kind": "chemistry/workflow"
+  },
+  "lifecycle": {
+    "phase": "finished",
+    "outcome": "uncertain",
+    "codes": [
+      "orca_auto/terminal-commit-uncertain"
+    ]
+  },
+  "handoff": {
+    "status": "blocked",
+    "codes": [
+      "orca_auto/terminal-commit-uncertain"
+    ]
+  },
+  "delivery": {
+    "status": "complete",
+    "codes": []
+  },
+  "artifacts": {},
+  "lineage": {
+    "trace_id": null,
+    "upstream": []
+  },
+  "payload": {
+    "contract": {
+      "name": "chemistry/results-bundle",
+      "version": 1
+    },
+    "data": {
+      "result_kind": "workflow",
+      "engine": "workflow",
+      "summary": {
+        "status": "uncertain"
+      },
+      "results": {},
+      "artifact_refs": []
+    }
+  }
+}

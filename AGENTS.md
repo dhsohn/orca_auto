@@ -27,15 +27,16 @@ make check
 | PR·릴리스 | [RELEASE](docs/RELEASE.md) |
 | 준비된 운영 설치·전환 | [RUNTIME](docs/RUNTIME.md) |
 
-`machine.json`의 공통 v1 엔벨로프(Envelope) 스키마는 `~/machine_contracts/COMPATIBILITY.md`를 따른다.
-공통 규격 변경은 해당 저장소에 먼저 반영하고 CI pin을 갱신한다.
+`machine.json`의 공통 v1 엔벨로프(Envelope) 스키마와 ORCA 경로 validator는
+`src/orca_auto/machine_contracts/`가 소유한다(ADR 0014). 원본은 `dhsohn/machine-contracts`
+`bc252035d01edddf1314e6641689c6d5cb88af92`이며 `PROVENANCE.md`에 파일별 SHA-256이 있다.
+공통 규격 변경은 원본 저장소에 먼저 반영한 뒤 파일·해시·ORCA registry 항목을 직접 옮긴다.
 `job_state.json`은 내부 복구용 메타데이터 파일이다.
 
 ## `make check`가 흡수하지 못하는 것
 
-- `machine.json` 적합성 테스트는 CI가 고정한 커밋을 가진 `~/machine_contracts` 또는
-  `FACTORY_MACHINE_CONTRACT_REPO` 클론이 필요하다. 준비 방법은 [DEVELOPMENT](docs/DEVELOPMENT.md)를 따른다.
-
+- `machine.json` 적합성 테스트는 외부 클론 없이 패키지 validator로 실행되며 `jsonschema`
+  (`.[dev]` 또는 `.[validation]`)가 없으면 실패한다. 일반 런타임 설치에는 필요 없다.
 - 검증·패키지 배포·운영 전환은 별도 단계다.
 - `queue list --json`의 `active_simulations`가 0이 되기 전에는 canonical checkout,
   설치 환경, worker를 변경하지 않는다. 준비된 wheel runtime은 버전별 경로에 둔다.

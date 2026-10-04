@@ -23,10 +23,44 @@ make check-packages
 
 Package checks build the wheel/sdist, rebuild from the sdist, verify exact source
 and installed inventories, and exercise ORCA in fresh environments outside the
-checkout. They also verify a prepared immutable runtime. Check metadata with
+checkout. They also verify a prepared immutable runtime and, through the
+`validation` extra, the installed `machine.json` validator and its packaged
+schemas; release needs no `machine-contracts` clone. Check metadata with
 `twine check --strict`; inspect release README links and images separately.
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
+
+## Upgrading to 10.1
+
+Version 10.1 is a minor release. It removes or renames no field, status, reason,
+CLI option or configuration key, and `completed` keeps its 10.0 meaning
+([PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.md#scientific-evidence-and-compatibility)).
+Review two narrower behaviors before switching:
+
+- The last `VIBRATIONAL FREQUENCIES` section decides frequency evidence. 10.0.0
+  could complete a run on an earlier or truncated section when the last section
+  printed no supported value or an unsupported one such as `NaN cm**-1`. Such a
+  run now fails with `frequency_evidence_missing` and is not retried. Runs
+  finished under 10.0.x keep their recorded status.
+- `run-dir` refuses an input whose active `%maxcore` has no readable value in MB.
+
+After an optional report fails, `machine.json` can carry the additive
+`payload.data.results.report_generation` key. The HTML report and SI block word
+constrained TS searches and IRC evidence more narrowly. The `validation` extra
+and `orca_auto.machine_contracts` are optional, and running jobs does not need
+them.
+
+Switch as for any release:
+
+1. Wait for `active_simulations: 0`.
+2. Keep the 10.0.x runtime, units and configuration.
+3. Install 10.1 in a new environment or [prepared runtime](RUNTIME.md).
+4. Restart under the guard and verify `service status --json` against the
+   running worker.
+
+10.1 adds no state file or queue field. To roll back to 10.0.x, reinstall the
+retained runtime and units in an idle window; observations published by 10.1
+stay as written. Publishing the package performs none of these steps.
 
 ## Upgrading to 10.0
 
@@ -36,7 +70,7 @@ convergence for Opt/TS, a final frequency section when Freq is requested), and a
 run without it fails ([ADR 0012](adr/0012-positive-scientific-completion-evidence.md),
 [PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.md#scientific-evidence-and-compatibility)).
 It also adds the optional Slack provider; Discord settings are unchanged
-([ADR 0014](adr/0014-slack-notification-provider.md)). Publishing the package
+([ADR 0016](adr/0016-slack-notification-provider.md)). Publishing the package
 performs none of the steps below.
 
 Before the maintenance window:
