@@ -1,73 +1,30 @@
 from __future__ import annotations
 
-import importlib.util
-import io
-import os
-import re
-import subprocess
 import sys
-import tempfile
-import zipfile
 from pathlib import Path
 
 import pytest
 
-CI_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
-# Read at import, before the autouse config-discovery isolation moves HOME.
-DEFAULT_MACHINE_CONTRACT_REPO = Path.home() / "machine_contracts"
-
-
-def machine_contract_pin() -> str:
-    """Return the machine-contracts commit that CI checks out for this suite."""
-    pins = re.findall(
-        r"repository: dhsohn/machine-contracts\n\s+ref: ([0-9a-f]{40})\n",
-        CI_WORKFLOW.read_text(encoding="utf-8"),
-    )
-    if len(pins) != 1:
-        pytest.fail(f"{CI_WORKFLOW} must pin exactly one full dhsohn/machine-contracts commit")
-    return pins[0]
+from orca_auto.machine_contracts import ContractError, validate_machine_path
 
 
 def validate_common_machine(path: Path) -> None:
-    """Validate ``path`` with the machine-contracts validator at the CI pin.
+    """Validate ``path`` with the source-owned machine-observation v1 validator.
 
-    The validator is read out of the pinned commit of a machine-contracts clone
-    (``FACTORY_MACHINE_CONTRACT_REPO``, default ``~/machine_contracts``), never
-    from the clone's working tree. A missing clone, pin or validator dependency
-    fails the test; the check is never skipped.
+    ``orca_auto.machine_contracts`` checks the envelope, the ORCA route and every
+    available artifact receipt; no external clone, git or network is used. A
+    rejection or a missing ``jsonschema`` fails the test; the check is never
+    skipped.
     """
-    pin = machine_contract_pin()
-    repo = Path(os.environ.get("FACTORY_MACHINE_CONTRACT_REPO") or DEFAULT_MACHINE_CONTRACT_REPO)
-    if importlib.util.find_spec("jsonschema") is None:
+    try:
+        validate_machine_path(path)
+    except ImportError as exc:
         pytest.fail(
             f"{sys.executable} cannot import jsonschema, which the machine-contracts validator "
             "needs. Run scripts/check.sh without ORCA_AUTO_CHECK_SKIP_INSTALL=1, or install "
-            "the dev extras: python -m pip install -c constraints-dev.txt -e '.[dev]'"
+            f"the dev extras: python -m pip install -c constraints-dev.txt -e '.[dev]' ({exc})"
         )
-    archive = subprocess.run(
-        ["git", "-C", str(repo), "archive", "--format=zip", pin], capture_output=True, check=False
-    )
-    if archive.returncode != 0:
-        pytest.fail(
-            f"machine-contracts clone {repo} cannot provide CI pin {pin}: "
-            f"{archive.stderr.decode('utf-8', 'replace').strip()}\n"
-            "Clone dhsohn/machine-contracts there and fetch, or set FACTORY_MACHINE_CONTRACT_REPO."
-        )
-    with tempfile.TemporaryDirectory() as snapshot:
-        with zipfile.ZipFile(io.BytesIO(archive.stdout)) as contract:
-            contract.extractall(snapshot)
-        validation = subprocess.run(
-            [
-                sys.executable,
-                str(Path(snapshot) / "scripts" / "validate.py"),
-                "--machine",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    if validation.returncode != 0:
-        pytest.fail(
-            f"machine-contracts {pin} rejects {path}:\n{validation.stderr}{validation.stdout}"
-        )
+    except ContractError as exc:
+        pytest.fail(f"machine-observation v1 rejects {path}:\n{exc}")
+    except (OSError, ValueError) as exc:
+        pytest.fail(f"machine-observation v1 cannot read {path}: {type(exc).__name__}: {exc}")

@@ -5,7 +5,10 @@ FREQUENCIES`` / ``NORMAL MODES`` / ``CARTESIAN COORDINATES`` blocks. A
 frequency or mode block that is followed by another ``FINAL SINGLE POINT
 ENERGY`` line belongs to an earlier geometry (the initial or a recalculated
 Hessian of an optimization) and is discarded, so only a frequency calculation
-at the final geometry is reported. Summaries condense a mode into its dominant
+at the final geometry is reported. The last frequency header decides: if it
+printed no supported value, or any line of it prints ``cm**-1`` without one
+(``NaN cm**-1``), no frequencies are reported rather than an earlier section or
+a truncated one. Summaries condense a mode into its dominant
 atom displacements and, when a bond pair is given, its alignment with that
 coordinate.
 
@@ -52,6 +55,10 @@ _COORDS_HEADER = "CARTESIAN COORDINATES (ANGSTROEM)"
 # This is the rule the completion analyzer has always verified a TS by; it
 # also accepts the numbered form ORCA prints.
 FREQUENCY_VALUE_RE = re.compile(r"(?:^|[\s:])(-?\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
+# Compared in lower case: a line in a frequency section that prints this unit
+# more often than it holds supported values (``NaN cm**-1``, ``Inf cm**-1``)
+# invalidates the whole section instead of truncating it.
+_FREQUENCY_UNIT = "cm**-1"
 # Unlike the parser's coordinate row: any symbol (DA, lower case), decimal xyz, nothing after z.
 _COORD_LINE_RE = re.compile(r"^\s*([A-Za-z]{1,2})\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s*$")
 
@@ -78,9 +85,9 @@ class FrequencySections:
     ``analysis`` is the section (with its modes and geometry) that follows the
     last final single point energy, or ``None``. ``seen`` is True when any
     section header was read at all: with ``analysis`` None that means every
-    section was superseded by a later final energy (or printed no
-    frequencies), which is not the same as an output that never ran a
-    frequency calculation.
+    section was superseded by a later final energy, or the last one printed
+    no frequencies or an unsupported value, which is not the same as an
+    output that never ran a frequency calculation.
     """
 
     analysis: FrequencyAnalysis | None
@@ -133,14 +140,18 @@ def scan_frequency_sections(lines: Iterable[str]) -> FrequencySections:
     section = ""
     started = False
     current_freqs: list[float] = []
+    current_invalid = False
     current_modes: dict[int, dict[int, float]] = {}
     current_cols: list[int] = []
     current_coords: list[tuple[str, float, float, float]] = []
 
     def close_section() -> None:
         nonlocal freqs, modes, coords, section, started
-        if section == "freq" and current_freqs:
-            freqs = list(current_freqs)
+        if section == "freq":
+            # The last header decides: one that printed no frequency, or an
+            # unsupported value, clears an earlier section instead of letting
+            # it stand for this Hessian.
+            freqs = list(current_freqs) if current_freqs and not current_invalid else None
         elif section == "modes" and current_modes:
             modes = {row: dict(cols) for row, cols in current_modes.items()}
         elif section == "coords" and current_coords:
@@ -163,7 +174,7 @@ def scan_frequency_sections(lines: Iterable[str]) -> FrequencySections:
             continue
         if upper == _FREQ_HEADER:
             close_section()
-            section, current_freqs = "freq", []
+            section, current_freqs, current_invalid = "freq", [], False
             seen = True
             continue
         if upper == _MODES_HEADER:
@@ -176,7 +187,11 @@ def scan_frequency_sections(lines: Iterable[str]) -> FrequencySections:
             continue
         if section == "freq":
             values = frequency_values(line)
-            if values:
+            if line.lower().count(_FREQUENCY_UNIT) > len(values):
+                # The rest of the section is ignored until the next header.
+                current_invalid = True
+                close_section()
+            elif values:
                 current_freqs.extend(values)
                 started = True
             elif stripped and started:

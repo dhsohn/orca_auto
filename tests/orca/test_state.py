@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -807,5 +808,33 @@ def test_common_machine_validation_rejects_changed_input_receipt(tmp_path: Path)
     assert replacement != original and len(replacement) == len(original)
     inp.write_bytes(replacement)
 
+    with pytest.raises(pytest.fail.Exception, match="artifact sha256 mismatch"):
+        validate_common_machine(machine)
+
+
+def test_common_machine_validation_needs_no_machine_contracts_clone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FACTORY_MACHINE_CONTRACT_REPO", str(tmp_path / "missing-clone"))
+    reaction = tmp_path / "reaction"
+    reaction.mkdir()
+    generation, state = _bound_state(reaction, token="clone-free-validation-token-01")
+    save_state(reaction, state)
+    machine = Path(write_report_files(reaction, state)["report_json"])
+    inp = generation / "nebts.inp"
+    observation = json.loads(machine.read_text(encoding="utf-8"))
+    assert [
+        (receipt["status"], receipt["bytes"], receipt["byte_sha256"])
+        for receipt in observation["artifacts"].values()
+        if receipt["path"] == "nebts.inp"
+    ] == [("available", inp.stat().st_size, hashlib.sha256(inp.read_bytes()).hexdigest())]
+
+    # A skip is not a pass: the shared contract must actually run without the clone.
+    try:
+        validate_common_machine(machine)
+    except pytest.skip.Exception as skipped:
+        pytest.fail(f"common machine validation was skipped: {skipped}")
+
+    inp.write_bytes(inp.read_bytes().replace(b"NEB-TS", b"OptTS ", 1))
     with pytest.raises(pytest.fail.Exception, match="artifact sha256 mismatch"):
         validate_common_machine(machine)

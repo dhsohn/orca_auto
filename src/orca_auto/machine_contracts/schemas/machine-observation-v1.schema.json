@@ -1,0 +1,516 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory.local/schemas/machine-observation-v1.schema.json",
+  "title": "Factory Machine Observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "producer",
+    "operation",
+    "lifecycle",
+    "handoff",
+    "delivery",
+    "artifacts",
+    "lineage",
+    "payload"
+  ],
+  "properties": {
+    "contract": {
+      "$ref": "#/$defs/envelopeContract"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "operation": {
+      "$ref": "#/$defs/operation"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle"
+    },
+    "handoff": {
+      "$ref": "#/$defs/handoff"
+    },
+    "delivery": {
+      "$ref": "#/$defs/delivery"
+    },
+    "artifacts": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/artifactReceipt"
+      }
+    },
+    "lineage": {
+      "$ref": "#/$defs/lineage"
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/payload"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "properties": {
+              "phase": {
+                "enum": [
+                  "queued",
+                  "running"
+                ]
+              }
+            },
+            "required": [
+              "phase"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "lifecycle": {
+            "properties": {
+              "outcome": {
+                "const": "pending"
+              }
+            }
+          },
+          "handoff": {
+            "properties": {
+              "status": {
+                "const": "pending"
+              }
+            }
+          },
+          "delivery": {
+            "properties": {
+              "status": {
+                "const": "pending"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "properties": {
+              "phase": {
+                "const": "finished"
+              }
+            },
+            "required": [
+              "phase"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "lifecycle": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "succeeded",
+                  "failed",
+                  "cancelled",
+                  "uncertain"
+                ]
+              }
+            }
+          },
+          "handoff": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "ready",
+                  "blocked",
+                  "not_applicable"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "complete",
+                  "incomplete",
+                  "not_applicable"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "handoff": {
+            "properties": {
+              "status": {
+                "const": "ready"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "lifecycle": {
+            "properties": {
+              "phase": {
+                "const": "finished"
+              },
+              "outcome": {
+                "const": "succeeded"
+              }
+            }
+          },
+          "delivery": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            }
+          },
+          "payload": {
+            "$ref": "#/$defs/payload"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "code": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$"
+    },
+    "codes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/code"
+      },
+      "uniqueItems": true
+    },
+    "envelopeContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "factory/machine-observation"
+        },
+        "version": {
+          "const": 1
+        }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "outcome",
+        "codes"
+      ],
+      "properties": {
+        "phase": {
+          "enum": [
+            "queued",
+            "running",
+            "finished"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "pending",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "uncertain"
+          ]
+        },
+        "codes": {
+          "$ref": "#/$defs/codes"
+        }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "codes"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "ready",
+            "blocked",
+            "not_applicable"
+          ]
+        },
+        "codes": {
+          "$ref": "#/$defs/codes"
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "codes"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "complete",
+            "incomplete",
+            "not_applicable"
+          ]
+        },
+        "codes": {
+          "$ref": "#/$defs/codes"
+        }
+      }
+    },
+    "artifactReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "required",
+        "role",
+        "path",
+        "media_type",
+        "bytes",
+        "byte_sha256"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "available",
+            "missing",
+            "invalid"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "role": {
+          "$ref": "#/$defs/id"
+        },
+        "path": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+            }
+          ]
+        },
+        "media_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "byte_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "available"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "media_type": {
+                "type": "string",
+                "minLength": 1
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "byte_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trace_id",
+        "upstream"
+      ],
+      "properties": {
+        "trace_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/id"
+            }
+          ]
+        },
+        "upstream": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "producer",
+              "operation_id",
+              "byte_sha256"
+            ],
+            "properties": {
+              "producer": {
+                "$ref": "#/$defs/producer"
+              },
+              "operation_id": {
+                "$ref": "#/$defs/id"
+              },
+              "byte_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "data"
+      ],
+      "properties": {
+        "contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/id"
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

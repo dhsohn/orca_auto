@@ -38,7 +38,7 @@ from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils import normalize_text
 
-from .completion_rules import completion_mode, route_facts
+from .completion_rules import completion_mode, geometry_scope, route_facts
 from .out_analyzer import analyze_output
 from .state_reading import normalized_text
 from .statuses import ACTIVE_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
@@ -60,6 +60,15 @@ ARTIFACT_ROLES: dict[str, tuple[str, str]] = {
     "supporting-information": ("supporting-information", "text/markdown"),
     EXECUTION_PROVENANCE_ARTIFACT_ID: ("supporting-information", "application/json"),
 }
+
+# Outcome of one optional report (HTML, SI) in one publication. Fixed and
+# content-free: the exception itself stays in the log. Published under
+# ``results.report_generation`` only when some optional report failed.
+OPTIONAL_REPORT_ARTIFACT_IDS = ("human-report", "supporting-information")
+REPORT_PRODUCED = "produced"
+REPORT_NOT_APPLICABLE = "not-applicable"
+REPORT_GENERATION_FAILED = "generation-failed"
+_REPORT_OUTCOMES = frozenset({REPORT_PRODUCED, REPORT_NOT_APPLICABLE, REPORT_GENERATION_FAILED})
 
 _CODE_TOKEN_RE = re.compile(r"[^a-z0-9._-]+")
 _MAX_CODE_LENGTH = 200
@@ -200,6 +209,28 @@ def artifact_receipt(
     }
 
 
+def record_report_generation(
+    report_generation: dict[str, str] | None, artifact_id: str, outcome: str
+) -> None:
+    """Note an optional report's outcome when the caller collects them; else nothing."""
+    if report_generation is not None:
+        report_generation[artifact_id] = outcome
+
+
+def _report_generation_results(
+    report_generation: Mapping[str, str] | None,
+) -> dict[str, str] | None:
+    """The published ``report_generation`` map: only after a failure, only fixed values."""
+    outcomes = {
+        artifact_id: outcome
+        for artifact_id, outcome in (report_generation or {}).items()
+        if artifact_id in OPTIONAL_REPORT_ARTIFACT_IDS and outcome in _REPORT_OUTCOMES
+    }
+    if REPORT_GENERATION_FAILED not in outcomes.values():
+        return None
+    return dict(sorted(outcomes.items()))
+
+
 def required_delivery_complete(artifacts: Mapping[str, Mapping[str, Any]]) -> bool:
     return all(
         receipt.get("status") == "available"
@@ -310,23 +341,14 @@ def _scientific_results(
     else:
         status = "failed"
 
-    if route.is_ts:
-        geometry_scope = "partial" if route.has_constraints else "transition_state"
-    elif route.is_relaxed_scan or route.is_irc or route.is_non_stationary:
-        geometry_scope = "path"
-    elif route.is_full_opt:
-        geometry_scope = "full"
-    elif route.is_opt:
-        geometry_scope = "partial"
-    else:
-        geometry_scope = "single_point"
+    scope = geometry_scope(route)
     frequency_available = markers["final_frequency_section"]
     imaginary = markers["imaginary_frequency_count"] if frequency_available else None
     stationary = "unverified"
     if status == "verified" and frequency_available:
-        if geometry_scope == "full" and imaginary == 0:
+        if scope == "full" and imaginary == 0:
             stationary = "minimum"
-        elif geometry_scope == "transition_state" and imaginary == 1:
+        elif scope == "transition_state" and imaginary == 1:
             stationary = "first_order_saddle"
     data.update(
         status=status,
@@ -336,7 +358,7 @@ def _scientific_results(
         optimization_converged=markers["last_opt_converged"],
         frequencies_available=frequency_available,
         imaginary_frequency_count=imaginary,
-        geometry_scope=geometry_scope,
+        geometry_scope=scope,
         stationary_point=stationary,
         output_artifact="orca-output",
         evidence_lines={
@@ -363,11 +385,16 @@ def build_machine_observation(
     *,
     html_path: Path | None = None,
     si_path: Path | None = None,
+    report_generation: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """The ``machine.json`` document of the generation at ``generation_dir``.
 
     ``report_payload`` is the normalized job state; ``html_path`` and
     ``si_path`` are the report and SI block published in the generation.
+    ``report_generation`` holds the optional reports' outcomes of this
+    publication (:func:`record_report_generation`); a failed report has no
+    receipt and is named in ``results.report_generation`` instead. Optional
+    reports never affect delivery or handoff.
     """
     job = _dict(report_payload.get("job"))
     input_payload = _dict(report_payload.get("input"))
@@ -410,6 +437,9 @@ def build_machine_observation(
         science["reason"] = reason or "operation_not_succeeded"
         science["stationary_point"] = "unverified"
     result_details["science"] = science
+    generation_outcomes = _report_generation_results(report_generation)
+    if generation_outcomes is not None:
+        result_details["report_generation"] = generation_outcomes
     if outcome == "succeeded" and science["status"] != "verified":
         outcome = "uncertain" if science["status"] == "unknown" else "failed"
         reason = str(science["reason"])
@@ -471,7 +501,11 @@ __all__ = [
     "MACHINE_CONTRACT_NAME",
     "MACHINE_CONTRACT_VERSION",
     "OPERATION_KIND",
+    "OPTIONAL_REPORT_ARTIFACT_IDS",
     "PRODUCER_NAME",
+    "REPORT_GENERATION_FAILED",
+    "REPORT_NOT_APPLICABLE",
+    "REPORT_PRODUCED",
     "RESULTS_PAYLOAD_CONTRACT_NAME",
     "RESULTS_PAYLOAD_CONTRACT_VERSION",
     "RESULT_KIND",
@@ -481,6 +515,7 @@ __all__ = [
     "machine_code",
     "machine_json_bytes",
     "machine_lifecycle",
+    "record_report_generation",
     "report_json_path",
     "report_result_fields",
     "required_delivery_complete",

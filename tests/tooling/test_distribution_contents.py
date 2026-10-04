@@ -19,6 +19,7 @@ import pytest
 from scripts.check_distributions import (
     _assert_distribution,
     _assert_runtime_writes_no_bytecode,
+    _installed_machine_validation,
     _probe,
     _unpack_sdist,
 )
@@ -149,6 +150,42 @@ def test_installed_probe_checks_metadata_and_cli_release_version(
                 core_source=core_source,
                 expected_version="2.3.4",
             )
+
+
+def test_installed_machine_validation_runs_in_a_fresh_work_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], Path]] = []
+
+    def record(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        cwd = Path(kwargs["cwd"])
+        # subprocess.run raises FileNotFoundError for a missing cwd.
+        assert cwd.is_dir(), f"subprocess cwd does not exist: {cwd}"
+        calls.append((argv, cwd))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr("scripts.check_distributions.subprocess.run", record)
+    python = tmp_path / "env" / "bin" / "python"
+    wheelhouse = tmp_path / "wheelhouse"
+    wheel = wheelhouse / "orca_auto-9.0.0-py3-none-any.whl"
+    machine = tmp_path / "job" / "generation" / "machine.json"
+    package = tmp_path / "site-packages" / "orca_auto"
+    work = tmp_path / "wheel-validation"
+
+    _installed_machine_validation(python, wheelhouse, wheel, machine, package=package, work=work)
+
+    assert work.is_dir()
+    assert [cwd for _, cwd in calls] == [work, work, work]
+    install, check, probe = (argv for argv, _ in calls)
+    assert install[:4] == [str(python), "-m", "pip", "install"]
+    assert "--no-index" in install
+    assert install[install.index("--find-links") + 1] == str(wheelhouse)
+    assert install[-1] == f"{wheel}[validation]"
+    assert check == [str(python), "-m", "pip", "check"]
+    assert probe[:3] == [str(python), "-I", "-c"]
+    assert "validate_machine_path(machine)" in probe[3]
+    assert "artifact byte count mismatch" in probe[3]
+    assert probe[4:] == [str(machine), str(work), str(package)]
 
 
 @pytest.mark.parametrize(

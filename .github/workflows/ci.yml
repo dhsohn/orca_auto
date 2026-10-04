@@ -57,17 +57,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Check out machine observation contract
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: dhsohn/machine-contracts
-          ref: bc252035d01edddf1314e6641689c6d5cb88af92
-          path: .machine-contracts
-          persist-credentials: false
-
       - name: Run checks
-        env:
-          FACTORY_MACHINE_CONTRACT_REPO: ${{ github.workspace }}/.machine-contracts
         run: bash scripts/check.sh
 
       - name: Package smoke

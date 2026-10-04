@@ -1,4 +1,4 @@
-# ADR 0014: Slack as an additional notification provider
+# ADR 0016: Slack as an additional notification provider
 
 - Status: Proposed
 - Date: 2026-10-02

@@ -8,6 +8,79 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [10.1.0] - 2026-10-04
+
+Version 10.1 is a minor release. It adds a bundled `machine.json` validator and
+an additive result key, and fixes evidence and report handling. No field,
+status, reason, CLI option or configuration key is removed or renamed, and
+`completed` keeps its 10.0 meaning. Two fixes narrow what passes; see
+[Upgrading to 10.1](docs/RELEASE.md#upgrading-to-101).
+
+### Fixed
+
+- The last `VIBRATIONAL FREQUENCIES` section now decides frequency evidence. If
+  the last section prints no supported value, or one of its lines prints
+  `cm**-1` without a supported finite value (`NaN cm**-1`, `Inf cm**-1`), the
+  whole section is discarded. It is no longer truncated or replaced by an
+  earlier section. A run that 10.0.0 completed on such an earlier or truncated
+  section now fails with `frequency_evidence_missing`. It is not retried, and
+  runs finished under earlier versions are not reclassified.
+- `run-dir` rejects an input whose active `%maxcore` directive has no readable
+  value in MB (such as a bare `%maxcore` or `%maxcore =512`) instead of guessing
+  the memory or adding a second `%maxcore` beside it; the input file is left
+  unchanged. An input without an active `%maxcore` still receives the configured
+  default.
+- A constrained TS search (OptTS with `%geom` constraints, fixed fragments or
+  similar restrictions) no longer reads as a confirmed transition state in the
+  human reports: the HTML report adds a "constrained TS search: first-order
+  saddle unverified" warning and replaces "as expected for a TS" with it, and
+  the SI block adds the same warning. It remains a TS search with unchanged
+  completion criteria, and `machine.json` keeps `geometry_scope: partial` and
+  `stationary_point: unverified`, now from the same scope rule as the reports.
+- The IRC report reads its "IRC path found" badge, IRC setup, iterations and
+  path profile from execution lines of the final output only, as the
+  completion analyzer does: an input echo or comment no longer shows the badge,
+  and an earlier attempt's IRC data appears only in its own attempt row. The
+  badge still means driver/path-summary presence, not path convergence. A
+  constrained TS search with IRC shows the constrained-search note on its
+  imaginary-frequency card instead of "expected 1".
+- A job report or SI block that could not be generated is now distinguishable
+  from one the job type does not have: when an optional report fails in the
+  first terminal publication, `machine.json` adds
+  `payload.data.results.report_generation` with a fixed outcome per optional
+  artifact (`produced`, `not-applicable`, `generation-failed`), without error
+  text. The reports stay optional and never block delivery or handoff. The
+  report paths returned by publication, on first publication and on re-entry,
+  now list only the HTML/SI files that `machine.json` receipts as `available`:
+  a stale file left by a failure, a file whose receipt is `invalid`, and a file
+  beside an earlier terminal observation that has no receipt for it are no
+  longer listed. An unlisted report does not by itself say why it is missing.
+  Earlier terminal observations are unchanged.
+
+### Added
+
+- Ship `orca_auto.machine_contracts`, a source-owned copy of the machine-observation
+  v1 schemas and the ORCA_auto validator, with an optional `validation` extra for
+  `jsonschema`. Tests, CI and release no longer need a `machine-contracts` clone
+  ([ADR 0014](docs/adr/0014-source-owned-machine-observation-validator.md)).
+
+### Changed
+
+- ADR 0014 now records the bundled validator. The Slack provider decision moved
+  to ADR 0016, and the links in the 10.0.0 notes point to the new file.
+
+### Validation limitation
+
+- `make check` passes on the release candidate. Its scientific regressions use
+  synthetic outputs and the retained authentic ORCA 6.1.1 fixtures (H2, water,
+  ammonia; HF/STO-3G). This entry claims no new real-engine acceptance, and
+  other ORCA versions remain unverified.
+- Atom identity, atom order and normal-mode association are characterized only
+  on those supported outputs. No authentic fixture has dummy, ghost or embedded
+  atoms, or a numerical or partial Hessian. The coordinate parsers are unchanged,
+  and the per-atom mode annotations in the HTML report and SI block are not
+  established for such outputs.
+
 ## [10.0.0] - 2026-10-02
 
 Version 10.0 is a major release. The entry marked *public contract* changes what
@@ -48,7 +121,7 @@ unchanged and remain the default. Upgrading needs an idle window; see
 - Ship systemd templates in the wheel; systemd install without --repo uses the
   current isolated virtual environment without a source clone.
 - Optional Slack notifications next to the retained Discord provider
-  ([ADR 0014](docs/adr/0014-slack-notification-provider.md)):
+  ([ADR 0016](docs/adr/0016-slack-notification-provider.md)):
   `messenger.provider: slack` with `messenger.slack.bot_token` and
   `default_channel_id` posts plain text through `chat.postMessage`. Discord stays
   the default and its settings and behavior are unchanged. Only HTTP 429 with

@@ -41,6 +41,7 @@ graph TD
 | **`cli_systemd_*.py`, `systemd_plan.py`, `_process_evidence.py`** | `systemd install`, `service status`, `service restart`. 아래에서 위로 쌓이며 import-linter가 강제합니다: 유닛 계획(`systemd_plan`), 유닛 렌더링(`cli_systemd_units`), 유닛과 `/proc` 읽기(`cli_systemd_evidence`), 최신성 판정(`cli_systemd_freshness*`), 실행권 저장소 하나에 대한 유휴 전용 재시작 가드(`cli_systemd_restart_guard`), 그 위의 명령 소유 모듈(`cli_systemd_apply`, `cli_systemd_restart`, `cli_systemd_status`). `_process_evidence`는 워커가 시작한 import 출처를 기록합니다 |
 | **`orca/`** | ORCA 전용 로직: 입력 파일(`.inp`) 파싱 및 자원 판별, 실행 준비, 큐 워커 및 프로세스 구동, 출력 로그 분석 및 수렴 판정, 결과 보고서(`machine.json`) 생성 |
 | **`core/`** | 공용 인프라: 디스크 큐 저장소, 실행권 슬롯, 프로세스 감독과 PID 파일, 제한된 파일 I/O, 설정 탐색과 로더, 위치 인덱스 저장소, RAM scratch 워크스페이스, 알림 채널, 파일시스템 잠금 |
+| **`machine_contracts/`** | 소스가 소유하는 ORCA_auto 경로용 `factory/machine-observation` v1 validator. 엔벨로프와 `chemistry/results-bundle` 스키마를 wheel에 포함하며 외부 클론이 필요 없고, `jsonschema`는 선택 extra `validation`으로 설치합니다. 모든 `machine.json`은 `orca/machine_observation`이 만들며, 이 패키지는 검증만 하고 아무것도 쓰지 않으며 `core/`·`orca/`는 이를 임포트하지 않습니다([ADR 0014](adr/0014-source-owned-machine-observation-validator.md)) |
 
 `pyproject.toml`의 `[tool.importlinter]` 계약이 이 의존 방향과 systemd 계층을 강제하고, `make check`가 `scripts/check_imports.py`로 이를 실행합니다.
 
@@ -172,7 +173,7 @@ graph TD
 
 선택된 입력의 작업 종류는 규칙 하나로 정합니다. `completion_rules.route_facts`가 `.inp`를 읽어 route 줄과 플래그(TS, IRC, NEB-TS, 전체·부분 최적화, relaxed scan(`%geom Scan` 블록이 있는 최적화), 비정류 경로·동역학)를 기록합니다. 분석기의 완료 모드, HTML 보고서 구성(`report/composer.py`), 구조 종류(`evidence.structure_kind`), SI 작성(`report/si.py`)이 모두 이 기록에서 나오므로 같은 입력을 서로 다르게 분류할 수 없습니다. 입력은 호출하는 쪽마다 직접 읽습니다. 완료 모드, HTML 작성기, SI 작성기가 각각 `route_facts`를 호출하고, relaxed scan 보고서는 scan 좌표를 얻으려고 입력을 한 번 더 읽습니다. 작업 유형 표시(`job_type.detect_job_type`)와 입력이 요청하는 실행 산출물 판정(`execution_binding/_inputs.py`)은 같은 키워드 규칙에 자체 규칙 몇 개를 더해 route 줄을 따로 분류합니다. 보고서 조립기는 작업 상태로부터 페이지마다 `ReportHeader` 하나(제목, 상태와 사유, route 줄, 시각, 마지막 출력)를 만들어 Opt, SP, relaxed scan, NEB-TS, IRC 각 구성 요소의 수집기에 넘깁니다. 각 구성 요소는 두 가지 사실로 `ReportComponent` 하나(종류 이름, 배지, 메타 줄, 지표 카드, 섹션)를 만듭니다. 하나는 주 구성 요소인지 여부로, 주 구성 요소가 페이지 이름을 정하고 attempt 기록을 혼자 싣습니다. 다른 하나는 IRC 구성 요소가 있는지 여부로, 있으면 진동 요약을 IRC 쪽이 보여 줍니다. IRC 구성 요소 자신은 대신 다른 구성 요소가 최적화 추이를 이미 보여 주는지를 받습니다.
 
-기하 제약, 고정·강체 fragment, 수소만 최적화하거나 수소를 고정하는 설정, `RigidBodyOpt`는 최적화 좌표를 제한합니다. 이런 제약이 있는 비-TS 최적화는 부분 최적화로 분류하고 전체 표면의 최소점이라고 주장하지 않습니다. 빈 제약 블록과 명시적으로 false인 수소 설정은 제약으로 보지 않습니다. 릴리스 smoke의 테스트 검증기는 생성기와 독립적으로 SHA-256과 바이트 수를 계산합니다.
+기하 제약, 고정·강체 fragment, 수소만 최적화하거나 수소를 고정하는 설정, `RigidBodyOpt`는 최적화 좌표를 제한합니다. 이런 제약이 있는 비-TS 최적화는 부분 최적화로 분류하고 전체 표면의 최소점이라고 주장하지 않습니다. 빈 제약 블록과 명시적으로 false인 수소 설정은 제약으로 보지 않습니다. 이런 제약이 있는 TS 탐색은 TS 탐색으로 남지만(TS 완료 조건, `TS` 페이지, TS SI 레코드) `completion_rules.geometry_scope`는 `partial` 범위를 줍니다. `machine.json`은 정류점을 `unverified`로 두고, HTML 보고서와 SI 블록은 허수 모드 1개를 기대대로라고 표시하지 않고 "constrained TS search: first-order saddle unverified"라고 씁니다. `machine_observation`, `evidence`, 조립기, Opt 구성 요소, SI 작성기가 이 함수 하나를 읽고, 테스트 검증기는 규칙을 독립적으로 따로 가집니다. 릴리스 smoke의 테스트 검증기는 생성기와 독립적으로 SHA-256과 바이트 수를 계산합니다.
 
 완료 분석기의 모드는 실제 판정 조건이 다른 sp/opt/ts만 구분합니다. IRC·진동수 요구는 별도 플래그이며, scan·경로·동역학 등 보고용 분류는 RouteFacts에 남습니다. 서비스 Python 경로는 systemd 설치 계획을 만들 때 한 번 결정하고, 렌더링·경고·적용 단계가 같은 값을 사용합니다.
 
@@ -180,7 +181,7 @@ graph TD
 | :--- | :--- | :--- |
 | NEB-TS, ZOOM-NEB-TS | NEB-TS (`NEB-TS`) | TS 구조 |
 | Relaxed scan: `%geom Scan` 블록이 있는 최적화 | Relaxed scan (`Relaxed scan`) | 없음 |
-| OptTS | Opt (`TS`) | TS 구조 |
+| OptTS | Opt (`TS`). 제약이 있으면 제약된 TS 탐색 경고 추가 | TS 구조. 제약이 있으면 1차 안장점 미검증 경고 |
 | 전체 최적화: `Opt`, `TightOpt`, `COpt` 등 | Opt (`Opt`) | 최소점 구조 |
 | 부분 최적화: `OptH`, `MECP-Opt`, 제약이 있는 `Opt` 등 | Opt (`Partial Opt`) | 최소점·TS 주장이 없는 구조 |
 | `IRC`가 붙은 모든 종류 또는 `IRC` 단독 | IRC 구성 요소 추가. NEB-TS나 relaxed scan이 없으면 IRC가 페이지 이름(`IRC`)을 정함 | 대신 IRC 검증 요약 |
@@ -351,5 +352,6 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0011: PID 조회는 읽기 전용](adr/0011-read-only-pid-lookups.md)
 - [ADR 0012: 명시적 과학 완료 근거](adr/0012-positive-scientific-completion-evidence.md)
 - [ADR 0013: 설치 환경 서비스와 입력 명시](adr/0013-installed-service-and-explicit-input.md)
-- [ADR 0014: 추가 알림 제공자 Slack](adr/0014-slack-notification-provider.md)
+- [ADR 0014: 소스가 소유하는 machine 관측 validator](adr/0014-source-owned-machine-observation-validator.md)
 - [ADR 0015: 워커 자신의 runs root로 한정한 admission 복구](adr/0015-admission-recovery-scoped-to-own-runs-root.md)
+- [ADR 0016: 추가 알림 제공자 Slack](adr/0016-slack-notification-provider.md)

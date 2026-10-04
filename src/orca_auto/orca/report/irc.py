@@ -9,10 +9,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import RouteFacts
-from ..evidence import final_out_path, parsed_final_output, parsed_output_facts
+from ..completion_rules import RouteFacts, is_constrained_ts_search
+from ..evidence import (
+    CONSTRAINED_TS_SEARCH_NOTE,
+    final_out_path,
+    parsed_final_output,
+    parsed_output_facts,
+)
 from ..frequencies import ModeSummary, mode_summaries
-from ..out_analyzer import IRC_DRIVER_NEEDLE, IRC_PATH_SUMMARY_RE
+from ..out_analyzer import IRC_PATH_FOUND_NEEDLES, IRC_PATH_SUMMARY_RE
+from ..output_status import is_execution_output_line, iter_output_lines
 from ..parser import OrcaResult
 from .attempts import (
     AttemptReportRow,
@@ -20,7 +26,6 @@ from .attempts import (
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    latest_attempt_with_content,
     latest_frequency_analysis,
     latest_optimization_progress,
     parse_attempt_output,
@@ -110,27 +115,42 @@ class IrcReportData:
     result: OrcaResult | None
     imaginary_count: int | None
     mode_summaries: tuple[ModeSummary, ...]
+    # A TS search with restricted coordinates: its card makes no saddle claim.
+    constrained_ts_search: bool = False
+
+
+def _irc_driver_line(line: str) -> bool:
+    """The analyzer's ``irc_marker_found`` rule for one execution output line.
+
+    ``IRC_PATH_SUMMARY_RE`` is only the path-table header grammar; the badge
+    uses the analyzer's own needles so it never disagrees with that marker.
+    """
+    upper = line.upper()
+    return any(needle in upper for needle in IRC_PATH_FOUND_NEEDLES)
 
 
 def parse_irc_output_text(text: str) -> IrcParsedOutput:
-    """IRC facts of decoded output text; ``parse_irc_output`` memoizes this per file."""
+    """IRC facts of decoded output text; ``parse_irc_output`` memoizes this per file.
+
+    Lines are split at CR, LF and CRLF only and input echoes and comments are
+    dropped first (``output_status``), as the completion analyzer reads them,
+    so an echoed or commented banner, setting or table row is never IRC
+    evidence. ``irc_marker_found`` is driver/path-summary presence on an
+    execution line, not path convergence and not endpoint certification.
+    """
+    lines = [line for line in iter_output_lines(text) if is_execution_output_line(line)]
+    execution_text = "".join(lines)
     return IrcParsedOutput(
-        settings=_parse_irc_settings(text),
-        iterations=_parse_irc_iterations(text),
-        path_points=_parse_irc_path_summary(text),
-        irc_marker_found=bool(
-            IRC_PATH_SUMMARY_RE.search(text) or IRC_DRIVER_NEEDLE in text.upper()
-        ),
+        settings=_parse_irc_settings(execution_text),
+        iterations=_parse_irc_iterations(execution_text),
+        path_points=_parse_irc_path_summary(execution_text),
+        irc_marker_found=any(_irc_driver_line(line) for line in lines),
     )
 
 
 def parse_irc_output(out_path: Path) -> IrcParsedOutput:
     """Read-only IRC facts from the shared per-file evidence snapshot."""
     return parsed_output_facts(out_path, parse_irc_output_text)
-
-
-def _has_irc_content(parsed: IrcParsedOutput) -> bool:
-    return bool(parsed.path_points or parsed.iterations or parsed.settings)
 
 
 _EMPTY_IRC_OUTPUT = IrcParsedOutput(
@@ -149,15 +169,20 @@ def collect_irc_report_data(
             for attempt in attempts
         ],
     )
-    parsed = (
-        latest_attempt_with_content(attempts, parse_irc_output, _has_irc_content)
-        or _EMPTY_IRC_OUTPUT
-    )
     optimization_steps, optimization_converged = _latest_opt_progress(attempts)
 
+    # The badge, setup, iterations and path profile describe the run's final
+    # output only, read from the same memoized snapshot as its other facts.
+    # Another attempt's IRC data stays in its own attempt row; a missing or
+    # unreadable final output has no IRC evidence rather than an older one.
     out_path = final_out_path(state)
+    parsed = _EMPTY_IRC_OUTPUT
     result: OrcaResult | None = None
     if out_path is not None:
+        try:
+            parsed = parse_irc_output(out_path)
+        except OSError:
+            parsed = _EMPTY_IRC_OUTPUT
         try:
             result, _analysis = parsed_final_output(out_path)
         except OSError:
@@ -181,11 +206,14 @@ def collect_irc_report_data(
         result=result,
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
+        constrained_ts_search=is_constrained_ts_search(route),
     )
 
 
 def _irc_badges(data: IrcReportData) -> tuple[tuple[str, str], ...]:
     badges = status_badges(data.header)
+    # Driver/path-summary presence in the final output; not path convergence
+    # and not endpoint certification.
     if data.irc_marker_found:
         badges.append(("IRC path found", "ok"))
     return tuple(badges)
@@ -212,7 +240,7 @@ def irc_report_component(
     if data.mode_summaries:
         sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
     chart = _irc_path_chart_svg(data) or (
-        '<p class="muted">No IRC path-summary points were parsed from the attempt outputs.</p>'
+        '<p class="muted">No IRC path-summary points were parsed from the final output.</p>'
     )
     sections.append(
         ("IRC path profile", chart + path_table_html(data.path_points, _IRC_PATH_TABLE_COLUMNS))
@@ -437,14 +465,13 @@ def _irc_metric_cards(
             )
         )
     if data.imaginary_count is not None:
-        expected = 1 if data.ts_route else 0
-        cards.append(
-            metric_card(
-                "Imaginary frequencies",
-                str(data.imaginary_count),
-                f"expected {expected}",
-            )
-        )
+        if data.ts_route and data.constrained_ts_search:
+            # Still the TS search's count, but restricted coordinates set no
+            # first-order saddle expectation.
+            note = CONSTRAINED_TS_SEARCH_NOTE
+        else:
+            note = f"expected {1 if data.ts_route else 0}"
+        cards.append(metric_card("Imaginary frequencies", str(data.imaginary_count), note))
     if is_primary:
         cards.append(attempts_metric_card(data.attempts, data.header.total_duration_text))
     return "".join(cards)

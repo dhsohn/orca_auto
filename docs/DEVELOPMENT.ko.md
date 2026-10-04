@@ -64,13 +64,13 @@ bash examples/fake_orca_smoke/run.sh
 가리키는 등 그렇지 않은 상황에서는 중단합니다. 이때는 `PYTHONPATH`를 해제하거나
 `.venv`를 다시 만듭니다.
 
-`machine.json` 적합성 테스트는 `.github/workflows/ci.yml`에 고정된
-`machine-contracts` 커밋을 사용합니다. `https://github.com/dhsohn/machine-contracts.git`을
-`~/machine_contracts`에 클론하거나, 해당 커밋이 있는 클론 경로를
-`FACTORY_MACHINE_CONTRACT_REPO`로 지정합니다. 테스트는 클론의 작업 파일이 아닌
-고정 커밋을 읽으며, 클론·커밋·`jsonschema` 의존성이 없으면 실패합니다.
-CI와 릴리스 검사는 클론을 준비하고, `make check`는 개발 의존성과 함께
-`jsonschema`를 설치합니다. CI의 고정 커밋을 바꾸면 로컬 클론도 fetch합니다.
+`machine.json` 적합성 테스트는 `orca_auto.machine_contracts`를 사용합니다.
+`dhsohn/machine-contracts` `bc252035d01edddf1314e6641689c6d5cb88af92`의 ORCA_auto
+부분을 소스가 소유한 것으로, 엔벨로프·results-bundle 스키마와 원본 MIT 고지를 바이트
+그대로 담고 SHA-256 출처를 `src/orca_auto/machine_contracts/PROVENANCE.md`에 기록합니다.
+클론, git, 네트워크는 필요 없습니다. 검증에는 `jsonschema`가 필요하며 `make check`가
+개발 의존성과 함께 설치합니다. 없으면 건너뛰지 않고 실패합니다. 원본 규격이 바뀌면
+새 파일·해시·ORCA registry 항목을 옮기고 `tests/machine_contracts/`의 해시 테스트를 고칩니다.
 
 - **단위/통합 테스트**: 실제 ORCA 대신 가짜 엔진과 격리된 임시 fixture(`tmp_path`)를 사용하므로, 로컬 머신에 ORCA가 없어도 전체 테스트를 실행할 수 있습니다.
 - **테스트 배치**: 테스트는 `src/orca_auto`의 구조를 따릅니다. 모듈의 테스트는 그 모듈 이름을 따르고 소속 패키지에 대응하는 디렉터리에 둡니다. `orca_auto/core/<pkg>/`는 `tests/core/<pkg>/`, `orca_auto/orca/<pkg>/`는 `tests/orca/<pkg>/`, `core/`나 `orca/` 바로 아래의 모듈은 `tests/core/`나 `tests/orca/`, `orca_auto/activity/`는 `tests/activity/`, 최상위 CLI와 표시 모듈은 `tests/cli/`(systemd 명령은 `tests/cli/systemd/`)에 있습니다. 예를 들어 `orca_auto/orca/queue/adapter.py`의 테스트는 `tests/orca/queue/test_adapter.py`이고, 큐 워커 테스트는 관심사별로 `tests/orca/queue/test_worker_*.py`로 나뉩니다. `tests/integration/`은 여러 계층을 가로지르는 흐름, `tests/tooling/`은 저장소 스크립트·git hook·패키징·릴리스 메타데이터 검사, `tests/contracts/`는 골든과 규칙 고정 표를 담습니다. 여러 디렉터리가 함께 쓰는 헬퍼 모듈(`conftest.py`, `*_helpers.py`)은 `tests/` 최상위에 두고, 한 디렉터리 안에서만 쓰는 fixture는 그 디렉터리의 `conftest.py`에 둡니다. 테스트 디렉터리에는 `__init__.py`가 없습니다. `pytest.ini`의 `--import-mode=importlib` 덕분에 `tests/core/queue/test_store.py`와 `tests/core/admission/test_store.py`처럼 서로 다른 디렉터리에 같은 이름의 테스트 파일을 둘 수 있습니다.

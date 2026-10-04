@@ -39,6 +39,12 @@ def _maxcore_value(line: str) -> int | None:
     return int(match.group(1)) if match is not None and match.group(1) is not None else None
 
 
+def _maxcore_without_value(line: str) -> bool:
+    """An active ``%maxcore`` directive whose value cannot be read (``%maxcore``, ``=512``)."""
+    match = MAXCORE_RE.match(active_orca_directive_text(line))
+    return match is not None and match.group(1) is None
+
+
 def read_maxcore(lines: list[str]) -> int | None:
     values = [value for line in lines if (value := _maxcore_value(line)) is not None]
     return max(values) if values else None
@@ -131,6 +137,11 @@ def prepare_submission_resource_request(
     except UnicodeError as exc:
         raise ValueError("ORCA selected input must be UTF-8 text") from exc
     lines = source_text.splitlines()
+    # A missing %maxcore gets the configured value; a present one without a
+    # readable value is refused, since replacing it would guess its intent and
+    # keeping it beside an injected one leaves ORCA two directives.
+    if any(_maxcore_without_value(line) for line in lines):
+        raise ValueError(f"ORCA input has a %maxcore directive without a value in MB: {inp_path}")
     actions: list[str] = []
 
     max_cores = read_nprocs(lines)

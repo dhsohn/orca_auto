@@ -113,14 +113,16 @@ def test_parse_irc_output_accepts_monitored_internal_columns(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("marker_text", "found"),
     [
+        # The completion analyzer's IRC_PATH_FOUND_NEEDLES, matched in upper
+        # case inside one execution line (input echoes and comments excluded).
         ("IRC PATH SUMMARY", True),
-        ("IRC  PATH SUMMARY", True),
-        ("IRC\nPATH SUMMARY", True),
+        ("IRC  PATH SUMMARY", False),
+        ("IRC\nPATH SUMMARY", False),
         ("irc path summary", True),
-        ("|  1> ! IRC  # IRC PATH SUMMARY", True),
+        ("|  1> ! IRC  # IRC PATH SUMMARY", False),
         ("irc-drv", True),
-        ("XIRC PATH SUMMARY", False),
-        ("IRC PATH SUMMARYX", False),
+        ("XIRC PATH SUMMARY", True),
+        ("IRC PATH SUMMARYX", True),
     ],
     ids=[
         "header",
@@ -133,7 +135,7 @@ def test_parse_irc_output_accepts_monitored_internal_columns(tmp_path: Path) -> 
         "glued_suffix",
     ],
 )
-def test_irc_path_found_badge_reads_the_summary_header_as_whole_words(
+def test_irc_path_found_badge_uses_the_analyzer_needles_on_execution_lines(
     marker_text: str, found: bool
 ) -> None:
     text = f"{marker_text}\n****ORCA TERMINATED NORMALLY****\n"
@@ -172,7 +174,12 @@ def test_collect_irc_report_data_summarizes_path(tmp_path: Path) -> None:
     assert data.optimization_steps == ()
 
 
-def test_collect_irc_report_data_skips_contentless_final_attempt(tmp_path: Path) -> None:
+def test_collect_irc_report_data_reads_the_selected_final_output_beside_a_contentless_retry(
+    tmp_path: Path,
+) -> None:
+    # final_result.last_out_path selects rxn.out (see _state); the later
+    # contentless retry stays an attempt-history row and never replaces the
+    # selected primary output's IRC evidence.
     write_irc_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP IRC")
     out_path = tmp_path / "rxn.out"
     write_irc_out(out_path, route="! B3LYP def2-SVP IRC")
@@ -251,8 +258,12 @@ def test_irc_report_decodes_each_attempt_output_once(
     data = _irc_data(tmp_path, state)
 
     assert data is not None
-    assert len(data.path_points) == (5 if initial_has_data else 0)
-    assert data.irc_marker_found is initial_has_data
+    # The current badge and path profile come only from the final output; a
+    # trailing attempt that became the final output has neither, and the
+    # initial attempt's data stays in its own attempt row below.
+    final_has_data = initial_has_data and trailing_kind is None
+    assert len(data.path_points) == (5 if final_has_data else 0)
+    assert data.irc_marker_found is final_has_data
     assert data.attempts[0].detail == ("5 path pts, 5 IRC iter" if initial_has_data else "")
     if trailing_kind is not None:
         assert data.attempts[-1].detail == ""

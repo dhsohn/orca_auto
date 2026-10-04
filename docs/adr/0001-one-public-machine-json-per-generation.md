@@ -1,6 +1,6 @@
 # ADR 0001: One public machine.json per generation
 
-- Status: Accepted
+- Status: Extended by ADR 0014
 - Date: 2026-08-10
 - Recorded: 2026-09-26
 
