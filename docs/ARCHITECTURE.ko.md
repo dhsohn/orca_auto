@@ -355,3 +355,4 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0014: 소스가 소유하는 machine 관측 validator](adr/0014-source-owned-machine-observation-validator.md)
 - [ADR 0015: 워커 자신의 runs root로 한정한 admission 복구](adr/0015-admission-recovery-scoped-to-own-runs-root.md)
 - [ADR 0016: 추가 알림 제공자 Slack](adr/0016-slack-notification-provider.md)
+- [ADR 0017: 큐 Detail kind 어휘와 Unknown 폴백](adr/0017-queue-detail-kind-vocabulary.md)

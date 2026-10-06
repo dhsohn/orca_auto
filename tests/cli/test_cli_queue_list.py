@@ -98,6 +98,15 @@ def _list(config: Path, *extra: str, capsys: pytest.CaptureFixture[str]) -> tupl
     return rc, capsys.readouterr().out
 
 
+def _queue_row_detail(output: str, queue_id: str) -> str:
+    """Detail column for one queue row (Status, Name, Detail, ID, Elapsed)."""
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[3] == queue_id:
+            return parts[2]
+    raise AssertionError(f"missing queue list row for {queue_id}")
+
+
 # --- empty ----------------------------------------------------------------------------------
 
 
@@ -214,7 +223,8 @@ def test_queue_entries_shown(
     assert rc == 0
     assert "active_simulations: 0" in output
     assert entry.queue_id in output
-    assert "ORCA" in output
+    assert _queue_row_detail(output, entry.queue_id) == "Unknown"
+    assert _queue_row_detail(output, entry.queue_id) != "ORCA"
     assert "⏳" in output
 
 
@@ -231,7 +241,8 @@ def test_filter_pending(
 
     assert rc == 0
     assert entry.queue_id in output
-    assert "ORCA" in output
+    assert _queue_row_detail(output, entry.queue_id) == "Unknown"
+    assert _queue_row_detail(output, entry.queue_id) != "ORCA"
     assert "rxn_done" not in output
 
 
@@ -250,8 +261,96 @@ def test_queue_with_run_state(
     assert rc == 0
     assert entry.queue_id in output
     assert "active_simulations: 0" in output
-    assert "ORCA" in output
+    # Run-state ``opt.inp`` is not admission detail metadata; the name must not read as Opt.
+    detail = _queue_row_detail(output, entry.queue_id)
+    assert detail == "Unknown"
+    assert detail not in {"ORCA", "Opt"}
     assert "⏳" in output
+
+
+def test_queue_list_shows_sp_only_for_rows_with_recorded_single_point_evidence(
+    allowed: Path,
+    config: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Installed 10.1.0 rows carry job_type "other" and the full bound generation
+    # path but no detail_kind; their names are no operation evidence.
+    monkeypatch.setenv("COLUMNS", "400")
+    method_only = "! wB97X-D3BJ def2-TZVP TightSCF\n"
+    other: dict[str, str] = {"job_type": "other"}
+    rows: dict[str, tuple[str, str, str, dict[str, str]]] = {
+        "q-sp-1": ("MeOPh_OH_TSD_IRC_F_sp_continuous_01", "sp.inp", method_only, other),
+        "q-sp-2": ("MeOPh_OH_TSD_IRC_F_sp_continuous_02", "sp.inp", method_only, other),
+        "q-legacy-irc-content": ("MeOPh_TS_F_sp", "sp.inp", "! B3LYP def2-SVP IRC\n", other),
+        "q-opt": ("MeOPh_OH_TSD_IRC_F_opt", "opt.inp", "! Opt\n", {"job_type": "opt"}),
+        "q-irc": ("MeOPh_OH_TSD_IRC_F", "irc.inp", "! B3LYP def2-SVP IRC\n", other),
+        "q-arbitrary": ("TS_IRC_arbitrary", "calc.inp", method_only, other),
+        "q-new-sp": ("TS_IRC_new", "calc.inp", method_only, {**other, "detail_kind": "sp"}),
+        "q-new-irc": (
+            "sp_new",
+            "sp.inp",
+            "! B3LYP def2-SVP IRC\n",
+            {**other, "detail_kind": "irc"},
+        ),
+        "q-new-freq": (
+            "TS_IRC_freq",
+            "sp.inp",
+            "! HF STO-3G\n%freq AnFreq true end\n",
+            {**other, "detail_kind": "unknown"},
+        ),
+    }
+    for queue_id, (job_name, inp_name, text, metadata) in rows.items():
+        generation = allowed / job_name / "20261001-000000-0123abcd"
+        generation.mkdir(parents=True)
+        (generation / inp_name).write_text(text + "* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+        enqueue_entry(
+            allowed,
+            make_queue_entry(
+                queue_id=queue_id,
+                reaction_dir=allowed / job_name,
+                metadata={**metadata, "selected_inp": str(generation / inp_name)},
+            ),
+        )
+    queue_file = allowed / "queue.json"
+    before = queue_file.read_bytes()
+    inputs_before = {path: path.read_bytes() for path in allowed.rglob("*.inp")}
+
+    rc, output = _list(config, capsys=capsys)
+    json_rc = main(["queue", "list", "--json", "--config", str(config)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert (rc, json_rc) == (0, 0)
+    # Status, Name, Detail, ID, Elapsed; no cell holds a space here.
+    details = {
+        line.split()[3]: line.split()[2]
+        for line in output.splitlines()
+        if len(line.split()) >= 4 and line.split()[3] in rows
+    }
+    assert details == {
+        "q-sp-1": "Unknown",
+        "q-sp-2": "Unknown",
+        "q-legacy-irc-content": "Unknown",
+        "q-opt": "Opt",
+        "q-irc": "Unknown",
+        "q-arbitrary": "Unknown",
+        "q-new-sp": "SP",
+        "q-new-irc": "IRC",
+        "q-new-freq": "Unknown",
+    }
+    # The JSON keeps the persisted coarse type and carries a detail kind only
+    # where one was recorded; listing rewrites nothing.
+    assert {row["activity_id"]: row["metadata"]["job_type"] for row in payload["activities"]} == {
+        queue_id: metadata["job_type"] for queue_id, (_name, _inp, _text, metadata) in rows.items()
+    }
+    assert {
+        row["activity_id"]: row["metadata"].get("detail_kind") for row in payload["activities"]
+    } == {
+        queue_id: metadata.get("detail_kind")
+        for queue_id, (_name, _inp, _text, metadata) in rows.items()
+    }
+    assert queue_file.read_bytes() == before
+    assert {path: path.read_bytes() for path in allowed.rglob("*.inp")} == inputs_before
 
 
 def test_list_does_not_terminalize_orphaned_entry_from_root_report(

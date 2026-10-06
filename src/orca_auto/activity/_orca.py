@@ -23,6 +23,7 @@ from orca_auto.orca.queue.terminal_marker import (
     TerminalReplayMarkerKind,
     terminal_replay_marker_kind,
 )
+from orca_auto.orca.queue_detail import QUEUE_DETAIL_KIND_KEY, QUEUE_DETAIL_KINDS
 from orca_auto.orca.run_snapshot import RunSnapshot, collect_run_snapshots
 from orca_auto.orca.run_status import observed_queue_status
 
@@ -90,6 +91,9 @@ def queue_record(
         or queue_id
         or task_id
     )
+    # Rows admitted before the detail kind existed carry none; they are listed
+    # as stored, without reopening their inputs.
+    detail_kind = normalize_text(entry_metadata.get(QUEUE_DETAIL_KIND_KEY))
     submitted_at = normalize_text(getattr(entry, "enqueued_at", ""))
     started_at = normalize_text(getattr(entry, "started_at", ""))
     finished_at = normalize_text(getattr(entry, "finished_at", ""))
@@ -127,6 +131,7 @@ def queue_record(
             "task_kind": normalize_text(getattr(entry, "task_kind", "")),
             "run_id": run_id,
             "job_type": normalize_text(entry_metadata.get("job_type")),
+            **({QUEUE_DETAIL_KIND_KEY: detail_kind} if detail_kind in QUEUE_DETAIL_KINDS else {}),
             "selected_inp": normalize_text(entry_metadata.get("selected_inp")),
             "reaction_dir": reaction_dir,
             "allowed_root": str(allowed_root),

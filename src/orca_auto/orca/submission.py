@@ -55,6 +55,7 @@ from .queue import adapter as queue_adapter
 from .queue import entries as queue_entries
 from .queue.adapter import DuplicateEntryError
 from .queue.orphans import DeadRunningRowUnjudgeableError
+from .queue_detail import QUEUE_DETAIL_KIND_KEY, queue_detail_kind
 from .resource_directives import (
     PreparedSubmissionResourceInput,
     prepare_submission_resource_request,
@@ -210,12 +211,18 @@ def build_queue_metadata(
     molecule_key: str,
     resource_request: Mapping[str, int],
     execution_snapshot: dict[str, Any],
+    detail_kind: str = "",
 ) -> dict[str, Any]:
-    """Assemble queue values from an already-created snapshot without filesystem work."""
+    """Assemble queue values from an already-created snapshot without filesystem work.
+
+    ``detail_kind`` is display-only and recorded whenever the admitted input has a
+    route line.
+    """
     return {
         "submitted_via": "run_inp",
         queue_entries.QUEUED_NOTIFICATION_PENDING_KEY: True,
         "job_type": job_type,
+        **({QUEUE_DETAIL_KIND_KEY: detail_kind} if detail_kind else {}),
         "molecule_key": molecule_key,
         "resource_request": dict(resource_request),
         "resource_actual": dict(resource_request),
@@ -237,6 +244,7 @@ class _PreparedSubmissionInputs:
     source_payload: bytes
     artifacts: OrcaSelectedInputArtifacts
     job_type: str
+    detail_kind: str
     molecule_key: str
     prepared_input: PreparedSubmissionResourceInput
     priority: int
@@ -264,6 +272,7 @@ def _prepare_submission_inputs(
         selected_input_xyz=xyzfile_input_path(lines, inp_path.parent),
     )
     job_type = job_type_from_routes(orca_route_lines(lines))
+    detail_kind = queue_detail_kind(inp_path, lines)
     molecule_key = molecule_key_from_text(text, inp_path).key
     prepared_input = prepare_submission_resource_request(
         selected_inp,
@@ -282,6 +291,7 @@ def _prepare_submission_inputs(
         source_payload=source_payload,
         artifacts=artifacts,
         job_type=job_type,
+        detail_kind=detail_kind,
         molecule_key=molecule_key,
         prepared_input=prepared_input,
         priority=priority,
@@ -348,6 +358,7 @@ def create_queued_submission(
             molecule_key=inputs.molecule_key,
             resource_request=inputs.prepared_input.resource_request,
             execution_snapshot=execution_snapshot,
+            detail_kind=inputs.detail_kind,
         )
         task_id = timestamped_token("orca", token_bytes=16)
         transition_snapshot_intent(
