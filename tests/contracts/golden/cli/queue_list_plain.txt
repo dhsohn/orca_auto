@@ -1,11 +1,11 @@
 exit=0
 --- stdout
 active_simulations: 0
-Status  Name     Detail                            ID                                                  Elapsed 
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-⏳      waiting  Opt                               <q:1>  <hh:mm:ss>
-⛔      stopped  Opt (result publication pending)  <q:2>  <hh:mm:ss>
-✅      done     Opt                               <q:3>  <hh:mm:ss>
+Status  Name     Detail                                ID                                                  Elapsed 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⏳      waiting  Opt+Freq                              <q:1>  <hh:mm:ss>
+⛔      stopped  Opt+Freq (result publication pend...  <q:2>  <hh:mm:ss>
+✅      done     Opt+Freq                              <q:3>  <hh:mm:ss>
 admission_blocked: ORCA queue <tmp>/runs (queue_id=<q:2>)
   terminal publication pending
   The queue worker retries result publication automatically. Inspect the worker log if it persists; this directory remains fenced until publication finishes.

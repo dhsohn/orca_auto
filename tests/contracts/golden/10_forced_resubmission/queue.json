@@ -16,6 +16,7 @@
       "submitted_via": "run_inp",
       "orca_queued_notification_pending": false,
       "job_type": "opt",
+      "detail_kind": "opt+freq",
       "molecule_key": "H2O",
       "resource_request": {
         "max_cores": 1,
@@ -104,6 +105,7 @@
       "submitted_via": "run_inp",
       "orca_queued_notification_pending": false,
       "job_type": "opt",
+      "detail_kind": "opt+freq",
       "molecule_key": "H2O",
       "resource_request": {
         "max_cores": 1,
