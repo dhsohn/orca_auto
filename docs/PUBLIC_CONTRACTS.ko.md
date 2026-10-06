@@ -28,6 +28,12 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 - 모든 `--json` 문서는 `ok`를 포함하며, 명령이 종료 코드 0으로 끝날 때만 `true`입니다. 실패한 명령은 stdout에 `{"ok": false, "error": "<message>"}`를 출력하고 stderr에도 `error:` 줄을 기록합니다.
 - 종료 코드 0은 성공 또는 처리할 것이 없음, 1은 거부·실패·잘못된 명령, 2는 argparse 사용법 오류입니다. `sudo`/`systemctl`의 원래 종료 코드는 그대로 전달하지 않습니다.
 
+### `queue list` Detail 칸
+- Detail 표시는 다음 순서로 정합니다: 연산 이름을 지정하는 큐 `task_kind`(일반 `orca_run_inp` 제외), 지원되는 정규화 `detail_kind`, `other`/`unknown`이 아닌 대략적 `job_type`, 그 밖에는 `Unknown`. 발행 대기·자원 대기 꼬리표는 그대로 덧붙입니다. `engine` 필드는 `orca`로 유지하며 `Unknown`은 엔진 이름이 아닙니다.
+- `detail_kind`는 표시 전용 큐 메타데이터 키이며 `queue list --json` 행 메타데이터에도 나타납니다. `run-dir`는 route 줄이 있는 선택 입력을 한 번 읽은 같은 내용에서 이 값을 기록합니다. 정규화 값은 요청된 조합을 소문자 토큰과 `+`로 표현합니다(실행 순서가 아님). 여러 연산이 있으면 정규 토큰 순서는 기본 run type, `freq`, `irc`, plain `neb`입니다. 지원 값과 고정 표시는 `sp`(`SP`), `irc`(`IRC`), `neb`(`NEB`), `opt`(`Opt`), `ts`(`TS`), `freq`(`Freq`), `neb-ts`(`NEB-TS`), `opt+freq`(`Opt+Freq`), `ts+freq`(`TS+Freq`), `ts+irc`(`TS+IRC`), `ts+freq+irc`(`TS+Freq+IRC`), `neb-ts+freq`(`NEB-TS+Freq`), `neb-ts+irc`(`NEB-TS+IRC`), `neb-ts+freq+irc`(`NEB-TS+Freq+IRC`), `unknown`(`Unknown`)입니다. 값이 없거나 알 수 없거나 legacy `other`이면 근거로 쓰지 않고 `Unknown`으로 표시합니다. 대략적 `job_type`과 완료·보고서·결과 분류는 바뀌지 않습니다.
+- `sp`는 작업 하나의 method만 있는 입력에만 기록합니다. 지원되지 않는 다른 연산을 요청하거나 확실히 읽을 수 없는 입력은 `unknown`을 기록합니다: run type route 키워드(EnGrad/EnergyGrad, NumGrad, MD, GOAT, CIM, EDA, PrintThermoChem, PropertiesOnly, normal mode·mode trajectory run type 등), `%geom`의 `TS_search`나 `Scan`, `%method`의 `RunTyp`, `$new_job`이나 compound 작업, 형태와 상관없는 따옴표 없는 `ESD` route 키워드(`ESD(ABS)`, `ESD(FLUOR)`, `ESD(PHOSP)`, `ESD(ISC)`, `ESD(IC)`, `ESD(RR)`, `ESD(RRAMAN)`, 괄호 없는 형태나 알 수 없는 형태)와 모든 `%esd` 블록, 닫힌 `%freq` 블록 안의 따옴표 없는 `false`가 아닌 모든 `AnFreq`/`NumFreq` 스위치, 지원 어휘 밖의 route 조합(예: `OptTS Freq IRC`, `SP IRC`).
+- 파일·디렉터리 이름은 입력이 무엇을 실행하는지의 근거가 아닙니다. `detail_kind`가 생기기 전에 접수된 행은 `job_type`이나 `task_kind`가 작업을 지정하지 않으면 `Unknown`으로 표시하며, `queue list`는 이 행을 보충 기록하거나 입력을 다시 읽거나 행을 고쳐 쓰지 않습니다.
+
 ### `run-dir` 세부 동작 규격
 - --input NAME.inp를 지정하면 작업 폴더 안의 입력을 명시적으로 선택합니다. 생략하면 아래 자동 선택을 유지합니다.
 - 디렉터리 내에서 가장 최근에 수정된 적합한 `.inp` 파일을 자동 선택하며, 수정 시각이 같으면 파일명 알파벳 순으로 결정합니다.

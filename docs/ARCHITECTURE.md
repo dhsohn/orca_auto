@@ -374,3 +374,4 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0014: Source-owned machine observation validator](adr/0014-source-owned-machine-observation-validator.md)
 - [ADR 0015: Admission recovery scoped to the worker's own runs root](adr/0015-admission-recovery-scoped-to-own-runs-root.md)
 - [ADR 0016: Slack as an additional notification provider](adr/0016-slack-notification-provider.md)
+- [ADR 0017: Queue Detail kind vocabulary and Unknown fallback](adr/0017-queue-detail-kind-vocabulary.md)

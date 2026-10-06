@@ -7,9 +7,13 @@ joined with each row's own ``job_state.json``. A live run is one that holds
 
 from __future__ import annotations
 
+import builtins
+import io
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, TypeVar
 
 import pytest
 
@@ -209,6 +213,195 @@ def test_catalog_joins_queue_rows_with_their_own_state_only(
     # The per-job worker log is a top-level row key taken from queue metadata.
     assert by_id["q-1"].worker_log == ""
     assert by_id["q-1"].to_dict()["worker_log"] == ""
+
+
+def _tree_bytes(root: Path) -> dict[str, tuple[bytes, int]]:
+    """Content and mtime of every data file under ``root``; lock files only serialize."""
+    return {
+        str(path.relative_to(root)): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.suffix != ".lock"
+    }
+
+
+_T = TypeVar("_T")
+
+
+def _opened_paths_during(call: Callable[[], _T]) -> tuple[_T, list[str]]:
+    """``call()`` and every path ``open``/``io.open``/``os.open`` was given meanwhile."""
+    opened: list[str] = []
+    real_io_open, real_os_open = io.open, os.open
+
+    def record(path: Any) -> None:
+        if isinstance(path, str | bytes | os.PathLike):
+            opened.append(os.fsdecode(os.fspath(path)))
+
+    def io_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        record(file)
+        return real_io_open(file, *args, **kwargs)
+
+    def os_open(path: Any, *args: Any, **kwargs: Any) -> int:
+        record(path)
+        return real_os_open(path, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(io, "open", io_open)
+        patch.setattr(builtins, "open", io_open)
+        patch.setattr(os, "open", os_open)
+        result = call()
+    return result, opened
+
+
+def test_queue_detail_of_method_only_rows_reaches_the_table_without_rewriting_history(
+    allowed: Path, orca_config: str
+) -> None:
+    from orca_auto.activity_rendering import queue_list_table
+
+    job_dir = allowed / "MeOPh_OH_TSD_IRC_F_sp_continuous_01"
+    generation = job_dir / "20261001-000000-0123abcd"
+    generation.mkdir(parents=True)
+    legacy_input = generation / "sp.inp"
+    legacy_input.write_text(
+        "! wB97X-D3BJ def2-TZVP TightSCF\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
+    )
+    # A historical input named sp.inp that actually runs an IRC.
+    irc_generation = allowed / "TS_IRC_F_sp" / "20261001-000000-4567cdef"
+    irc_generation.mkdir(parents=True)
+    legacy_irc_input = irc_generation / "sp.inp"
+    legacy_irc_input.write_text(
+        "! B3LYP def2-SVP IRC\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
+    )
+    entries = [
+        # Written before detail_kind existed: only the coarse type and the path.
+        make_queue_entry(
+            queue_id="q-legacy-sp",
+            reaction_dir=job_dir,
+            enqueued_at="2026-10-01T00:00:00+00:00",
+            metadata={"job_type": "other", "selected_inp": str(legacy_input)},
+        ),
+        make_queue_entry(
+            queue_id="q-legacy-irc-content",
+            reaction_dir=irc_generation.parent,
+            enqueued_at="2026-10-01T00:00:30+00:00",
+            metadata={"job_type": "other", "selected_inp": str(legacy_irc_input)},
+        ),
+        make_queue_entry(
+            queue_id="q-legacy-windows",
+            reaction_dir=allowed / "windows_row",
+            status=QueueStatus.FAILED,
+            enqueued_at="2026-10-01T00:00:40+00:00",
+            metadata={
+                "job_type": "other",
+                "selected_inp": r"C:\runs\MeOPh_IRC_TS\20261001-000000-0123abcd\sp.inp",
+            },
+        ),
+        # A legacy row whose bound input is gone.
+        make_queue_entry(
+            queue_id="q-legacy-gone",
+            reaction_dir=allowed / "TS_IRC_gone",
+            status=QueueStatus.COMPLETED,
+            enqueued_at="2026-10-01T00:01:00+00:00",
+            metadata={
+                "job_type": "other",
+                "selected_inp": str(allowed / "TS_IRC_gone" / "gen" / "sp.inp"),
+            },
+        ),
+        # Admission evidence, a recorded IRC and an explicit opt in IRC-named jobs.
+        make_queue_entry(
+            queue_id="q-recorded-sp",
+            reaction_dir=allowed / "IRC_named",
+            enqueued_at="2026-10-01T00:02:00+00:00",
+            metadata={
+                "job_type": "other",
+                "detail_kind": "sp",
+                "selected_inp": str(allowed / "IRC_named" / "gen" / "calc.inp"),
+            },
+        ),
+        make_queue_entry(
+            queue_id="q-recorded-irc",
+            reaction_dir=allowed / "sp_named",
+            enqueued_at="2026-10-01T00:03:00+00:00",
+            metadata={
+                "job_type": "other",
+                "detail_kind": "irc",
+                "selected_inp": str(allowed / "sp_named" / "gen" / "sp.inp"),
+            },
+        ),
+        make_queue_entry(
+            queue_id="q-explicit-opt",
+            reaction_dir=allowed / "TS_IRC_opt",
+            enqueued_at="2026-10-01T00:04:00+00:00",
+            metadata={
+                "job_type": "opt",
+                "selected_inp": str(allowed / "TS_IRC_opt" / "gen" / "irc.inp"),
+            },
+        ),
+        make_queue_entry(
+            queue_id="q-bogus-kind",
+            reaction_dir=allowed / "bogus",
+            enqueued_at="2026-10-01T00:05:00+00:00",
+            metadata={
+                "job_type": "other",
+                "detail_kind": "md",
+                "selected_inp": str(allowed / "bogus" / "gen" / "calc.inp"),
+            },
+        ),
+    ]
+    queue_persistence.save_entries(allowed, entries)
+    before = _tree_bytes(allowed)
+
+    (by_id, listed), opened = _opened_paths_during(
+        lambda: (
+            _records_by_id(allowed),
+            activity.list_activities(config_path=orca_config, runs_root=allowed),
+        )
+    )
+    payload = json.loads(json.dumps(listed))
+
+    # Listing never opens an input, and rewrites neither queue.json nor any input.
+    assert [path for path in opened if path.endswith(".inp")] == []
+    assert _tree_bytes(allowed) == before
+    persisted = {entry.queue_id: entry.metadata for entry in list_queue(allowed)}
+    assert "detail_kind" not in persisted["q-legacy-sp"]
+    assert "detail_kind" not in persisted["q-legacy-irc-content"]
+    assert persisted["q-legacy-sp"]["job_type"] == "other"
+    # The coarse type stays as persisted; only a recognized detail kind is projected.
+    assert {key: row.metadata["job_type"] for key, row in by_id.items()} == {
+        "q-legacy-sp": "other",
+        "q-legacy-irc-content": "other",
+        "q-legacy-windows": "other",
+        "q-legacy-gone": "other",
+        "q-recorded-sp": "other",
+        "q-recorded-irc": "other",
+        "q-explicit-opt": "opt",
+        "q-bogus-kind": "other",
+    }
+    assert {key: row.metadata.get("detail_kind") for key, row in by_id.items()} == {
+        "q-legacy-sp": None,
+        "q-legacy-irc-content": None,
+        "q-legacy-windows": None,
+        "q-legacy-gone": None,
+        "q-recorded-sp": "sp",
+        "q-recorded-irc": "irc",
+        "q-explicit-opt": None,
+        "q-bogus-kind": None,
+    }
+    assert by_id["q-legacy-sp"].metadata["selected_inp"] == str(legacy_input)
+
+    table = queue_list_table(payload, max_width=None)
+    # Status, Name, Detail, ID, Elapsed; no cell holds a space here. A legacy
+    # row has no admission evidence, so its file name says nothing: Unknown.
+    details = {row.split()[3]: row.split()[2] for row in table.rows}
+    assert details == {
+        "q-legacy-sp": "Unknown",
+        "q-legacy-irc-content": "Unknown",
+        "q-legacy-windows": "Unknown",
+        "q-legacy-gone": "Unknown",
+        "q-recorded-sp": "SP",
+        "q-recorded-irc": "IRC",
+        "q-explicit-opt": "Opt",
+        "q-bogus-kind": "Unknown",
+    }
 
 
 def test_clear_activities_reports_removed_worker_logs(allowed: Path, orca_config: str) -> None:

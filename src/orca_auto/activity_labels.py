@@ -8,14 +8,21 @@ from orca_auto.core.statuses import is_queue_active_status
 from orca_auto.core.utils import normalize_text, parse_iso_utc
 from orca_auto.orca.app_ids import ORCA_TASK_KIND
 from orca_auto.orca.queue.terminal_marker import TERMINAL_PUBLICATION_SCOPE
+from orca_auto.orca.queue_detail import QUEUE_DETAIL_KIND_KEY, queue_detail_kind_label
 
-_ORCA_SELECTED_INP_HINTS = (
-    ("neb", "NEB"),
-    ("irc", "IRC"),
-    ("ts", "TS"),
-    ("opt", "Opt"),
-    ("freq", "Freq"),
-)
+_UNKNOWN_DETAIL_LABEL = "Unknown"
+
+# Legacy queue ``task_kind`` / coarse ``job_type`` tokens that name an operation.
+_RECOGNIZED_OPERATION_LABELS: dict[str, str] = {
+    "optts": "OptTS",
+    "ts": "TS",
+    "opt": "Opt",
+    "sp": "SP",
+    "freq": "Freq",
+    "irc": "IRC",
+    "neb": "NEB",
+}
+_GENERIC_TASK_KINDS = frozenset({ORCA_TASK_KIND, "run_inp", "orca"})
 
 
 def queue_table_now() -> datetime:
@@ -57,38 +64,29 @@ def queue_elapsed_text(item: dict[str, Any], *, now: datetime) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def queue_task_label(task_kind: Any) -> str:
-    normalized = normalize_text(task_kind).lower()
-    return {
-        "optts": "OptTS",
-        "ts": "TS",
-        "opt": "Opt",
-        "sp": "SP",
-        "freq": "Freq",
-        "irc": "IRC",
-        "neb": "NEB",
-        "orca": "ORCA",
-    }.get(normalized, normalize_text(task_kind))
+def recognized_queue_operation_label(kind: Any) -> str | None:
+    """Fixed Detail label for a known ``task_kind``/``job_type`` token, else ``None``."""
+    normalized = normalize_text(kind).lower()
+    if not normalized or normalized in _GENERIC_TASK_KINDS:
+        return None
+    if normalized in {"other", "unknown"}:
+        return None
+    return _RECOGNIZED_OPERATION_LABELS.get(normalized)
 
 
 def infer_orca_detail_from_metadata(metadata: dict[str, Any]) -> str:
-    task_kind = normalize_text(metadata.get("task_kind")).lower()
-    task_label = queue_task_label(task_kind)
-    if task_label and task_kind not in {ORCA_TASK_KIND, "run_inp"}:
+    task_label = recognized_queue_operation_label(metadata.get("task_kind"))
+    if task_label is not None:
         return task_label
 
-    job_type = normalize_text(metadata.get("job_type")).lower()
-    job_type_label = queue_task_label(job_type)
-    if job_type_label and job_type not in {"other", "unknown"}:
-        return job_type_label
-    selected_inp_name = normalize_text(
-        metadata.get("selected_inp_name") or metadata.get("selected_inp")
-    )
-    lowered = selected_inp_name.lower()
-    for marker, label in _ORCA_SELECTED_INP_HINTS:
-        if marker in lowered:
-            return label
-    return "ORCA"
+    detail_label = queue_detail_kind_label(normalize_text(metadata.get(QUEUE_DETAIL_KIND_KEY)))
+    if detail_label is not None:
+        return detail_label
+
+    job_label = recognized_queue_operation_label(metadata.get("job_type"))
+    if job_label is not None:
+        return job_label
+    return _UNKNOWN_DETAIL_LABEL
 
 
 def queue_detail_text(item: dict[str, Any]) -> str:

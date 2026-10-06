@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 from dataclasses import replace
 from http.client import IncompleteRead
@@ -135,6 +136,282 @@ def test_queue_metadata_assembles_supplied_values_without_creating_files(tmp_pat
     assert list(tmp_path.iterdir()) == []
     metadata["resource_actual"]["max_cores"] = 99
     assert metadata["resource_request"] == requested == {"max_cores": 2, "max_memory_gb": 4}
+
+
+def test_queue_metadata_records_a_given_detail_kind_beside_the_coarse_type(
+    tmp_path: Path,
+) -> None:
+    snapshot = {"selected_inp": str(tmp_path / "generation" / "sp.inp")}
+    metadata = run_inp.build_queue_metadata(
+        reaction_dir=tmp_path,
+        artifacts=OrcaSelectedInputArtifacts(
+            selected_inp=str(tmp_path / "sp.inp"), selected_input_xyz=""
+        ),
+        job_type="other",
+        detail_kind="sp",
+        molecule_key="sample",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        execution_snapshot=snapshot,
+    )
+
+    assert metadata == {
+        "submitted_via": "run_inp",
+        "orca_queued_notification_pending": True,
+        "job_type": "other",
+        "detail_kind": "sp",
+        "molecule_key": "sample",
+        "resource_request": {"max_cores": 1, "max_memory_gb": 1},
+        "resource_actual": {"max_cores": 1, "max_memory_gb": 1},
+        "source_selected_inp": str(tmp_path / "sp.inp"),
+        "selected_inp": str(tmp_path / "generation" / "sp.inp"),
+        "selected_input_path": str(tmp_path / "sp.inp"),
+        "selected_input_xyz": "",
+        "execution_snapshot": snapshot,
+        "reaction_dir": str(tmp_path.resolve()),
+    }
+    assert list(metadata)[2:4] == ["job_type", "detail_kind"]
+    assert list(tmp_path.iterdir()) == []
+
+
+_H2 = "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
+
+
+@pytest.mark.parametrize(
+    ("job_dir_name", "inp_name", "route", "job_type", "detail_kind", "label"),
+    [
+        # The confirmed defect: a method-only SP under an IRC/TS-named job.
+        (
+            "MeOPh_OH_TSD_IRC_F_sp_continuous_01",
+            "sp.inp",
+            "! wB97X-D3BJ def2-TZVP TightSCF",
+            "other",
+            "sp",
+            "SP",
+        ),
+        (
+            "TS_IRC_named",
+            "calc.inp",
+            "! B3LYP def2-SVP\n%maxcore 1000\n! TightSCF",
+            "other",
+            "sp",
+            "SP",
+        ),
+        # The route outranks a misleading file name.
+        ("sp_named", "sp.inp", "! B3LYP def2-SVP IRC", "other", "irc", "IRC"),
+        ("irc_named", "irc.inp", "! B3LYP def2-SVP IRC", "other", "irc", "IRC"),
+        # Coarse types still get a presentation detail_kind from the same read.
+        ("IRC_named_opt", "irc.inp", "! B3LYP def2-SVP Opt", "opt", "opt", "Opt"),
+        ("ts_irc", "ts.inp", "! B3LYP def2-SVP OptTS Freq IRC", "ts", "ts+freq+irc", "TS+Freq+IRC"),
+        ("freq_named", "freq.inp", "! B3LYP def2-SVP Freq", "freq", "freq", "Freq"),
+        # Frequencies requested by %freq never read as a single point
+        # (ORCA 6.1 manual: AnFreq/NumFreq default false, true requests them).
+        (
+            "IRC_sp_anfreq",
+            "sp.inp",
+            "! HF STO-3G\n%freq AnFreq true end",
+            "other",
+            "unknown",
+            "Unknown",
+        ),
+        (
+            "IRC_sp_numfreq",
+            "sp.inp",
+            "! HF STO-3G\n%freq\n  NumFreq true\nend",
+            "other",
+            "unknown",
+            "Unknown",
+        ),
+        (
+            "IRC_sp_anfreq_off",
+            "sp.inp",
+            "! HF STO-3G\n%freq AnFreq false end",
+            "other",
+            "sp",
+            "SP",
+        ),
+        (
+            "IRC_sp_numfreq_off",
+            "sp.inp",
+            "! HF STO-3G\n%freq NumFreq false end",
+            "other",
+            "sp",
+            "SP",
+        ),
+        # A %geom TS search and the EnergyGrad run type are no single point.
+        (
+            "IRC_sp_ts_search",
+            "sp.inp",
+            "! HF STO-3G\n%geom TS_search EF end",
+            "other",
+            "unknown",
+            "Unknown",
+        ),
+        (
+            "IRC_sp_energygrad",
+            "sp.inp",
+            "! HF STO-3G EnergyGrad",
+            "other",
+            "unknown",
+            "Unknown",
+        ),
+        # A %tddft block alone configures the single point's excited states.
+        (
+            "ESD_named_tddft",
+            "sp.inp",
+            "! B3LYP DEF2-SVP TIGHTSCF\n%TDDFT NROOTS 5 IROOT 1 END",
+            "other",
+            "sp",
+            "SP",
+        ),
+    ],
+    ids=[
+        "sp-under-irc-ts-job",
+        "sp-several-routes",
+        "irc-in-sp-inp",
+        "irc",
+        "opt",
+        "optts",
+        "freq",
+        "anfreq-block",
+        "numfreq-block",
+        "anfreq-false",
+        "numfreq-false",
+        "geom-ts-search",
+        "energygrad",
+        "tddft-only",
+    ],
+)
+def test_submission_records_route_detail_for_the_queue_table_without_changing_job_type(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    job_dir_name: str,
+    inp_name: str,
+    route: str,
+    job_type: str,
+    detail_kind: str | None,
+    label: str,
+) -> None:
+    from orca_auto.activity import _orca as activity_orca
+    from orca_auto.activity_labels import queue_detail_text
+    from orca_auto.activity_rendering import queue_list_table
+
+    _reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    job_dir = tmp_path / job_dir_name
+    job_dir.mkdir()
+    source = job_dir / inp_name
+    payload = f"{route}\n{_H2}".encode()
+    source.write_bytes(payload)
+    args.path = str(job_dir)
+    reads: list[Path] = []
+    real_read = run_inp.read_stable_regular_file
+
+    def read_once(path: Path, **kwargs: Any) -> bytes:
+        reads.append(Path(path))
+        return real_read(path, **kwargs)
+
+    monkeypatch.setattr(run_inp, "read_stable_regular_file", read_once)
+
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+
+    assert result.status == "submitted", result.stderr
+    # The detail kind comes from the one read of the source, which stays unchanged.
+    assert [path.resolve() for path in reads] == [source.resolve()]
+    assert source.read_bytes() == payload
+    [entry] = queue_adapter.list_queue(tmp_path)
+    assert entry.metadata["job_type"] == job_type
+    assert entry.metadata.get("detail_kind") == detail_kind
+    assert Path(entry.metadata["selected_inp"]).name == inp_name
+    record = json.loads(
+        json.dumps(activity_orca.queue_record(entry, None, allowed_root=tmp_path).to_dict())
+    )
+    assert record["metadata"]["job_type"] == job_type
+    assert record["metadata"].get("detail_kind") == detail_kind
+    assert queue_detail_text(record) == label
+    table = queue_list_table({"activities": [record], "active_simulations": 0}, max_width=None)
+    [row] = table.rows
+    # Status, Name, Detail, ID, Elapsed; no cell holds a space here.
+    assert row.split()[2:4] == [label, entry.queue_id]
+
+
+@pytest.mark.parametrize(
+    ("inp_text", "dependencies"),
+    [
+        # The ESD(FLUOR) input execution binding admits with its Hessians.
+        (
+            "! B3LYP def2-SVP ESD(FLUOR)\n"
+            '%esd\n  GSHessian "S0.hess"\n  ESHessian "S1.hess"\nend\n'
+            "* xyzfile 0 1 g.xyz\n",
+            {
+                "g.xyz": "1\ng\nH 0 0 0\n",
+                "S0.hess": "$hessian\nS0\n$end\n",
+                "S1.hess": "$hessian\nS1\n$end\n",
+            },
+        ),
+        # The ORCA 6.1 manual's vertical-gradient ESD(ABS) example: the ESD
+        # module computes excited-state derivatives after the single point.
+        (
+            "! B3LYP DEF2-SVP TIGHTSCF ESD(ABS)\n"
+            "%TDDFT NROOTS 5 IROOT 1 END\n"
+            '%ESD\n  GSHESSIAN "BEN.hess"\n  DOHT TRUE\n  HESSFLAG VG # DEFAULT\nEND\n'
+            "* XYZFILE 0 1 BEN.xyz\n",
+            {"BEN.xyz": "1\nben\nH 0 0 0\n", "BEN.hess": "$hessian\nBEN\n$end\n"},
+        ),
+    ],
+    ids=["esd-fluor-hessians", "esd-abs-vertical-gradient"],
+)
+def test_submitted_esd_input_keeps_job_type_and_never_renders_sp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inp_text: str,
+    dependencies: dict[str, str],
+) -> None:
+    from orca_auto.activity import _orca as activity_orca
+    from orca_auto.activity_labels import queue_detail_text
+    from orca_auto.activity_rendering import queue_list_table
+
+    _reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    # A single-point-looking name: neither it nor the method-only start of the
+    # route may make an ESD job read as SP.
+    job_dir = tmp_path / "MeOPh_sp_esd"
+    job_dir.mkdir()
+    for name, text in dependencies.items():
+        (job_dir / name).write_text(text, encoding="utf-8")
+    source = job_dir / "sp.inp"
+    payload = inp_text.encode()
+    source.write_bytes(payload)
+    args.path = str(job_dir)
+    reads: list[Path] = []
+    real_read = run_inp.read_stable_regular_file
+
+    def read_once(path: Path, **kwargs: Any) -> bytes:
+        reads.append(Path(path))
+        return real_read(path, **kwargs)
+
+    monkeypatch.setattr(run_inp, "read_stable_regular_file", read_once)
+
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+
+    assert result.status == "submitted", result.stderr
+    assert [path.resolve() for path in reads] == [source.resolve()]
+    assert source.read_bytes() == payload
+    [entry] = queue_adapter.list_queue(tmp_path)
+    execution_dir = Path(entry.metadata["execution_snapshot"]["execution_dir"])
+    for name, text in dependencies.items():
+        assert (execution_dir / name).read_text(encoding="utf-8") == text
+    # The coarse scientific type is untouched; only the display refuses SP.
+    assert entry.metadata["job_type"] == "other"
+    assert entry.metadata["detail_kind"] == "unknown"
+    record = json.loads(
+        json.dumps(activity_orca.queue_record(entry, None, allowed_root=tmp_path).to_dict())
+    )
+    assert record["metadata"]["job_type"] == "other"
+    assert record["metadata"]["detail_kind"] == "unknown"
+    assert queue_detail_text(record) == "Unknown"
+    table = queue_list_table({"activities": [record], "active_simulations": 0}, max_width=None)
+    [row] = table.rows
+    # Status, Name, Detail, ID, Elapsed; no cell holds a space here.
+    assert row.split()[2:4] == ["Unknown", entry.queue_id]
+    assert "SP" not in row.split()
 
 
 @pytest.mark.parametrize("failure_stage", ["metadata", "task_id", "intent_transition"])
