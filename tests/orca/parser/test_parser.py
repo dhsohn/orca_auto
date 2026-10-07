@@ -523,6 +523,80 @@ def test_parser_extracts_si_fields(tmp_path: Path) -> None:
     ]
 
 
+def test_parser_ignores_echoed_route_comment_for_report_metadata(tmp_path: Path) -> None:
+    out_file = tmp_path / "commented_route.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP CPCM(toluene) # CCSD(T) def2-TZVP smd true",
+                "|  2> * xyz 0 1",
+                "|  3> C 0.0 0.0 0.0",
+                "|  4> *",
+                "FINAL SINGLE POINT ENERGY      -100.000000",
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
+
+    assert result.method == "B3LYP"
+    assert result.basis_set == "def2-SVP"
+    assert result.solvation == "CPCM(toluene)"
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "B3LYP # CCSD(T) def2-TZVP smd true # def2-SVP CPCM(toluene)",
+        "B3LYP# CCSD(T) def2-TZVP #def2-SVP# smd true #CPCM(toluene)# MP2 def2-QZVP",
+    ],
+)
+def test_parser_preserves_route_metadata_after_closed_comments(tmp_path: Path, route: str) -> None:
+    out_file = tmp_path / "closed_route_comments.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                f"|  1> ! {route}",
+                "FINAL SINGLE POINT ENERGY      -100.000000",
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
+
+    assert result.method == "B3LYP"
+    assert result.basis_set == "def2-SVP"
+    assert result.solvation == "CPCM(toluene)"
+    assert result.input_line == "B3LYP def2-SVP CPCM(toluene)"
+
+
+@pytest.mark.parametrize("solvent", ["water", "water#quoted"])
+def test_parser_preserves_smd_directives_after_closed_comments(tmp_path: Path, solvent: str) -> None:
+    out_file = tmp_path / "closed_smd_comments.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP CPCM(toluene)",
+                "|  2> %cpcm",
+                "|  3>   # smd false # smd # ignored # true # smd false",
+                f'|  4>   # SMDsolvent "hexane" # SMDsolvent "{solvent}" # SMDsolvent "wrong"',
+                "|  5> end",
+                "FINAL SINGLE POINT ENERGY      -100.000000",
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
+
+    assert result.solvation == f"SMD({solvent})"
+
+
 def test_parser_detects_smd_solvation(tmp_path: Path) -> None:
     out_file = tmp_path / "smd.out"
     out_file.write_text(
