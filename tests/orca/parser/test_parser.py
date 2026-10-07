@@ -575,7 +575,9 @@ def test_parser_preserves_route_metadata_after_closed_comments(tmp_path: Path, r
 
 
 @pytest.mark.parametrize("solvent", ["water", "water#quoted"])
-def test_parser_preserves_smd_directives_after_closed_comments(tmp_path: Path, solvent: str) -> None:
+def test_parser_preserves_smd_directives_after_closed_comments(
+    tmp_path: Path, solvent: str
+) -> None:
     out_file = tmp_path / "closed_smd_comments.out"
     out_file.write_text(
         "\n".join(
