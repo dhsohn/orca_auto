@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
+from ..input_syntax import orca_line_tokens
 from .patterns import (
     _BASIS_KEYWORDS,
     _COORD_SECTION_RE,
@@ -21,6 +22,19 @@ from .patterns import (
 )
 
 AtomRow = tuple[str, float, float, float]
+
+
+def _strip_input_comments(line: str) -> str:
+    """Remove ORCA comment gaps while preserving active token source text."""
+    if "#" not in line:
+        return line
+    parts: list[str] = []
+    previous_end = 0
+    for token in orca_line_tokens(line):
+        gap = line[previous_end : token.start]
+        parts.extend((" " if "#" in gap else gap, line[token.start : token.end]))
+        previous_end = token.end
+    return "".join(parts)
 
 
 def parse_optimization_cycles(text: str) -> Iterator[tuple[int, float | None, str]]:
@@ -68,7 +82,7 @@ def parse_input_line(text: str) -> tuple[str, str, list[str]]:
     # There may be multiple input lines; merge them.
     all_tokens: list[str] = []
     for line in matches:
-        all_tokens.extend(line.strip().split())
+        all_tokens.extend(_strip_input_comments(line).split())
 
     method = first_known_token(all_tokens, _METHOD_KEYWORDS)
     basis_set = first_known_token(all_tokens, _BASIS_KEYWORDS)
@@ -122,8 +136,9 @@ def parse_solvation(text: str, tokens: list[str]) -> str:
             cpcm_seen = True
             cpcm_solvent = (match.group(1) or "").strip()
             break
-    if _SMD_TRUE_RE.search(text):
-        smd_match = _SMD_SOLVENT_RE.search(text)
+    uncommented_text = "\n".join(_strip_input_comments(line) for line in text.splitlines())
+    if _SMD_TRUE_RE.search(uncommented_text):
+        smd_match = _SMD_SOLVENT_RE.search(uncommented_text)
         solvent = smd_match.group(1).strip() if smd_match else cpcm_solvent
         return f"SMD({solvent})" if solvent else "SMD"
     if cpcm_seen:
