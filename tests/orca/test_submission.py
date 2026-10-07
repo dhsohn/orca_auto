@@ -210,16 +210,16 @@ _H2 = "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
             "sp.inp",
             "! HF STO-3G\n%freq AnFreq true end",
             "other",
-            "unknown",
-            "Unknown",
+            "unsupported",
+            "Other",
         ),
         (
             "IRC_sp_numfreq",
             "sp.inp",
             "! HF STO-3G\n%freq\n  NumFreq true\nend",
             "other",
-            "unknown",
-            "Unknown",
+            "unsupported",
+            "Other",
         ),
         (
             "IRC_sp_anfreq_off",
@@ -243,13 +243,22 @@ _H2 = "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
             "sp.inp",
             "! HF STO-3G\n%geom TS_search EF end",
             "other",
-            "unknown",
-            "Unknown",
+            "unsupported",
+            "Other",
         ),
         (
             "IRC_sp_energygrad",
             "sp.inp",
             "! HF STO-3G EnergyGrad",
+            "other",
+            "unsupported",
+            "Other",
+        ),
+        ("neb_idpp", "sp.inp", "! HF STO-3G NEB-IDPP", "other", "neb-idpp", "NEB-IDPP"),
+        (
+            "uncertain_search",
+            "sp.inp",
+            "! HF STO-3G\n%geom TS_search end",
             "other",
             "unknown",
             "Unknown",
@@ -278,6 +287,8 @@ _H2 = "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
         "numfreq-false",
         "geom-ts-search",
         "energygrad",
+        "neb-idpp",
+        "uncertain-ts-search",
         "tddft-only",
     ],
 )
@@ -400,17 +411,17 @@ def test_submitted_esd_input_keeps_job_type_and_never_renders_sp(
         assert (execution_dir / name).read_text(encoding="utf-8") == text
     # The coarse scientific type is untouched; only the display refuses SP.
     assert entry.metadata["job_type"] == "other"
-    assert entry.metadata["detail_kind"] == "unknown"
+    assert entry.metadata["detail_kind"] == "unsupported"
     record = json.loads(
         json.dumps(activity_orca.queue_record(entry, None, allowed_root=tmp_path).to_dict())
     )
     assert record["metadata"]["job_type"] == "other"
-    assert record["metadata"]["detail_kind"] == "unknown"
-    assert queue_detail_text(record) == "Unknown"
+    assert record["metadata"]["detail_kind"] == "unsupported"
+    assert queue_detail_text(record) == "Other"
     table = queue_list_table({"activities": [record], "active_simulations": 0}, max_width=None)
     [row] = table.rows
     # Status, Name, Detail, ID, Elapsed; no cell holds a space here.
-    assert row.split()[2:4] == ["Unknown", entry.queue_id]
+    assert row.split()[2:4] == ["Other", entry.queue_id]
     assert "SP" not in row.split()
 
 

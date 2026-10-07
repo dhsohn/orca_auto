@@ -356,3 +356,4 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0015: 워커 자신의 runs root로 한정한 admission 복구](adr/0015-admission-recovery-scoped-to-own-runs-root.md)
 - [ADR 0016: 추가 알림 제공자 Slack](adr/0016-slack-notification-provider.md)
 - [ADR 0017: 큐 Detail kind 어휘와 Unknown 폴백](adr/0017-queue-detail-kind-vocabulary.md)
+- [ADR 0018: Other 연산 근거와 Unknown 큐 Detail](adr/0018-queue-detail-other-and-unknown.md)
