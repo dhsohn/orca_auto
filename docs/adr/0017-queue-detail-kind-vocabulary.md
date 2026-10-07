@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Partly superseded by [ADR 0018](0018-queue-detail-other-and-unknown.md)
 
 ## Context
 

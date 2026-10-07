@@ -26,6 +26,8 @@ QUEUE_DETAIL_KIND_LABELS: dict[str, str] = {
     "ts": "TS",
     "freq": "Freq",
     "neb-ts": "NEB-TS",
+    "neb-idpp": "NEB-IDPP",
+    "neb-mmfts": "NEB-MMFTS",
     "opt+freq": "Opt+Freq",
     "ts+freq": "TS+Freq",
     "ts+irc": "TS+IRC",
@@ -34,6 +36,8 @@ QUEUE_DETAIL_KIND_LABELS: dict[str, str] = {
     "neb-ts+irc": "NEB-TS+IRC",
     "neb-ts+freq+irc": "NEB-TS+Freq+IRC",
     "unknown": "Unknown",
+    "unsupported": "Other",
+    # Legacy "other" never distinguished a definite operation from missing evidence.
     "other": "Unknown",
 }
 
@@ -41,7 +45,15 @@ QUEUE_DETAIL_KINDS = frozenset(QUEUE_DETAIL_KIND_LABELS)
 
 _COMPOUND_EXTRA_ORDER = ("freq", "irc", "neb")
 
+# Exact presentation aliases only; scientific route rules stay in completion_rules.
 _NEB_TOKEN_RE = re.compile(r"(?:ZOOM-)?NEB(?:-CI)?", re.IGNORECASE)
+_NEB_NAMED_KINDS = frozenset({"neb-idpp", "neb-mmfts"})
+_NEB_TS_TOKENS = frozenset(
+    {"neb-ts", "zoom-neb-ts", "fast-neb-ts", "loose-neb-ts", "tight-neb-ts", "flat-neb-ts"}
+)
+_NEB_PATH_TOKENS = _NEB_NAMED_KINDS | {"neb", "neb-ci", "zoom-neb", "zoom-neb-ci"}
+_NEB_TOKENS = _NEB_PATH_TOKENS | _NEB_TS_TOKENS
+_NEB_FAMILY_RE = re.compile(r"(?:[A-Z0-9]+-)*NEB(?:[-(].*)?", re.IGNORECASE)
 _NON_SINGLE_POINT_TOKEN_RE = re.compile(
     r"EN(?:ERGY)?GRAD|NUMGRAD|SCANTS|EXTOPT|GOAT(?:-\w+)?|DOCKER|SOLVATOR"
     r"|COMPOUND(?:_FILE)?"
@@ -53,6 +65,21 @@ _NON_SINGLE_POINT_TOKEN_RE = re.compile(
 _NON_SINGLE_POINT_BLOCKS = frozenset({"md", "goat", "docker", "solvator", "esd"})
 _OPERATION_KEYS = frozenset({"runtyp", "ts_search"})
 _FREQUENCY_SWITCHES = frozenset({"anfreq", "numfreq"})
+_DEFINITE_UNSUPPORTED_TOKEN_RE = re.compile(
+    r"EN(?:ERGY)?GRAD|NUMGRAD|SCANTS|EXTOPT|GOAT(?:-(?:ENTROPY|EXPLORE|REACT|DIVERSITY|TS|COARSE))?"
+    r"|DOCKER|SOLVATOR|COMPOUND(?:_FILE)?|MD"
+    r"|CIM|PRINTTHERMOCHEM|PROPERTIESONLY|EDA|NMSCAN|NORMALMODESCAN|NMGRAD(?:IENT)?"
+    r"|MTR|MT|MODETRAJECTORY",
+    re.IGNORECASE,
+)
+_ESD_OPERATION_RE = re.compile(
+    r"(?<!\S)ESD\s*\(\s*(?:ABS|FLUOR|PHOSP|ISC|IC|RR|RRAMAN)\s*\)(?!\S)", re.IGNORECASE
+)
+_BLOCK_OPERATION_VALUES = {
+    "freq": {key: frozenset({"true", "false"}) for key in _FREQUENCY_SWITCHES},
+    "geom": {"ts_search": frozenset({"ef"})},
+    "method": {"runtyp": frozenset({"gradient", "engrad", "energygrad", "numgrad"})},
+}
 
 
 def queue_detail_kind_label(detail_kind: str) -> str | None:
@@ -102,7 +129,7 @@ def _is_not_one_plain_job(lines: list[str]) -> bool:
         tokens = orca_line_tokens(line)
         if not tokens:
             continue
-        if tokens[0].value.lower() in {"$new_job", "$newjob"}:
+        if not tokens[0].quoted and tokens[0].value.lower() in {"$new_job", "$newjob"}:
             return True
         header = percent_directive_header(tokens)
         if header is not None and (
@@ -124,10 +151,158 @@ def _route_tokens(lines: list[str]) -> list[str]:
     return [token.value for line in lines for token in orca_route_tokens(line) if not token.quoted]
 
 
+def _presentation_input_lines(lines: list[str]) -> list[str]:
+    """Exclude quoted route names only for Detail, leaving scientific readers unchanged."""
+    result: list[str] = []
+    for line in lines:
+        tokens = orca_line_tokens(line)
+        if tokens and tokens[0].value.startswith("!"):
+            line = "" if tokens[0].quoted else "! " + " ".join(_route_tokens([line]))
+        result.append(line)
+    return result
+
+
+def _operation_keyword_positions(lines: list[str]) -> set[tuple[int, int]]:
+    """Markers the conservative guard sees, except route frequency aliases."""
+    positions: set[tuple[int, int]] = set()
+    for line_index, line in enumerate(lines):
+        tokens = orca_line_tokens(line)
+        header = percent_directive_header(tokens)
+        if header is not None and header[0].startswith("compound"):
+            # Compound reference syntax is checked by its own evidence reader.
+            continue
+        positions.update(
+            (line_index, token.start)
+            for token in tokens
+            if token.value.lower() in _OPERATION_KEYS | _FREQUENCY_SWITCHES
+        )
+    return positions - _route_frequency_keyword_positions(lines)
+
+
+def _block_operation_kind(lines: list[str], *, named_neb: bool) -> str | None:
+    """Positive operation evidence in closed blocks; uncertain values take precedence."""
+    requested = False
+    scan_proven = False
+    seen: set[tuple[str, str]] = set()
+    unexplained = _operation_keyword_positions(lines)
+    for name in _NON_SINGLE_POINT_BLOCKS | _BLOCK_OPERATION_VALUES.keys():
+        for block in iter_blocks(lines, name):
+            located = [(row.line_index, token) for row in block.rows for token in row.tokens]
+            tokens = [token for _line_index, token in located]
+            if name in _NON_SINGLE_POINT_BLOCKS:
+                if not block.closed:
+                    return "unknown"
+                unexplained.difference_update(
+                    (line_index, token.start) for line_index, token in located if token.quoted
+                )
+                requested = True
+                continue
+            values = _BLOCK_OPERATION_VALUES[name]
+            for index, (line_index, token) in enumerate(located):
+                key = token.value.lower()
+                if key not in values:
+                    continue
+                identity = (name, key)
+                if token.quoted or not block.closed or identity in seen:
+                    return "unknown"
+                seen.add(identity)
+                value_index = value_token_index(tokens, index)
+                if (
+                    value_index >= len(tokens)
+                    or tokens[value_index].quoted
+                    or tokens[value_index].value.lower() not in values[key]
+                ):
+                    return "unknown"
+                unexplained.discard((line_index, token.start))
+                if name == "freq" and tokens[value_index].value.lower() == "true" and named_neb:
+                    return "unknown"
+                if name != "freq" or tokens[value_index].value.lower() == "true":
+                    requested = True
+            if name == "geom" and any(
+                not token.quoted and token.value.lower() == "scan" for token in tokens
+            ):
+                if not block.closed or not scan_coordinate_rows(lines[block.start : block.end + 1]):
+                    return "unknown"
+                scan_proven = True
+                requested = True
+    if unexplained or (scan_coordinate_rows(lines) is not None and not scan_proven):
+        return "unknown"
+    return "unsupported" if requested else None
+
+
+def _quoted_text_is_closed(text: str) -> bool:
+    """A tokenizer quote closes only after an even run of preceding backslashes."""
+    if len(text) < 2 or text[0] not in {'"', "'"} or text[-1] != text[0]:
+        return False
+    prefix = text[:-1]
+    return (len(prefix) - len(prefix.rstrip("\\"))) % 2 == 0
+
+
+def _compound_operation_kind(lines: list[str]) -> str | None:
+    """A complete compound file directive or route-bearing segments around $new_job."""
+    requested = False
+    new_jobs: list[int] = []
+    for line_index, line in enumerate(lines):
+        tokens = orca_line_tokens(line)
+        if not tokens:
+            continue
+        if not tokens[0].quoted and tokens[0].value.lower() in {"$new_job", "$newjob"}:
+            new_jobs.append(line_index)
+        header = percent_directive_header(tokens)
+        if header is None or not header[0].startswith("compound"):
+            continue
+        body = tokens[header[1] :]
+        complete_file = (
+            len(body) == 1
+            and body[0].quoted
+            and bool(body[0].value)
+            and _quoted_text_is_closed(line[body[0].start : body[0].end])
+        )
+        if header[0] not in {"compound", "compound_file"} or not complete_file:
+            return "unknown"
+        requested = True
+    if new_jobs:
+        boundaries = [-1, *new_jobs, len(lines)]
+        if any(
+            not _route_tokens(lines[start + 1 : end])
+            for start, end in zip(boundaries, boundaries[1:], strict=False)
+        ):
+            return "unknown"
+        requested = True
+    return "unsupported" if requested else None
+
+
+def _unsupported_operation_kind(lines: list[str], tokens: list[str]) -> str:
+    """Separate proven unsupported requests from the existing conservative guard."""
+    block_kind = _block_operation_kind(
+        lines, named_neb=any(token.lower() in _NEB_NAMED_KINDS for token in tokens)
+    )
+    compound_kind = _compound_operation_kind(lines)
+    esd_markers = sum(
+        token.upper() == "ESD" or token.upper().startswith("ESD(") for token in tokens
+    )
+    esd_requests = len(_ESD_OPERATION_RE.findall(" ".join(tokens)))
+    uncertain_alias = any(
+        _NON_SINGLE_POINT_TOKEN_RE.fullmatch(token)
+        and not _DEFINITE_UNSUPPORTED_TOKEN_RE.fullmatch(token)
+        and not (token.upper() == "ESD" or token.upper().startswith("ESD("))
+        for token in tokens
+    )
+    if "unknown" in {block_kind, compound_kind} or esd_markers != esd_requests or uncertain_alias:
+        return "unknown"
+    if (
+        "unsupported" in {block_kind, compound_kind}
+        or esd_requests
+        or any(_DEFINITE_UNSUPPORTED_TOKEN_RE.fullmatch(token) for token in tokens)
+    ):
+        return "unsupported"
+    return "unknown"
+
+
 def _detail_is_unsupported(lines: list[str], facts: RouteFacts, tokens: list[str]) -> bool:
-    is_neb = any(_NEB_TOKEN_RE.fullmatch(token) for token in tokens)
+    is_neb = any(token.lower() in _NEB_TOKENS for token in tokens)
     return (
-        (facts.is_irc and is_neb)
+        (facts.is_irc and any(token.lower() in _NEB_PATH_TOKENS for token in tokens))
         or (facts.is_non_stationary and not is_neb)
         or any(token.upper() == "MD" for token in tokens)
         or any(_NON_SINGLE_POINT_TOKEN_RE.fullmatch(token) for token in tokens)
@@ -136,7 +311,10 @@ def _detail_is_unsupported(lines: list[str], facts: RouteFacts, tokens: list[str
     )
 
 
-def _primary_route_kind(facts: RouteFacts, routes: str) -> str | None:
+def _primary_route_kind(facts: RouteFacts, routes: str, tokens: list[str]) -> str | None:
+    for token in tokens:
+        if token.lower() in _NEB_NAMED_KINDS:
+            return token.lower()
     if facts.is_neb_ts:
         return "neb-ts"
     if facts.is_ts:
@@ -176,7 +354,9 @@ def _join_detail_kind(primary: str | None, extras: set[str]) -> str:
 
 
 def _assemble_detail_kind(facts: RouteFacts, routes: str, tokens: list[str], coarse: str) -> str:
-    primary = _primary_route_kind(facts, routes)
+    primary = _primary_route_kind(facts, routes, tokens)
+    if primary in _NEB_NAMED_KINDS and (facts.is_ts or facts.is_opt or SP_RE.search(routes)):
+        return "unknown"
     extras = _route_extras(facts, routes, tokens)
     if primary:
         kind = _join_detail_kind(primary, extras)
@@ -193,13 +373,36 @@ def queue_detail_kind(inp_path: Path, lines: list[str]) -> str:
     route_lines = orca_route_lines(lines)
     if not route_lines:
         return ""
+    lines = _presentation_input_lines(lines)
+    route_lines = orca_route_lines(lines)
+    tokens = _route_tokens(lines)
+    if not tokens or any(
+        _NEB_FAMILY_RE.fullmatch(token) and token.lower() not in _NEB_TOKENS for token in tokens
+    ):
+        return "unknown"
+    neb_tokens = {token.lower() for token in tokens if token.lower() in _NEB_TOKENS}
+    if neb_tokens & _NEB_NAMED_KINDS and len(neb_tokens) > 1:
+        return "unknown"
     coarse = job_type_from_routes(route_lines)
     facts = route_facts(inp_path, lines=lines)
     routes = " ".join(route_lines)
-    tokens = _route_tokens(lines)
-    if _detail_is_unsupported(lines, facts, tokens):
+    # A conservative non-stationary match needs an exact display operation;
+    # check each token because a TS keyword suppresses the aggregate route fact.
+    if any(
+        token.lower() not in _NEB_TOKENS
+        and token.upper() != "MD"
+        and route_facts(inp_path, lines=["! " + token]).is_non_stationary
+        for token in tokens
+    ):
         return "unknown"
-    return _assemble_detail_kind(facts, routes, tokens, coarse)
+    kind = _assemble_detail_kind(facts, routes, tokens, coarse)
+    if kind == "unknown":
+        return "unknown"
+    if _detail_is_unsupported(lines, facts, tokens):
+        if facts.is_irc and any(token.lower() in _NEB_PATH_TOKENS for token in tokens):
+            return "unknown"
+        return _unsupported_operation_kind(lines, tokens)
+    return kind
 
 
 __all__ = [

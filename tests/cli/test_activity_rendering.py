@@ -137,8 +137,16 @@ def test_queue_detail_text_never_shows_engine_identity_for_generic_orca_task_kin
         (_run_inp(job_type="other", detail_kind="sp", selected_inp="/r/IRC/g/irc.inp"), "SP"),
         (_run_inp(job_type="other", detail_kind="irc", selected_inp=_SP_IN_IRC_JOB), "IRC"),
         (_run_inp(job_type="other", detail_kind="neb", selected_inp="/r/a/g/calc.inp"), "NEB"),
-        # Recorded "other" (MD, frequencies by block, scans, compound, ...).
+        # Legacy "other" carries no certainty about the operation.
         (_run_inp(job_type="other", detail_kind="other", selected_inp=_SP_IN_IRC_JOB), "Unknown"),
+        (_run_inp(job_type="other", detail_kind="unsupported"), "Other"),
+        (_run_inp(job_type="ts", detail_kind="unsupported"), "Other"),
+        (_run_inp(job_type="other", detail_kind="neb-idpp"), "NEB-IDPP"),
+        (_run_inp(job_type="other", detail_kind="neb-mmfts"), "NEB-MMFTS"),
+        (_run_inp(job_type="other", detail_kind="Unsupported"), "Unknown"),
+        ({"job_type": "unsupported"}, "Unknown"),
+        ({"task_kind": "unsupported"}, "Unknown"),
+        ({"task_kind": "optts", "detail_kind": "unsupported"}, "OptTS"),
         # An unrecognized recorded value is no evidence.
         (_run_inp(job_type="other", detail_kind="bogus", selected_inp=_SP_IN_IRC_JOB), "Unknown"),
         (_run_inp(job_type="other", detail_kind="Opt", selected_inp="/r/a/g/opt.inp"), "Unknown"),
@@ -162,6 +170,14 @@ def test_queue_detail_text_never_shows_engine_identity_for_generic_orca_task_kin
         "detail-irc-over-sp-basename",
         "detail-neb",
         "detail-other",
+        "definite-unsupported",
+        "unsupported-over-coarse-ts",
+        "detail-neb-idpp",
+        "detail-neb-mmfts",
+        "unsupported-label-is-not-a-token",
+        "unsupported-coarse-type-is-no-evidence",
+        "unsupported-task-type-is-no-evidence",
+        "specific-task-over-unsupported-detail",
         "unknown-detail-is-no-evidence",
         "label-cased-detail-is-not-a-kind",
         "upper-case-detail-is-not-a-kind",
@@ -222,6 +238,22 @@ _PUBLICATION_PENDING = {
             ),
             "Unknown (waiting for resources)",
         ),
+        (
+            _run_inp(job_type="other", detail_kind="unsupported", **_PUBLICATION_PENDING),
+            "Other (result publication pending)",
+        ),
+        (
+            _run_inp(
+                job_type="other",
+                detail_kind="unsupported",
+                admission_deferral_reason="scratch is full",
+            ),
+            "Other (waiting for resources)",
+        ),
+        (
+            _run_inp(job_type="other", detail_kind="neb-idpp", **_PUBLICATION_PENDING),
+            "NEB-IDPP (result publication pending)",
+        ),
     ],
     ids=[
         "sp-publication-pending",
@@ -229,6 +261,9 @@ _PUBLICATION_PENDING = {
         "sp-publication-repair",
         "sp-resources",
         "legacy-resources",
+        "unsupported-publication-pending",
+        "unsupported-resources",
+        "neb-idpp-publication-pending",
     ],
 )
 def test_orca_detail_text_keeps_the_publication_and_resource_suffixes(
@@ -267,6 +302,9 @@ def test_queue_list_table_shows_sp_only_for_recorded_single_points_under_an_irc_
             ("q-opt", "opt.inp", "opt", None),
             ("q-legacy-irc", "irc.inp", "other", None),
             ("q-new-irc", "sp.inp", "other", "irc"),
+            ("q-new-unsupported", "sp.inp", "other", "unsupported"),
+            ("q-legacy-other", "sp.inp", "other", "other"),
+            ("q-new-idpp", "sp.inp", "other", "neb-idpp"),
         )
     ]
 
@@ -281,6 +319,9 @@ def test_queue_list_table_shows_sp_only_for_recorded_single_points_under_an_irc_
         "q-opt": "Opt",
         "q-legacy-irc": "Unknown",
         "q-new-irc": "IRC",
+        "q-new-unsupported": "Other",
+        "q-legacy-other": "Unknown",
+        "q-new-idpp": "NEB-IDPP",
     }
 
 

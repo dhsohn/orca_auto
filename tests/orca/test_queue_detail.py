@@ -61,19 +61,25 @@ def test_detail_kind_classifies_inputs_the_coarse_type_calls_other(
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "expected"),
     [
-        "! HF STO-3G MD\n%md\n  Run 10\nend\n" + _GEOMETRY,
-        "! B3LYP def2-SVP EnGrad\n" + _GEOMETRY,
-        "! B3LYP def2-SVP NumGrad\n" + _GEOMETRY,
-        "! B3LYP def2-SVP ScanTS\n" + _GEOMETRY,
-        "! XTB GOAT\n" + _GEOMETRY,
-        "! B3LYP def2-SVP NEB IRC\n" + _GEOMETRY,
-        "! B3LYP def2-SVP\n%geom Scan\n  B 0 1 = 0.7, 1.2, 6\nend\nend\n" + _GEOMETRY,
-        "! B3LYP def2-SVP\n%method\n  RunTyp Gradient\nend\n" + _GEOMETRY,
-        "! B3LYP def2-SVP\n" + _GEOMETRY + "$new_job\n! B3LYP def2-SVP\n" + _GEOMETRY,
-        '%compound "steps.cmp"\n! B3LYP def2-SVP\n' + _GEOMETRY,
-        "! B3LYP def2-SVP Compound\n" + _GEOMETRY,
+        ("! HF STO-3G MD\n%md\n  Run 10\nend\n" + _GEOMETRY, "unsupported"),
+        ("! B3LYP def2-SVP EnGrad\n" + _GEOMETRY, "unsupported"),
+        ("! B3LYP def2-SVP NumGrad\n" + _GEOMETRY, "unsupported"),
+        ("! B3LYP def2-SVP ScanTS\n" + _GEOMETRY, "unsupported"),
+        ("! XTB GOAT\n" + _GEOMETRY, "unsupported"),
+        ("! B3LYP def2-SVP NEB IRC\n" + _GEOMETRY, "unknown"),
+        (
+            "! B3LYP def2-SVP\n%geom Scan\n  B 0 1 = 0.7, 1.2, 6\nend\nend\n" + _GEOMETRY,
+            "unsupported",
+        ),
+        ("! B3LYP def2-SVP\n%method\n  RunTyp Gradient\nend\n" + _GEOMETRY, "unsupported"),
+        (
+            "! B3LYP def2-SVP\n" + _GEOMETRY + "$new_job\n! B3LYP def2-SVP\n" + _GEOMETRY,
+            "unsupported",
+        ),
+        ('%compound "steps.cmp"\n! B3LYP def2-SVP\n' + _GEOMETRY, "unsupported"),
+        ("! B3LYP def2-SVP Compound\n" + _GEOMETRY, "unsupported"),
     ],
     ids=[
         "md",
@@ -89,9 +95,11 @@ def test_detail_kind_classifies_inputs_the_coarse_type_calls_other(
         "compound-route",
     ],
 )
-def test_detail_kind_never_calls_unsupported_or_compound_inputs_a_single_point(text: str) -> None:
+def test_detail_kind_distinguishes_unsupported_operations_from_ambiguous_combinations(
+    text: str, expected: str
+) -> None:
     assert job_type_from_routes(orca_route_lines(text.splitlines())) == "other"
-    assert _kind(text) == "unknown"
+    assert _kind(text) == expected
 
 
 _HF = "! HF STO-3G\n"
@@ -103,19 +111,7 @@ _NESTED_GEOM = "%geom\n  Constraints\n    { B 0 1 C }\n  end\nend\n"
 @pytest.mark.parametrize(
     "block",
     [
-        "%freq AnFreq true end\n",
-        "%freq NumFreq true end\n",
-        "%freq\n  AnFreq true\nend\n",
-        "%freq\n  NumFreq true\nend\n",
-        "%freq AnFreq = true end\n",
-        "%FREQ anfreq TRUE END\n",
-        "% freq NumFreq true end\n",
-        "%freq\n  NumFreq\n  true\nend\n",
-        "%freq AnFreq false NumFreq true end\n",
         "%freq AnFreq true AnFreq false end\n",
-        "%freq Temp 298.15 # comment # AnFreq true end\n",
-        _NESTED_GEOM + "%freq AnFreq true end\n",
-        "%freq\n  Constraints\n  end\n  AnFreq true\nend\n",
         # Missing, unrecognized or quoted values and quoted keys are no "false".
         "%freq AnFreq end\n",
         "%freq NumFreq\nend\n",
@@ -131,19 +127,7 @@ _NESTED_GEOM = "%geom\n  Constraints\n    { B 0 1 C }\n  end\nend\n"
         "%freq AnFreq false\n",
     ],
     ids=[
-        "anfreq-inline",
-        "numfreq-inline",
-        "anfreq-multiline",
-        "numfreq-multiline",
-        "equals",
-        "case-insensitive",
-        "spaced-header",
-        "value-on-next-row",
-        "one-of-two-enabled",
         "duplicate-key",
-        "after-closed-inline-comment",
-        "after-nested-geom-block",
-        "after-nested-sub-block",
         "missing-value-inline",
         "missing-value-multiline",
         "yes",
@@ -157,12 +141,36 @@ _NESTED_GEOM = "%geom\n  Constraints\n    { B 0 1 C }\n  end\nend\n"
         "unclosed-block",
     ],
 )
-def test_detail_kind_never_calls_a_frequency_switch_a_single_point(block: str) -> None:
+def test_detail_kind_keeps_uncertain_frequency_switches_unknown(block: str) -> None:
     text = _HF + block + _GEOMETRY
 
     # The coarse scientific type stays "other"; only the display refuses SP.
     assert job_type_from_routes(orca_route_lines(text.splitlines())) == "other"
     assert _kind(text) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "%freq AnFreq true end\n",
+        "%freq NumFreq true end\n",
+        "%freq\n  AnFreq true\nend\n",
+        "%freq\n  NumFreq true\nend\n",
+        "%freq AnFreq = true end\n",
+        "%FREQ anfreq TRUE END\n",
+        "% freq NumFreq true end\n",
+        "%freq\n  NumFreq\n  true\nend\n",
+        "%freq AnFreq false NumFreq true end\n",
+        "%freq Temp 298.15 # comment # AnFreq true end\n",
+        _NESTED_GEOM + "%freq AnFreq true end\n",
+        "%freq\n  Constraints\n  end\n  AnFreq true\nend\n",
+    ],
+)
+def test_detail_kind_records_a_definite_block_frequency_request_as_unsupported(block: str) -> None:
+    text = _HF + block + _GEOMETRY
+
+    assert job_type_from_routes(orca_route_lines(text.splitlines())) == "other"
+    assert _kind(text) == "unsupported"
 
 
 @pytest.mark.parametrize(
@@ -201,18 +209,20 @@ def test_detail_kind_keeps_a_method_only_input_with_disabled_switches_a_single_p
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "expected"),
     [
-        _HF + "%geom TS_search EF end\n" + _GEOMETRY,
-        _HF + "%geom\n  TS_Search EF\nend\n" + _GEOMETRY,
-        _HF + "%geom TS_search end\n" + _GEOMETRY,
-        _HF + _NESTED_GEOM + "%geom TS_search EF end\n" + _GEOMETRY,
+        (_HF + "%geom TS_search EF end\n" + _GEOMETRY, "unsupported"),
+        (_HF + "%geom\n  TS_Search EF\nend\n" + _GEOMETRY, "unsupported"),
+        (_HF + "%geom TS_search end\n" + _GEOMETRY, "unknown"),
+        (_HF + _NESTED_GEOM + "%geom TS_search EF end\n" + _GEOMETRY, "unsupported"),
     ],
     ids=["inline", "multiline", "missing-value", "after-nested-geom-block"],
 )
-def test_detail_kind_never_calls_a_geom_ts_search_a_single_point(text: str) -> None:
+def test_detail_kind_requires_a_closed_ts_search_with_a_known_value(
+    text: str, expected: str
+) -> None:
     assert job_type_from_routes(orca_route_lines(text.splitlines())) == "other"
-    assert _kind(text) == "unknown"
+    assert _kind(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -237,7 +247,7 @@ def test_detail_kind_never_calls_another_run_type_a_single_point(keyword: str) -
     text = f"! HF STO-3G {keyword}\n" + _GEOMETRY
 
     assert job_type_from_routes(orca_route_lines(text.splitlines())) == "other"
-    assert _kind(text) == "unknown"
+    assert _kind(text) == "unsupported"
 
 
 # The admitted ESD(FLUOR) input of the execution-binding tests and the ORCA 6.1
@@ -257,13 +267,13 @@ _ESD_ABS_VG = (
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "expected"),
     [
-        _ESD_FLUOR,
-        _ESD_ABS_VG,
+        (_ESD_FLUOR, "unsupported"),
+        (_ESD_ABS_VG, "unsupported"),
         # Every ESD alias of the manual, in any case and spacing.
         *(
-            f"! B3LYP def2-SVP {keyword}\n" + _GEOMETRY
+            (f"! B3LYP def2-SVP {keyword}\n" + _GEOMETRY, "unsupported")
             for keyword in (
                 "ESD(ABS)",
                 "ESD(FLUOR)",
@@ -274,23 +284,23 @@ _ESD_ABS_VG = (
                 "ESD(RRAMAN)",
                 "esd(abs)",
                 "Esd(Fluor)",
-                # Bare, spaced, unclosed and unknown forms are no plain energy either.
-                "ESD",
                 "ESD (ABS)",
                 "ESD( ABS )",
-                "ESD(ABS",
-                "ESD(UNKNOWN)",
             )
         ),
-        "! B3LYP def2-SVP\n%maxcore 1000\n! ESD(ABS)\n" + _GEOMETRY,
-        "!ESD(FLUOR) B3LYP def2-SVP\n" + _GEOMETRY,
+        # Bare, unclosed and unknown forms remain uncertain, never plain energy.
+        ("! B3LYP def2-SVP ESD\n" + _GEOMETRY, "unknown"),
+        ("! B3LYP def2-SVP ESD(ABS\n" + _GEOMETRY, "unknown"),
+        ("! B3LYP def2-SVP ESD(UNKNOWN)\n" + _GEOMETRY, "unknown"),
+        ("! B3LYP def2-SVP\n%maxcore 1000\n! ESD(ABS)\n" + _GEOMETRY, "unsupported"),
+        ("!ESD(FLUOR) B3LYP def2-SVP\n" + _GEOMETRY, "unsupported"),
         # A %esd block configures the ESD module; it has no documented off form.
-        _HF + "%esd HessFlag VG end\n" + _GEOMETRY,
-        _HF + "%esd\n  HessFlag VG\n  DoHT true\nend\n" + _GEOMETRY,
-        _HF + "% esd HessFlag VG end\n" + _GEOMETRY,
-        _HF + "%ESD HESSFLAG VG END\n" + _GEOMETRY,
-        _HF + "%esd end\n" + _GEOMETRY,
-        _HF + "%esd\n  DoHT true\n" + _GEOMETRY,
+        (_HF + "%esd HessFlag VG end\n" + _GEOMETRY, "unsupported"),
+        (_HF + "%esd\n  HessFlag VG\n  DoHT true\nend\n" + _GEOMETRY, "unsupported"),
+        (_HF + "% esd HessFlag VG end\n" + _GEOMETRY, "unsupported"),
+        (_HF + "%ESD HESSFLAG VG END\n" + _GEOMETRY, "unsupported"),
+        (_HF + "%esd end\n" + _GEOMETRY, "unsupported"),
+        (_HF + "%esd\n  DoHT true\n" + _GEOMETRY, "unknown"),
     ],
     ids=[
         "established-fluor",
@@ -304,9 +314,9 @@ _ESD_ABS_VG = (
         "rraman",
         "lower-case",
         "mixed-case",
-        "bare",
         "spaced",
         "spaced-inside",
+        "bare",
         "unclosed",
         "unknown",
         "later-route-line",
@@ -319,10 +329,12 @@ _ESD_ABS_VG = (
         "esd-block-unclosed",
     ],
 )
-def test_detail_kind_never_calls_an_esd_request_a_single_point(text: str) -> None:
+def test_detail_kind_distinguishes_definite_esd_requests_from_uncertain_forms(
+    text: str, expected: str
+) -> None:
     # The coarse scientific type stays "other"; only the display refuses SP.
     assert job_type_from_routes(orca_route_lines(text.splitlines())) == "other"
-    assert _kind(text) == "unknown"
+    assert _kind(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -413,7 +425,9 @@ def test_detail_kind_without_route_lines_is_no_evidence(text: str) -> None:
     assert _kind(text) == ""
 
 
-@pytest.mark.parametrize("name", ["sp.inp", "irc.inp", "ts.inp", "tsp.inp", "opt_freq.inp"])
+@pytest.mark.parametrize(
+    "name", ["sp.inp", "irc.inp", "ts.inp", "tsp.inp", "opt_freq.inp", "neb-idpp.inp", "esd.inp"]
+)
 def test_detail_kind_ignores_the_input_name(name: str) -> None:
     # A file name is never operation evidence, here or in the queue table.
     assert _kind("! B3LYP def2-SVP\n" + _GEOMETRY, name) == "sp"
@@ -432,8 +446,8 @@ def test_detail_kind_ignores_the_input_name(name: str) -> None:
         ("! optts numfreq\n" + _GEOMETRY, "ts+freq"),
         ("! NEB-TS NumFreq IRC\n" + _GEOMETRY, "neb-ts+freq+irc"),
         ("! zoom-neb-ts anfreq irc\n" + _GEOMETRY, "neb-ts+freq+irc"),
-        # Block-only frequency on method-only input stays unknown (not route aliases).
-        ("! HF STO-3G\n%freq AnFreq true end\n" + _GEOMETRY, "unknown"),
+        # Block-only frequency has definite evidence but no specific supported Detail kind.
+        ("! HF STO-3G\n%freq AnFreq true end\n" + _GEOMETRY, "unsupported"),
     ],
     ids=[
         "route-numfreq",
@@ -445,7 +459,7 @@ def test_detail_kind_ignores_the_input_name(name: str) -> None:
         "optts-route-numfreq-case",
         "neb-ts-route-numfreq-irc",
         "zoom-neb-ts-route-anfreq-irc",
-        "block-anfreq-stays-unknown",
+        "block-anfreq-is-unsupported",
     ],
 )
 def test_detail_kind_treats_route_numfreq_anfreq_as_freq_not_block_switches(
@@ -467,6 +481,9 @@ def test_detail_kind_treats_route_numfreq_anfreq_as_freq_not_block_switches(
         ("! Freq", "Freq"),
         ("! B3LYP def2-SVP", "SP"),
         ("! OptTS IRC", "TS+IRC"),
+        ("! NEB-IDPP", "NEB-IDPP"),
+        ("! NEB-MMFTS", "NEB-MMFTS"),
+        ("! EnGrad", "Other"),
     ],
     ids=[
         "optts-freq",
@@ -478,6 +495,9 @@ def test_detail_kind_treats_route_numfreq_anfreq_as_freq_not_block_switches(
         "freq",
         "implicit-sp",
         "optts-irc",
+        "neb-idpp",
+        "neb-mmfts",
+        "unsupported-engrad",
     ],
 )
 def test_detail_kind_labels_match_queue_detail_text(route: str, label: str) -> None:
@@ -491,3 +511,265 @@ def test_detail_kind_labels_match_queue_detail_text(route: str, label: str) -> N
         "detail_kind": queue_detail_kind(Path("/nonexistent/job.inp"), lines),
     }
     assert queue_detail_text({"engine": "orca", "metadata": metadata}) == label
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "%md Run 10\n",
+        "%esd HessFlag VG\n",
+        "%geom TS_search EF\n",
+        '%geom TS_search "EF" end\n',
+        "%geom TS_search Unrecognized end\n",
+        "%geom Scan\n  B 0 1 = 0.7, 1.2, 6\nend\n",
+        "%geom Scan end end\n",
+        "%method RunTyp Gradient\n",
+        "%method RunTyp end\n",
+        '%method RunTyp "Gradient" end\n',
+        "%method RunTyp Unrecognized end\n",
+        "%compound\n",
+        "%compound end\n",
+        '%compound "unfinished.cmp\n',
+        "$new_job\n",
+    ],
+)
+def test_detail_kind_does_not_promote_incomplete_or_unreadable_operation_evidence(
+    operation: str,
+) -> None:
+    assert _kind(_HF + operation + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize("module", ["md", "goat", "docker", "solvator"])
+def test_detail_kind_requires_closed_module_blocks_without_a_route_operation(module: str) -> None:
+    assert _kind(_HF + f"%{module} end\n" + _GEOMETRY) == "unsupported"
+    assert _kind(_HF + f"%{module}\n" + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize("value", ["Gradient", "EnGrad", "EnergyGrad", "NumGrad"])
+def test_detail_kind_recognizes_definite_non_energy_runtyp_values(value: str) -> None:
+    assert _kind(_HF + f"%method RunTyp {value} end\n" + _GEOMETRY) == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "! HF STO-3G EnGrad\n%freq AnFreq end\n" + _GEOMETRY,
+        "! HF STO-3G ESD(ABS)\n%esd HessFlag VG\n" + _GEOMETRY,
+        _HF + "%md end\n%geom TS_search EF\n" + _GEOMETRY,
+        "! HF STO-3G GOAT-UNKNOWN\n" + _GEOMETRY,
+        "! HF STO-3G GOAT-UNKNOWN EnGrad\n" + _GEOMETRY,
+        "! HF STO-3G EnGrad GOAT-UNKNOWN\n" + _GEOMETRY,
+        "! HF STO-3G GOAT-UNKNOWN\n%freq AnFreq true end\n" + _GEOMETRY,
+        "! HF STO-3G MD-UNKNOWN\n" + _GEOMETRY,
+        "! HF STO-3G MD-UNKNOWN EnGrad\n" + _GEOMETRY,
+        "! HF STO-3G EnGrad MD-UNKNOWN\n" + _GEOMETRY,
+        "! HF STO-3G MD-UNKNOWN\n%freq AnFreq true end\n" + _GEOMETRY,
+    ],
+)
+def test_detail_kind_keeps_uncertain_operations_unknown_despite_another_positive_marker(
+    text: str,
+) -> None:
+    assert _kind(text) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["!", "! # MD", '! "NEB-IDPP"', '! "NEB-TS"', '! "! MD"'],
+)
+def test_detail_kind_without_active_route_tokens_is_unknown(route: str) -> None:
+    assert _kind(route + "\n" + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        ("NEB", "neb"),
+        ("NEB-CI", "neb"),
+        ("ZOOM-NEB", "neb"),
+        ("ZOOM-NEB-CI", "neb"),
+        ("NEB-TS", "neb-ts"),
+        ("ZOOM-NEB-TS", "neb-ts"),
+        ("FAST-NEB-TS", "neb-ts"),
+        ("LOOSE-NEB-TS", "neb-ts"),
+        ("TIGHT-NEB-TS", "neb-ts"),
+        ("FLAT-NEB-TS", "neb-ts"),
+        ("NEB-IDPP", "neb-idpp"),
+        ("NEB-MMFTS", "neb-mmfts"),
+    ],
+)
+def test_detail_kind_preserves_known_neb_family_names(operation: str, expected: str) -> None:
+    assert _kind(f"! HF STO-3G {operation}\n" + _GEOMETRY) == expected
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["FAST-NEB-IDPP", "ZOOM-NEB-IDPP", "FAST-NEB-MMFTS", "UNRECOGNIZED-NEB-TS", "NEB-UNKNOWN"],
+)
+def test_detail_kind_does_not_invent_neb_family_aliases(operation: str) -> None:
+    assert _kind(f"! HF STO-3G {operation}\n" + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    ["NEB-IDPP", "NEB-MMFTS", "NEB-TS", "NEB", "OptTS", "IRC", "MD", "MD-UNKNOWN", "GOAT-UNKNOWN"],
+)
+def test_detail_kind_does_not_read_operations_from_quoted_or_commented_route_names(
+    keyword: str,
+) -> None:
+    assert _kind(f'! HF STO-3G "{keyword}"\n' + _GEOMETRY) == "sp"
+    assert _kind(f"! HF STO-3G # {keyword}\n" + _GEOMETRY) == "sp"
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "! NEB-IDPP Freq",
+        "! NEB-IDPP IRC",
+        "! NEB-IDPP OptTS",
+        "! HF STO-3G NEB-IDPP NEB-MMFTS",
+        "! HF STO-3G NEB-MMFTS NEB-IDPP",
+        "! NEB-IDPP NEB",
+        "! NEB-MMFTS NEB-TS",
+    ],
+)
+def test_detail_kind_keeps_ambiguous_named_neb_combinations_unknown(route: str) -> None:
+    assert _kind(route + "\n" + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize("named_neb", ["NEB-IDPP", "NEB-MMFTS"])
+@pytest.mark.parametrize(
+    "operation", ["Opt", "OptTS", "Freq", "NumFreq", "AnFreq", "SP", "Energy", "IRC"]
+)
+def test_detail_kind_does_not_resolve_named_neb_route_ambiguity_with_a_positive_block(
+    named_neb: str,
+    operation: str,
+) -> None:
+    route = f"! HF STO-3G {named_neb} {operation}\n"
+    assert _kind(route + _GEOMETRY) == "unknown"
+    assert _kind(route + "%freq AnFreq true end\n" + _GEOMETRY) == "unknown"
+    assert _kind(route + "%freq NumFreq true end\n" + _GEOMETRY) == "unknown"
+    assert _kind(route + "! EnGrad\n" + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("named_neb", "label_kind"), [("NEB-IDPP", "neb-idpp"), ("NEB-MMFTS", "neb-mmfts")]
+)
+@pytest.mark.parametrize("switch", ["AnFreq", "NumFreq"])
+def test_detail_kind_treats_named_neb_route_and_block_frequencies_as_the_same_ambiguity(
+    named_neb: str,
+    label_kind: str,
+    switch: str,
+) -> None:
+    route = f"! HF STO-3G {named_neb}\n"
+    assert _kind(route + _GEOMETRY) == label_kind
+    assert _kind(route + f"%freq {switch} false end\n" + _GEOMETRY) == label_kind
+    assert _kind(route + f'! "{switch}"\n' + _GEOMETRY) == label_kind
+    assert _kind(route + f"# {switch}\n" + _GEOMETRY) == label_kind
+    assert _kind(f"! HF STO-3G {named_neb} {switch}\n" + _GEOMETRY) == "unknown"
+    assert _kind(route + f"%freq {switch} true end\n" + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+@pytest.mark.parametrize(
+    ("backslashes", "expected"),
+    [
+        (0, "unsupported"),
+        (1, "unknown"),
+        (2, "unsupported"),
+        (3, "unknown"),
+        (4, "unsupported"),
+        (5, "unknown"),
+    ],
+)
+def test_detail_kind_requires_an_unescaped_compound_reference_delimiter(
+    quote: str,
+    backslashes: int,
+    expected: str,
+) -> None:
+    reference = quote + "finished" + ("\\" * backslashes) + quote
+    assert _kind(f"%compound {reference}\n" + _HF + _GEOMETRY) == expected
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_detail_kind_preserves_an_escaped_internal_quote_with_a_real_compound_closure(
+    quote: str,
+) -> None:
+    reference = quote + "fi\\" + quote + "nished.cmp" + quote
+    assert _kind(f"%compound {reference}\n" + _HF + _GEOMETRY) == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "RunTyp Gradient\n",
+        "TS_search EF\n",
+        "AnFreq true\n",
+        "%scf RunTyp Gradient end\n",
+        "%method TS_search EF end\n",
+        "%method AnFreq true end\n",
+        "%freq end AnFreq true\n",
+        "%freq AnFreq false end\nAnFreq true\n",
+        "%geom end\nScan B 0 1 = 0.7, 1.2, 6\nend\n",
+    ],
+)
+def test_detail_kind_does_not_erase_orphan_operation_evidence_with_another_positive_marker(
+    operation: str,
+) -> None:
+    assert _kind(_HF + operation + _GEOMETRY) == "unknown"
+    assert _kind("! HF STO-3G EnGrad\n" + operation + _GEOMETRY) == "unknown"
+    assert _kind(_HF + operation + "! EnGrad\n" + _GEOMETRY) == "unknown"
+    assert _kind(_HF + operation + "%freq NumFreq true end\n" + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "route", ["GOAT-ENTROPY EnGrad", "EnGrad GOAT-ENTROPY", "MD", "MD EnGrad", "EnGrad MD"]
+)
+def test_detail_kind_preserves_definite_unsupported_route_markers(route: str) -> None:
+    assert _kind(f"! HF STO-3G {route}\n" + _GEOMETRY) == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["OptTS", "NEB-TS", "SP", "Opt", "Freq", "IRC", "NEB", "NEB-IDPP", "NEB-MMFTS"],
+)
+@pytest.mark.parametrize("unknown_first", [False, True])
+@pytest.mark.parametrize("marker_position", ["absent", "before", "after"])
+def test_detail_kind_keeps_unknown_md_evidence_despite_known_route_precedence(
+    operation: str,
+    unknown_first: bool,
+    marker_position: str,
+) -> None:
+    tokens = ["MD-UNKNOWN", operation] if unknown_first else [operation, "MD-UNKNOWN"]
+    if marker_position == "before":
+        tokens.insert(0, "EnGrad")
+    elif marker_position == "after":
+        tokens.append("EnGrad")
+
+    assert _kind("! HF STO-3G " + " ".join(tokens) + "\n" + _GEOMETRY) == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        ("OptTS", "ts"),
+        ("NEB-TS", "neb-ts"),
+        ("SP", "sp"),
+        ("Opt", "opt"),
+        ("Freq", "freq"),
+        ("IRC", "irc"),
+        ("NEB", "neb"),
+        ("NEB-IDPP", "neb-idpp"),
+        ("NEB-MMFTS", "neb-mmfts"),
+    ],
+)
+def test_detail_kind_preserves_known_routes_when_checking_each_non_stationary_token(
+    operation: str,
+    expected: str,
+) -> None:
+    route = f"! HF STO-3G {operation}"
+    assert _kind(route + "\n" + _GEOMETRY) == expected
+    assert _kind(route + ' "MD-UNKNOWN"\n' + _GEOMETRY) == expected
+    assert _kind(route + " # MD-UNKNOWN EnGrad\n" + _GEOMETRY) == expected
+    assert _kind(route + " EnGrad\n" + _GEOMETRY) == "unsupported"
+    assert _kind(f"! HF STO-3G EnGrad {operation}\n" + _GEOMETRY) == "unsupported"
+    assert _kind(route + " MD EnGrad\n" + _GEOMETRY) == "unsupported"
