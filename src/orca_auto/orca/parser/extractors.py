@@ -6,7 +6,9 @@ from collections.abc import Iterator, Sequence
 
 from ..input_syntax import orca_line_tokens
 from .patterns import (
+    _ATOM_COUNT_RE,
     _BASIS_KEYWORDS,
+    _COORD_JOB_BOUNDARY_RE,
     _COORD_XYZ_LINE_RE,
     _CPCM_TOKEN_RE,
     _INPUT_LINE_RE,
@@ -103,10 +105,21 @@ def parse_coordinates(text: str) -> list[AtomRow]:
     The last section holds the final geometry after an optimization; for a
     single point it is the input geometry echoed back. An empty or malformed
     final table invalidates geometry instead of exposing an earlier table or
-    a valid row prefix. For supported single-job outputs, an earlier complete
-    table also supplies the atom count needed to detect row-boundary truncation.
+    a valid row prefix. Printed atom counts must agree within this engine job.
+    Without a printed count, the first parseable table supplies the baseline;
+    this fallback assumes that initial table is intact. Later truncated tables
+    cannot replace that baseline.
     """
     header = "CARTESIAN COORDINATES (ANGSTROEM)"
+    last_header = text.rfind(header)
+    if last_header < 0:
+        return []
+    # This only isolates coordinate evidence, not general compound-job metadata.
+    # A prior engine's atom count must never constrain the final engine's table.
+    boundaries = list(_COORD_JOB_BOUNDARY_RE.finditer(text, 0, last_header))
+    if boundaries:
+        text = text[boundaries[-1].end() :]
+
     section_starts: list[int] = []
     section_start = text.find(header)
     while section_start >= 0:
@@ -158,7 +171,18 @@ def parse_coordinates(text: str) -> list[AtomRow]:
         return []
 
     expected_n_atoms: int | None = None
-    for index in range(last_index - 1, -1, -1):
+    for declaration in _ATOM_COUNT_RE.finditer(text):
+        raw_count = declaration.group(1)
+        if raw_count is None:
+            return []
+        count = int(raw_count)
+        if count <= 0 or (expected_n_atoms is not None and count != expected_n_atoms):
+            return []
+        expected_n_atoms = count
+
+    for index in range(last_index):
+        if expected_n_atoms is not None:
+            break
         previous_start = section_starts[index]
         previous_end = section_starts[index + 1]
         previous_atoms = _parse_section(previous_start, previous_end)

@@ -1206,3 +1206,127 @@ def test_parser_rejects_damaged_final_table_in_authentic_water_output(damage: st
     assert result.elements == []
     assert result.n_atoms == 0
     assert result.formula == ""
+
+
+@pytest.mark.parametrize(
+    ("counts", "expected_count"),
+    [([3, 2, 2], 0), ([3, 2, 3], 3)],
+    ids=["repeated_truncation", "complete_final_after_truncation"],
+)
+def test_final_coordinates_keep_first_established_atom_count(
+    counts: list[int], expected_count: int
+) -> None:
+    rows = ["O 0.0 0.0 0.0", "H 1.0 0.0 0.0", "H 0.0 1.0 0.0"]
+    text = "".join(
+        "CARTESIAN COORDINATES (ANGSTROEM)\n---------------------------------\n"
+        + "\n".join(rows[:count])
+        + f"\n\nFINAL SINGLE POINT ENERGY {-75.0 - index}\n"
+        for index, count in enumerate(counts)
+    )
+    result = parse_orca_output_text(text, source_path="three_tables.out")
+    assert result.n_atoms == expected_count
+    assert result.coordinates == (
+        [("O", 0.0, 0.0, 0.0), ("H", 1.0, 0.0, 0.0), ("H", 0.0, 1.0, 0.0)] if expected_count else []
+    )
+    assert result.energy_hartree == -77.0
+
+
+@pytest.mark.parametrize("declared_counts", [["3"], ["3", "3"], ["3", "2"], ["BROKEN"], ["0"]])
+def test_declared_atom_count_rejects_shortened_coordinate_tables(
+    declared_counts: list[str],
+) -> None:
+    text = "".join(f"Number of atoms                         .... {n}\n" for n in declared_counts)
+    text += (
+        "CARTESIAN COORDINATES (ANGSTROEM)\n---------------------------------\n"
+        "O 0.0 0.0 0.0\nH 1.0 0.0 0.0\n\nFINAL SINGLE POINT ENERGY -75.0\n"
+    )
+    result = parse_orca_output_text(text, source_path="declared_count.out")
+    assert result.coordinates == []
+    assert result.n_atoms == 0
+
+
+@pytest.mark.parametrize("boundary", ["* O   R   C   A *", "****ORCA TERMINATED NORMALLY****"])
+def test_coordinate_atom_count_does_not_cross_job_boundary(boundary: str) -> None:
+    text = (
+        "Number of atoms                         .... 3\n"
+        "CARTESIAN COORDINATES (ANGSTROEM)\n---------------------------------\n"
+        "O 0.0 0.0 0.0\nH 1.0 0.0 0.0\nH 0.0 1.0 0.0\n\n"
+        "FINAL SINGLE POINT ENERGY -75.0\n"
+        f"{boundary}\n"
+        "Number of atoms                         .... 2\n"
+        "CARTESIAN COORDINATES (ANGSTROEM)\n---------------------------------\n"
+        "H 0.0 0.0 0.0\nH 0.0 0.0 0.74\n\n"
+        "FINAL SINGLE POINT ENERGY -1.1\n"
+    )
+    result = parse_orca_output_text(text, source_path="concatenated.out")
+    assert result.coordinates == [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)]
+    assert result.energy_hartree == -1.1
+
+
+@pytest.mark.parametrize("shorten_final", [False, True], ids=["complete_final", "short_final"])
+def test_authentic_water_intervening_truncation_keeps_established_count(
+    shorten_final: bool,
+) -> None:
+    fixture = Path(__file__).parents[2] / "fixtures" / "orca_6_1_1" / "water_opt_freq.out"
+    header = "CARTESIAN COORDINATES (ANGSTROEM)"
+    sections = read_orca_text(str(fixture)).split(header)
+    for index in [-2, -1] if shorten_final else [-2]:
+        lines = sections[index].splitlines(keepends=True)
+        assert lines[4].lstrip().startswith("H ")
+        del lines[4]
+        sections[index] = "".join(lines)
+    result = parse_orca_output_text(header.join(sections), source_path=str(fixture))
+    assert result.energy_hartree == pytest.approx(-74.965901189921, abs=1e-10)
+    assert result.coordinates == (
+        []
+        if shorten_final
+        else [
+            ("O", 0.066935, 0.0, 0.066935),
+            ("H", -0.019526, 0.0, 1.052591),
+            ("H", 1.052591, 0.0, -0.019526),
+        ]
+    )
+
+
+@pytest.mark.parametrize("cases", [("water_opt_freq", "h2_sp"), ("h2_sp", "water_opt_freq")])
+@pytest.mark.parametrize("shorten_final", [False, True])
+def test_authentic_concatenation_does_not_share_coordinate_counts(
+    cases: tuple[str, str], shorten_final: bool
+) -> None:
+    # Only coordinate-count isolation is asserted; this does not establish
+    # support for a compound/multi-job result's other metadata.
+    fixtures = Path(__file__).parents[2] / "fixtures" / "orca_6_1_1"
+    first, last = [read_orca_text(str(fixtures / f"{case}.out")) for case in cases]
+    expected = (
+        [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)]
+        if cases[1] == "h2_sp"
+        else [
+            ("O", 0.066935, 0.0, 0.066935),
+            ("H", -0.019526, 0.0, 1.052591),
+            ("H", 1.052591, 0.0, -0.019526),
+        ]
+    )
+    if shorten_final:
+        header = "CARTESIAN COORDINATES (ANGSTROEM)"
+        prefix, section = last.rsplit(header, 1)
+        lines = section.splitlines(keepends=True)
+        del lines[2 + len(expected) - 1]
+        last = prefix + header + "".join(lines)
+    result = parse_orca_output_text(first + last, source_path="concatenated.out")
+    assert result.coordinates == ([] if shorten_final else expected)
+    assert len(expected) == (2 if cases[1] == "h2_sp" else 3)
+
+
+@pytest.mark.parametrize("prefix", ["|  7> ", "# ", "diagnostic: "])
+def test_echoed_atom_count_and_job_banner_do_not_override_geometry(prefix: str) -> None:
+    text = (
+        "Number of atoms                         .... 3\n"
+        f"{prefix}* O   R   C   A *\n"
+        f"{prefix}Number of atoms                         .... 2\n"
+        "CARTESIAN COORDINATES (ANGSTROEM)\n---------------------------------\n"
+        "O 0.0 0.0 0.0\nH 1.0 0.0 0.0\nH 0.0 1.0 0.0\n\n"
+        "FINAL SINGLE POINT ENERGY -75.0\n"
+    )
+    result = parse_orca_output_text(text, source_path="echoed_count.out")
+    assert result.n_atoms == 3
+    assert result.coordinates == [("O", 0.0, 0.0, 0.0), ("H", 1.0, 0.0, 0.0), ("H", 0.0, 1.0, 0.0)]

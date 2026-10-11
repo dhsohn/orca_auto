@@ -595,8 +595,9 @@ def test_parsed_final_output_caches_by_mtime(tmp_path: Path) -> None:
     ],
     ids=["empty", "malformed", "row_boundary"],
 )
+@pytest.mark.parametrize("intervening_truncation", [False, True])
 def test_si_block_fails_closed_on_stale_or_partial_final_coordinates(
-    tmp_path: Path, final_rows: list[str]
+    tmp_path: Path, final_rows: list[str], intervening_truncation: bool
 ) -> None:
     out_text = "\n".join(
         [
@@ -609,6 +610,17 @@ def test_si_block_fails_closed_on_stale_or_partial_final_coordinates(
             "  C      0.000000    0.000000    0.000000",
             "  H      1.000000    0.000000    0.000000",
             "FINAL SINGLE POINT ENERGY      -100.100000",
+            *(
+                [
+                    "CARTESIAN COORDINATES (ANGSTROEM)",
+                    "---------------------------------",
+                    "  C      0.250000    0.000000    0.000000",
+                    "",
+                    "FINAL SINGLE POINT ENERGY      -100.150000",
+                ]
+                if intervening_truncation
+                else []
+            ),
             "CARTESIAN COORDINATES (ANGSTROEM)",
             "---------------------------------",
             *final_rows,
