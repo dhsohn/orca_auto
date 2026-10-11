@@ -38,13 +38,6 @@ def final_single_point_energy_value(text: str) -> float:
     return value
 
 
-# Coordinate section (element + xyz)
-_COORD_SECTION_RE = re.compile(
-    r"CARTESIAN COORDINATES \(ANGSTROEM\)\s*\n"
-    r"-+\s*\n"
-    r"((?:\s*[A-Z][a-z]?\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+\s*\n)+)",
-)
-
 # Thermodynamics
 ENTHALPY_RE = re.compile(r"Total (?:E|e)nthalpy\s*\.{3,}\s*([-\d.]+)\s*Eh")
 GIBBS_RE = re.compile(r"Final Gibbs free energy\s*\.{3,}\s*([-\d.]+)\s*Eh")
