@@ -6,8 +6,9 @@ from collections.abc import Iterator, Sequence
 
 from ..input_syntax import orca_line_tokens
 from .patterns import (
+    _ATOM_COUNT_RE,
     _BASIS_KEYWORDS,
-    _COORD_SECTION_RE,
+    _COORD_JOB_BOUNDARY_RE,
     _COORD_XYZ_LINE_RE,
     _CPCM_TOKEN_RE,
     _INPUT_LINE_RE,
@@ -102,17 +103,96 @@ def parse_coordinates(text: str) -> list[AtomRow]:
     """Atom rows (element, x, y, z in Å) from the LAST coordinate section.
 
     The last section holds the final geometry after an optimization; for a
-    single point it is the input geometry echoed back.
+    single point it is the input geometry echoed back. An empty or malformed
+    final table invalidates geometry instead of exposing an earlier table or
+    a valid row prefix. Printed atom counts must agree within this engine job.
+    Without a printed count, the first parseable table supplies the baseline;
+    this fallback assumes that initial table is intact. Later truncated tables
+    cannot replace that baseline.
     """
-    sections = list(_COORD_SECTION_RE.finditer(text))
-    if not sections:
+    header = "CARTESIAN COORDINATES (ANGSTROEM)"
+    last_header = text.rfind(header)
+    if last_header < 0:
+        return []
+    # This only isolates coordinate evidence, not general compound-job metadata.
+    # A prior engine's atom count must never constrain the final engine's table.
+    boundaries = list(_COORD_JOB_BOUNDARY_RE.finditer(text, 0, last_header))
+    if boundaries:
+        text = text[boundaries[-1].end() :]
+
+    section_starts: list[int] = []
+    section_start = text.find(header)
+    while section_start >= 0:
+        section_starts.append(section_start)
+        section_start = text.find(header, section_start + len(header))
+    if not section_starts:
         return []
 
-    last_section = sections[-1].group(1)
-    return [
-        (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
-        for match in _COORD_XYZ_LINE_RE.finditer(last_section)
-    ]
+    def _parse_section(start: int, end: int) -> list[AtomRow] | None:
+        section_lines = text[start + len(header) : end].splitlines()
+        line_index = 0
+        while line_index < len(section_lines) and not section_lines[line_index].strip():
+            line_index += 1
+        if line_index >= len(section_lines):
+            return []
+
+        separator = section_lines[line_index].strip()
+        if not separator or set(separator) != {"-"}:
+            return None
+        line_index += 1
+
+        atoms: list[AtomRow] = []
+        while line_index < len(section_lines):
+            raw_line = section_lines[line_index]
+            if not raw_line.strip():
+                break
+            match = _COORD_XYZ_LINE_RE.match(raw_line)
+            if match is None or raw_line[match.end() :].strip():
+                # Besides a blank line, only the final energy line closes the
+                # table; any other non-row line is a malformed row.
+                if FINAL_SINGLE_POINT_ENERGY_RE.match(raw_line):
+                    break
+                return None
+            atoms.append(
+                (
+                    match.group(1),
+                    float(match.group(2)),
+                    float(match.group(3)),
+                    float(match.group(4)),
+                )
+            )
+            line_index += 1
+        return atoms
+
+    last_index = len(section_starts) - 1
+    last_start = section_starts[last_index]
+    atoms = _parse_section(last_start, len(text))
+    if atoms is None or not atoms:
+        return []
+
+    expected_n_atoms: int | None = None
+    for declaration in _ATOM_COUNT_RE.finditer(text):
+        raw_count = declaration.group(1)
+        if raw_count is None:
+            return []
+        count = int(raw_count)
+        if count <= 0 or (expected_n_atoms is not None and count != expected_n_atoms):
+            return []
+        expected_n_atoms = count
+
+    for index in range(last_index):
+        if expected_n_atoms is not None:
+            break
+        previous_start = section_starts[index]
+        previous_end = section_starts[index + 1]
+        previous_atoms = _parse_section(previous_start, previous_end)
+        if previous_atoms:
+            expected_n_atoms = len(previous_atoms)
+            break
+
+    if expected_n_atoms is not None and len(atoms) != expected_n_atoms:
+        return []
+    return atoms
 
 
 def parse_program_version(text: str) -> str:

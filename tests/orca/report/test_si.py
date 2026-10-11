@@ -584,3 +584,56 @@ def test_parsed_final_output_caches_by_mtime(tmp_path: Path) -> None:
     second, _ = parsed_final_output(out)
     assert first.energy_hartree == pytest.approx(-1.0)
     assert second.energy_hartree == pytest.approx(-2.0)
+
+
+@pytest.mark.parametrize(
+    "final_rows",
+    [
+        [],
+        ["  C      0.500000    0.000000    0.000000", "  H      BROKEN"],
+        ["  C      0.500000    0.000000    0.000000"],
+    ],
+    ids=["empty", "malformed", "row_boundary"],
+)
+@pytest.mark.parametrize("intervening_truncation", [False, True])
+def test_si_block_fails_closed_on_stale_or_partial_final_coordinates(
+    tmp_path: Path, final_rows: list[str], intervening_truncation: bool
+) -> None:
+    out_text = "\n".join(
+        [
+            "|  1> ! wB97M-V def2-TZVPP",
+            "|  2> * xyz 0 1",
+            "|  3> C 0.0 0.0 0.0",
+            "|  4> *",
+            "CARTESIAN COORDINATES (ANGSTROEM)",
+            "---------------------------------",
+            "  C      0.000000    0.000000    0.000000",
+            "  H      1.000000    0.000000    0.000000",
+            "FINAL SINGLE POINT ENERGY      -100.100000",
+            *(
+                [
+                    "CARTESIAN COORDINATES (ANGSTROEM)",
+                    "---------------------------------",
+                    "  C      0.250000    0.000000    0.000000",
+                    "",
+                    "FINAL SINGLE POINT ENERGY      -100.150000",
+                ]
+                if intervening_truncation
+                else []
+            ),
+            "CARTESIAN COORDINATES (ANGSTROEM)",
+            "---------------------------------",
+            *final_rows,
+            "",
+            "FINAL SINGLE POINT ENERGY      -100.200000",
+            "                             ****ORCA TERMINATED NORMALLY****",
+        ]
+    )
+    reaction_dir, state = _job_dir(tmp_path, "stale_coords", inp_text=_SP_INP, out_text=out_text)
+
+    with pytest.raises(OrcaEvidenceError, match="lacks a final energy or geometry"):
+        _evidence(reaction_dir, state)
+
+    generation, identity = report_generation_target(reaction_dir)
+    assert write_si_block(reaction_dir, state, generation_target=(generation, identity)) is None
+    assert not si_block_path(generation).exists()

@@ -38,13 +38,6 @@ def final_single_point_energy_value(text: str) -> float:
     return value
 
 
-# Coordinate section (element + xyz)
-_COORD_SECTION_RE = re.compile(
-    r"CARTESIAN COORDINATES \(ANGSTROEM\)\s*\n"
-    r"-+\s*\n"
-    r"((?:\s*[A-Z][a-z]?\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+\s*\n)+)",
-)
-
 # Thermodynamics
 ENTHALPY_RE = re.compile(r"Total (?:E|e)nthalpy\s*\.{3,}\s*([-\d.]+)\s*Eh")
 GIBBS_RE = re.compile(r"Final Gibbs free energy\s*\.{3,}\s*([-\d.]+)\s*Eh")
@@ -54,6 +47,19 @@ THERMO_TEMPERATURE_RE = re.compile(r"THERMOCHEMISTRY AT\s+([\d.]+)\s*K")
 
 # Program header: "Program Version 5.0.4 -  RELEASE  -"
 _PROGRAM_VERSION_RE = re.compile(r"Program Version\s+([\w.]+)")
+
+# Geometry count evidence is local to one engine job. These anchored output
+# markers deliberately exclude echoed input and comments.
+_COORD_JOB_BOUNDARY_RE = re.compile(
+    r"^[ \t]*(?:\*[ \t]+O[ \t]+R[ \t]+C[ \t]+A[ \t]+\*|"
+    r"\*{4}ORCA TERMINATED NORMALLY\*{4})[ \t]*\r?$",
+    re.MULTILINE,
+)
+_ATOM_COUNT_RE = re.compile(
+    r"^[ \t]*Number of atoms\b[ \t]*"
+    r"(?:\.{3,}[ \t]+([0-9]+)[ \t]*|[^\r\n]*)\r?$",
+    re.MULTILINE,
+)
 
 # Coordinate line including the xyz values (Å)
 _COORD_XYZ_LINE_RE = re.compile(
