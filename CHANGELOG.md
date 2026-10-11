@@ -8,6 +8,27 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [10.2.1] - 2026-10-11
+
+Version 10.2.1 is a patch release fixing restart-guard timestamp precision
+(#398). No state migration or change to scientific completion criteria is
+required; see [Upgrading to 10.2.1](docs/RELEASE.md#upgrading-to-1021).
+
+### Fixed
+
+- The restart guard requests systemd's UTC timestamp with microseconds and
+  converts it to integer nanoseconds before comparing configuration `mtime`
+  and `ctime`. A configuration written before worker startup within the same
+  second no longer causes a false refusal. A change even one nanosecond after
+  the recorded start still blocks restart; no tolerance or guard bypass is
+  introduced.
+- Start-time evidence rejects failed or warning-producing queries, malformed
+  timestamps and extra output lines. Process identity, unchanged configuration,
+  admission locking and idle-only restart checks remain in force.
+- Checkout freshness stays conservative when a precise worker start and a
+  seconds-only Git reflog update fall within the same second: the worker is
+  still reported stale rather than assumed to have loaded the updated code.
+
 ## [10.2.0] - 2026-10-11
 
 Version 10.2 is a minor release. It expands queue Detail labels and fixes input
