@@ -494,3 +494,70 @@ def test_reservation_waits_through_entire_restart_and_resumes_after_exit(
             process.join(5)
         parent.close()
         child.close()
+
+
+@pytest.mark.parametrize("changed_field", ["mtime", "ctime"])
+@pytest.mark.parametrize(
+    ("offset_ns", "allowed"),
+    [
+        (-34_888_968, True),  # Observed config ctime 07:03:44.525884032 UTC.
+        (-1, True),
+        (0, True),
+        (1, False),
+        (34_888_968, False),
+        (-1_000_000_000, True),
+        (1_000_000_000, False),
+    ],
+    ids=["observed", "before_1ns", "equal", "after_1ns", "reversed", "older", "newer"],
+)
+def test_guard_compares_config_times_to_exact_subsecond_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_field: str,
+    offset_ns: int,
+    allowed: bool,
+) -> None:
+    site = _site(tmp_path)
+    evidence = _Evidence({WORKER: site})
+    # Literal UTC epoch of the observed systemd record, independently pinned.
+    started_ns = 1_791_615_824_560_773_000
+    original_identity = cli_systemd_restart_guard._config_identity
+
+    def identity(config: Path) -> tuple[int, int, int, int, int]:
+        dev, ino, size, _mtime, _ctime = original_identity(config)
+        modified = started_ns + offset_ns
+        older = started_ns - 2_000_000_000
+        return (
+            dev,
+            ino,
+            size,
+            modified if changed_field == "mtime" else older,
+            (modified if changed_field == "ctime" else older),
+        )
+
+    monkeypatch.setattr(cli_systemd_restart_guard, "_config_identity", identity)
+
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        result = evidence.run(argv, **kwargs)
+        if "--property=ExecMainStartTimestamp" in argv:
+            # Model systemctl's actual loss of precision under --timestamp=utc.
+            fraction = ".560773" if "--timestamp=us+utc" in argv else ""
+            result.stdout = f"Sat 2026-10-10 07:03:44{fraction} UTC\n"
+        return result
+
+    slots = site.admission / "admission_slots.json"
+    before = slots.read_bytes()
+    guard = cli_systemd_restart_guard.guard_service_restart(
+        WORKER, run=run, read_process_file=evidence.read_process_file
+    )
+    if allowed:
+        with guard:
+            _assert_locked(site.admission)
+    else:
+        with (
+            pytest.raises(ValueError, match="Cannot verify unchanged running configuration"),
+            guard,
+        ):
+            pytest.fail("a config change after the exact start must still block restart")
+    _assert_unlocked(site.admission)
+    assert slots.read_bytes() == before

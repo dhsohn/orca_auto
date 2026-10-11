@@ -10,6 +10,7 @@ freshness judges return, kept here because both deployment models produce it.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 from collections.abc import Callable
@@ -116,7 +117,16 @@ def unit_start_epoch(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> float:
-    """Epoch at which the unit's main process started, from systemd's record.
+    """Main-process start in epoch seconds, for display and coarse comparisons."""
+    return unit_start_epoch_ns(unit, run=run) / 1_000_000_000
+
+
+def unit_start_epoch_ns(
+    unit: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> int:
+    """Exact main-process start in epoch nanoseconds, from systemd's record.
 
     systemd snapshots CLOCK_REALTIME when it forks the main process, so the
     value stays true after later clock steps. Deriving the start from
@@ -131,18 +141,34 @@ def unit_start_epoch(
             unit,
             "ExecMainStartTimestamp",
             run=run,
-            extra_args=("--timestamp=utc",),
+            extra_args=("--timestamp=us+utc",),
         )
     except OSError as exc:
         raise ValueError(f"systemctl show failed: {exc}") from exc
-    value = cli_systemd_units.single_line_command_output(completed)
-    # "Mon 2026-08-03 09:33:12 UTC" — parse without the weekday token so the
-    # verdict does not depend on the CLI locale.
-    tokens = value.split()
-    if len(tokens) != 4 or tokens[3] != "UTC":
+    if completed.returncode != 0 or normalize_text(completed.stderr):
+        raise ValueError("systemctl show failed to report a clean start timestamp")
+    value = str(completed.stdout or "")
+    if value.endswith("\r\n"):
+        value = value[:-2]
+    elif value.endswith("\n"):
+        value = value[:-1]
+    # Ignore the weekday token to avoid depending on the CLI locale. Accept
+    # whole seconds conservatively, but never truncate fractional evidence or
+    # accept extra lines. us+utc normally prints exactly six fractional digits.
+    match = re.fullmatch(
+        r"\S+ ([0-9]{4}-[0-9]{2}-[0-9]{2} "
+        r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{6})?) UTC",
+        value,
+    )
+    if match is None:
         raise ValueError(f"unrecognized ExecMainStartTimestamp: {value!r}")
-    started = datetime.strptime(f"{tokens[1]} {tokens[2]}", "%Y-%m-%d %H:%M:%S")
-    return started.replace(tzinfo=UTC).timestamp()
+    stamp = match.group(1)
+    format_string = "%Y-%m-%d %H:%M:%S.%f" if "." in stamp else "%Y-%m-%d %H:%M:%S"
+    started = datetime.strptime(stamp, format_string).replace(tzinfo=UTC)
+    elapsed = started - datetime(1970, 1, 1, tzinfo=UTC)
+    # datetime.timestamp() is a float: a float round-trip can move the boundary
+    # by hundreds of nanoseconds and hide a config edit just after startup.
+    return ((elapsed.days * 86_400 + elapsed.seconds) * 1_000_000 + elapsed.microseconds) * 1_000
 
 
 def parse_process_start_ticks(raw_stat: bytes, *, pid: int) -> int:
@@ -258,5 +284,6 @@ __all__ = [
     "unit_environment_values",
     "unit_main_pid",
     "unit_start_epoch",
+    "unit_start_epoch_ns",
     "worker_process_import_evidence",
 ]

@@ -124,7 +124,7 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
                 value = str(head_commit_epoch)
             return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
         if argv[:4] == ["systemctl", "show", "--property=ExecMainStartTimestamp", "--value"]:
-            assert argv[4] == "--timestamp=utc"
+            assert argv[4] == "--timestamp=us+utc"
             return subprocess.CompletedProcess(
                 argv, 0, stdout=f"{start_stamps[argv[5]]}\n", stderr=""
             )
@@ -228,7 +228,7 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
                 value = str(update_epoch - 86_400)
             return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
         if argv[:4] == ["systemctl", "show", "--property=ExecMainStartTimestamp", "--value"]:
-            assert argv[4] == "--timestamp=utc"
+            assert argv[4] == "--timestamp=us+utc"
             if argv[5] == "orca_auto-queue-worker@bob.service":
                 head_moved = True
             return subprocess.CompletedProcess(
@@ -1096,3 +1096,48 @@ def test_head_update_epoch_rejects_a_reflog_that_does_not_name_head() -> None:
         )
     with pytest.raises(ValueError, match="no HEAD reflog entry"):
         cli_systemd_freshness_checkout.head_update_epoch_from_reflog("", head_sha="b" * 40)
+
+
+@pytest.mark.parametrize(
+    ("start", "stale"),
+    [("09:02:30.100000", True), ("09:02:30.999999", True), ("09:02:31.000000", False)],
+)
+def test_fractional_start_does_not_outresolve_seconds_only_checkout_evidence(
+    tmp_path: Path, start: str, stale: bool
+) -> None:
+    # A HEAD update at .900 has only whole-second reflog evidence. Neither a
+    # worker at .100 nor one at .999999 proves it imported the updated source.
+    update_epoch = 1_785_747_750
+    head_sha = "a" * 40
+    source_root, import_source = _editable_checkout(tmp_path)
+    unit = "orca_auto-queue-worker@alice.service"
+
+    def run(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if (unpinned := _unpinned_unit_reply(argv)) is not None:
+            return unpinned
+        if argv[0] == "git":
+            args = argv[3:]
+            if (reply := _tracking_reply(source_root, args)) is not None:
+                value = reply
+            elif args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                value = head_sha
+            elif args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
+                value = f"{head_sha}\0HEAD@{{{update_epoch}}}\0merge origin/main: Fast-forward"
+            else:
+                assert args == ["show", "-s", "--format=%ct", head_sha]
+                value = str(update_epoch - 86400)
+        elif "--property=MainPID" in argv:
+            value = "41"
+        else:
+            assert "--property=ExecMainStartTimestamp" in argv
+            value = f"Mon 2026-08-03 {start} UTC"
+        return subprocess.CompletedProcess(argv, 0, stdout=value + "\n", stderr="")
+
+    payload = _collect(
+        (cli_systemd_units.ServiceUnitStatus("worker", unit, "active", "enabled"),),
+        run=run,
+        read_process_file=_process_file_reader({41: import_source}),
+    )
+    assert payload is not None
+    assert payload["undetermined"] == []
+    assert [entry["unit"] for entry in payload["stale"]] == ([unit] if stale else [])

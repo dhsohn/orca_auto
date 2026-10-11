@@ -321,10 +321,10 @@ def judge_checkout_worker(
         "import_source": str(import_source),
         "process_start_ticks": evidence.process_start_ticks,
     }
-    # systemd's formatted start timestamp has one-second precision. Treat an
-    # equal-second checkout update conservatively rather than allowing a
-    # timing truncation to produce a false-fresh verdict.
-    if started_epoch > head_evidence.head_update_epoch:
+    # Git reflog evidence has only whole-second precision. Even with a precise
+    # systemd start, an equal-second update cannot establish ordering; keep it
+    # stale rather than letting the fractional start imply false freshness.
+    if int(started_epoch) > head_evidence.head_update_epoch:
         return WorkerVerdict("worker", worker_row)
     return WorkerVerdict(
         "worker",
