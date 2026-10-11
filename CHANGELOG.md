@@ -8,6 +8,52 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [10.2.0] - 2026-10-11
+
+Version 10.2 is a minor release. It expands queue Detail labels and fixes input
+metadata and final-coordinate parsing. No field, status, reason, CLI option or
+configuration key is removed or renamed, and `completed` keeps its existing
+meaning. See [Upgrading to 10.2](docs/RELEASE.md#upgrading-to-102).
+
+### Added
+
+- Queue Detail records supported calculation types and requested combinations,
+  such as `Opt+Freq`, `TS+IRC` and `NEB-TS+Freq+IRC`, from the same admitted input
+  read. The normalized `detail_kind` remains presentation-only metadata, also
+  visible in `queue list --json`; it does not change coarse job types or
+  scientific completion criteria. Historical rows are not backfilled (#392).
+- Queue Detail distinguishes `Other` (positive evidence for an operation outside
+  the specific label vocabulary) from `Unknown` (insufficient or ambiguous
+  operation evidence). Known NEB aliases retain their labels, including
+  `NEB-IDPP` and `NEB-MMFTS`; a displayed operation is not proof of successful
+  chemistry. Legacy `other` metadata remains `Unknown` (#394).
+
+### Fixed
+
+- Method, basis and solvation parsing ignores commented input while preserving
+  active input after a closed `# ... #` comment. Commented SMD settings no longer
+  override active solvation settings (#393).
+- An empty or malformed final Angstroem coordinate table no longer falls back
+  to an earlier geometry or publishes a valid row prefix with the final energy.
+  Printed atom counts must agree within the same engine job; an intervening
+  truncated table cannot replace the established count. Without a printed
+  count, the first parseable table supplies the baseline, assuming that initial
+  table is intact. Job boundaries prevent earlier jobs' counts from leaking
+  into this check. Rejected geometry leaves coordinate metadata empty and
+  prevents an SI block from being produced; final-energy parsing is unchanged
+  (#395).
+
+### Validation and limits
+
+- The coordinate-fix source tree passed bounded, isolated ORCA 6.1.1 H2
+  single-point and water optimization/frequency acceptance, with one core/thread.
+  Regression coverage also uses retained authentic ORCA 6.1.1 outputs and
+  explicit corruption probes. This does not expand supported engine versions
+  or establish general compound/multi-job result parsing.
+- Coordinate and normal-mode association for dummy, ghost or embedded atoms,
+  and numerical or partial Hessians, remains uncharacterized. Historical
+  terminal observations are not rewritten or reclassified.
+
 ## [10.1.0] - 2026-10-04
 
 Version 10.1 is a minor release. It adds a bundled `machine.json` validator and
