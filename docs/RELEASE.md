@@ -30,6 +30,36 @@ schemas; release needs no `machine-contracts` clone. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to 10.2
+
+Version 10.2 adds queue Detail labels and fixes input metadata and final-coordinate
+parsing. It removes or renames no public field, status, reason, CLI option or
+configuration key. Completion criteria and coarse job types are unchanged.
+
+- Consumers of `queue list --json` may see the expanded `detail_kind` vocabulary;
+  `unsupported` displays as `Other`, while uncertain or legacy values display as
+  `Unknown`. These are presentation labels, not execution or success evidence.
+  Existing queue rows are not backfilled; see the
+  [Detail contract](PUBLIC_CONTRACTS.md#queue-list-detail-column).
+- An incomplete final coordinate table no longer supplies stale or partial
+  geometry to a report. Geometry metadata is empty and no SI block is produced
+  when final coordinates cannot be established. Final energy and recorded
+  completion status retain their existing meaning. Historical terminal
+  observations are not regenerated or reclassified.
+
+In an idle window:
+
+1. Wait for `queue list --json` to show `active_simulations: 0` and for all
+   admission reservations to clear.
+2. Retain the current runtime, units and configuration for rollback.
+3. Install 10.2 in a new environment or [prepared runtime](RUNTIME.md).
+4. Restart under the admission guard and verify `service status --json` against
+   the running worker's version, build and source root.
+
+There is no state migration. To roll back, restore the retained runtime and units
+in an idle window; observations already published by 10.2 remain as written.
+Publishing the package performs none of these deployment steps.
+
 ## Upgrading to 10.1
 
 Version 10.1 is a minor release. It removes or renames no field, status, reason,
