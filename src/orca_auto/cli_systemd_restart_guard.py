@@ -32,7 +32,7 @@ class _WorkerBinding:
     admission_root: Path
     pid: int
     start_ticks: int | None
-    started_epoch: float | None
+    started_epoch_ns: int | None
 
 
 def _installed_config(
@@ -104,7 +104,7 @@ def _worker_binding(
         raise ValueError(f"Cannot verify worker process identity for {unit}.")
     pid = int(pid_text)
     ticks: int | None = None
-    started: float | None = None
+    started_ns: int | None = None
     if pid:
         try:
             ticks = cli_systemd_evidence.read_process_start_ticks(
@@ -129,17 +129,17 @@ def _worker_binding(
                     raise ValueError
                 return result
 
-            started = cli_systemd_evidence.unit_start_epoch(unit, run=checked_run)
+            started_ns = cli_systemd_evidence.unit_start_epoch_ns(unit, run=checked_run)
             # This conservative timestamp check rejects ordinary live config
             # edits; it is not a frozen copy of the process's loaded config.
             # Operating policy still forbids reconfiguring running workers.
-            if max(identity[3:]) > int(started * 1_000_000_000):
+            if max(identity[3:]) > started_ns:
                 raise ValueError
             if cli_systemd_evidence.strict_unit_property(unit, "MainPID", run=run) != pid_text:
                 raise ValueError
         except (OSError, ValueError):
             raise ValueError(f"Cannot verify unchanged running configuration for {unit}.") from None
-    return _WorkerBinding(unit, config, identity, root, pid, ticks, started)
+    return _WorkerBinding(unit, config, identity, root, pid, ticks, started_ns)
 
 
 def _root_identity(root: Path) -> tuple[int, int, int, int]:
