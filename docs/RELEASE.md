@@ -30,6 +30,18 @@ schemas; release needs no `machine-contracts` clone. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to 10.2.1
+
+Version 10.2.1 fixes false restart refusals when configuration timestamps precede
+worker startup within the same second. It preserves systemd's microseconds in an
+integer comparison; actual post-start configuration changes and ambiguous start
+evidence still block restart. Same-second checkout updates remain conservatively
+stale because Git reflog evidence has only whole-second precision.
+
+Use the [10.2 idle-window upgrade procedure](#upgrading-to-102) and the normal
+restart guard. No state or configuration migration is required. Retain the prior
+runtime for rollback; historical terminal observations remain unchanged.
+
 ## Upgrading to 10.2
 
 Version 10.2 adds queue Detail labels and fixes input metadata and final-coordinate
