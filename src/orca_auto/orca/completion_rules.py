@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .input_blocks import iter_blocks, scan_coordinate_rows
-from .input_syntax import input_file_lines, orca_route_lines, value_token_index
+from .input_syntax import input_file_lines, orca_route_lines, orca_route_tokens, value_token_index
 
 # Only real ORCA TS keywords. No bare `TS` token: ORCA has no `! TS`, so it
 # can only ever match stray text (the SCAN-functional collision class), never
@@ -113,6 +113,7 @@ class RouteFacts:
     is_relaxed_scan: bool  # an optimization with a %geom Scan block
     has_constraints: bool
     is_non_stationary: bool  # a plain NEB / NEB-CI path or MD, no TS search
+    is_engrad: bool = False  # explicit energy-and-gradient request
 
 
 def route_facts(inp_path: Path, *, lines: list[str] | None = None) -> RouteFacts:
@@ -127,6 +128,11 @@ def route_facts(inp_path: Path, *, lines: list[str] | None = None) -> RouteFacts
     has_constraints = _has_geometry_constraints(lines)
     return RouteFacts(
         inp_path=inp_path,
+        is_engrad=any(
+            not token.quoted and token.value.casefold() in {"engrad", "energygrad"}
+            for line in lines
+            for token in orca_route_tokens(line)
+        ),
         route_lines=route_lines,
         is_ts=is_ts,
         is_irc=bool(IRC_ROUTE_RE.search(routes)),
