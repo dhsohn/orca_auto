@@ -52,13 +52,15 @@ class SpReportData:
     imaginary_count: int | None
     mode_summaries: tuple[ModeSummary, ...]
     si_block_text: str | None
+    is_engrad: bool = False
 
 
 def collect_sp_report_data(
     reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts, header: ReportHeader
 ) -> SpReportData:
     attempts = attempt_dicts(state)
-    rows = attempt_report_rows(attempts, "initial SP")
+    is_engrad = route.is_engrad
+    rows = attempt_report_rows(attempts, "initial EnGrad" if is_engrad else "initial SP")
 
     out_path = final_out_path(state)
     result: OrcaResult | None = None
@@ -92,6 +94,7 @@ def collect_sp_report_data(
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         si_block_text=si_block_text,
+        is_engrad=is_engrad,
     )
 
 
@@ -184,7 +187,7 @@ def sp_report_component(data: SpReportData) -> ReportComponent:
     version = data.result.orca_version if data.result is not None else ""
     version_text = f" &#183; ORCA {html.escape(version)}" if version else ""
     return ReportComponent(
-        kind_label="SP",
+        kind_label="EnGrad" if data.is_engrad else "SP",
         badges=tuple(status_badges(data.header)),
         meta_html=job_meta_html(
             data.header, data.header.first_route_line, formula_text + version_text

@@ -225,3 +225,30 @@ def test_vibrational_summary_falls_back_to_attempt_outputs(tmp_path: Path) -> No
 
     assert data is not None
     assert data.imaginary_count == 1
+
+
+@pytest.mark.parametrize("keyword", ["EnGrad", "EnergyGrad", "engrad"])
+def test_gradient_report_is_not_labeled_energy_only_sp(tmp_path: Path, keyword: str) -> None:
+    state = _job_dir(
+        tmp_path,
+        inp_text=f"! UKS r2SCAN-3c {keyword} CPCM(Water) TightSCF DefGrid3\n",
+        out_text=sp_out_text(),
+    )
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "EnGrad report" in text
+    assert "initial EnGrad" in text
+    assert "SP report" not in text
+    assert "initial SP" not in text
+    assert "Calculation type" not in text
+    assert "Gradient values and completeness are not validated" not in text
+    assert "-1234.567890" in text
+
+
+@pytest.mark.parametrize("route", ["! UKS r2SCAN-3c # EnGrad", '! UKS "EnGrad"', "! UKS MyEnGrad"])
+def test_commented_gradient_keyword_keeps_sp_report(tmp_path: Path, route: str) -> None:
+    state = _job_dir(tmp_path, inp_text=route + "\n", out_text=sp_out_text())
+    assert not _sp_data(tmp_path, state).is_engrad

@@ -183,3 +183,8 @@ Hessians, are not characterized, and the per-atom mode annotations in their HTML
 report and SI block are not established.
 
 Omitting --repo from systemd install selects the current isolated virtual environment and packaged templates. An explicit --repo selects a checkout or prepared runtime.
+
+Inputs requesting `EnGrad` (alias `EnergyGrad`) without an optimization use the
+`other` job category. Their HTML report is labeled EnGrad and summarizes energy;
+gradient values and gradient completeness are not validated. Completion retains
+the energy/termination checks above, so a completed job is not gradient acceptance.
