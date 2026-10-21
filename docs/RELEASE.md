@@ -30,6 +30,19 @@ schemas; release needs no `machine-contracts` clone. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to 10.2.2
+
+Version 10.2.2 fixes EnGrad labels, existing-output adoption, scratch recovery,
+report energy selection, damaged scan rows and command-specific restart
+permission checks. It removes no CLI option, configuration key or state field.
+EnGrad gradient values and completeness remain unvalidated.
+
+Use the [10.2 idle-window upgrade procedure](#upgrading-to-102) and the normal
+restart guard. No state or configuration migration is required. Historical
+terminal observations and reports are not rewritten. Retain the prior runtime
+for rollback; resolve interrupted scratch publication with the corrected runtime
+before switching back to a version without the recovery fixes.
+
 ## Upgrading to 10.2.1
 
 Version 10.2.1 fixes false restart refusals when configuration timestamps precede

@@ -8,7 +8,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [10.2.2] - 2026-10-21
+
+Version 10.2.2 packages the EnGrad labeling and correctness fixes in #403 and
+#404. No state or configuration migration is required. See
+[Upgrading to 10.2.2](docs/RELEASE.md#upgrading-to-1022).
+
 ### Fixed
+
+- Active EnGrad and EnergyGrad requests receive EnGrad report and attempt labels
+  instead of SP labels. Gradient values and completeness remain unvalidated;
+  existing completion criteria are unchanged.
 
 - Existing-output adoption matches the input basename literally and verifies a
   confined, single-link output before and after analysis.
