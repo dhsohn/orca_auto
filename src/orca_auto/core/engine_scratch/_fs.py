@@ -145,11 +145,12 @@ def _regular_file_sha256_at(
     name: str,
     *,
     display_path: Path,
+    allowed_link_counts: tuple[int, ...] = (1,),
 ) -> tuple[str, int]:
     descriptor = open_pinned_readonly(name, dir_fd=directory_fd)
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink not in allowed_link_counts:
             raise EngineScratchError(f"engine durable artifact is unsafe: {display_path}")
         digest = hashlib.sha256()
         size = 0

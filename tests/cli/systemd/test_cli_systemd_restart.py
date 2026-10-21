@@ -246,7 +246,17 @@ def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
 
     assert result == 0
     assert commands == [
-        ("sudo", "-v"),
+        (
+            "sudo",
+            "-n",
+            "-l",
+            "--",
+            "systemctl",
+            "reset-failed",
+            "orca_auto-queue-worker@alice.service",
+        ),
+        ("sudo", "-n", "-l", "--", "systemctl", "restart", "orca_auto-runtime@alice.target"),
+        ("sudo", "-n", "-l", "--", "systemctl", "restart", "orca_auto-queue-worker@alice.service"),
         ("sudo", "-n", "systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
         ("sudo", "-n", "systemctl", "restart", "orca_auto-runtime@alice.target"),
         ("sudo", "-n", "systemctl", "restart", "orca_auto-queue-worker@alice.service"),
@@ -421,3 +431,85 @@ def test_cmd_service_restart_force_bypasses_guard_and_warns(capsys: Any) -> None
     warning = (captured.out + captured.err).lower()
     assert "force" in warning and ("interrupt" in warning or "stop" in warning)
     assert any(command[1] == "restart" for command in commands)
+
+
+@pytest.mark.parametrize("password_required", [False, True])
+def test_restart_authentication_stays_outside_guard_and_honors_command_policy(
+    password_required: bool,
+) -> None:
+    guarded = False
+    authenticated = False
+    commands: list[tuple[str, ...]] = []
+
+    @contextmanager
+    def guard(*_args: Any, **_kwargs: Any) -> Iterator[None]:
+        nonlocal guarded
+        guarded = True
+        try:
+            yield
+        finally:
+            guarded = False
+
+    def run(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal authenticated
+        commands.append(tuple(argv))
+        if argv == ["sudo", "-v"]:
+            assert password_required, "NOPASSWD commands must not trigger global validation"
+            assert not guarded
+            authenticated = True
+        elif argv[:4] == ["sudo", "-n", "-l", "--"]:
+            assert not guarded
+            assert argv[4] == "systemctl"
+            return subprocess.CompletedProcess(argv, int(password_required), "", "")
+        else:
+            assert guarded
+            assert argv[:3] == ["sudo", "-n", "systemctl"]
+            assert not password_required or authenticated
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    assert (
+        cli_systemd_restart.cmd_service_restart(
+            Namespace(target_user="alice"),
+            deps=cli_systemd_restart.ServiceRestartDeps(
+                is_root=lambda: False,
+                which=lambda name: f"/usr/bin/{name}",
+                run=run,
+                restart_unit_for_user=lambda *args, **kwargs: "orca_auto-runtime@alice.target",
+                restart_guard=guard,
+            ),
+        )
+        == 0
+    )
+    assert len([command for command in commands if command[:3] == ("sudo", "-n", "systemctl")]) == 3
+
+
+def test_listing_permission_does_not_override_failed_noninteractive_mutation(capsys: Any) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def run(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(tuple(argv))
+        if argv[:4] == ["sudo", "-n", "-l", "--"]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        assert argv[:3] == ["sudo", "-n", "systemctl"]
+        return subprocess.CompletedProcess(argv, 1, "", "a password is required")
+
+    assert (
+        cli_systemd_restart.cmd_service_restart(
+            Namespace(target_user="alice"),
+            deps=_restart_deps(
+                is_root=lambda: False,
+                which=lambda name: f"/usr/bin/{name}",
+                run=run,
+                restart_unit_for_user=lambda *args, **kwargs: "orca_auto-runtime@alice.target",
+            ),
+        )
+        == 1
+    )
+    assert commands[-1] == (
+        "sudo",
+        "-n",
+        "systemctl",
+        "reset-failed",
+        "orca_auto-queue-worker@alice.service",
+    )
+    assert "failed" in capsys.readouterr().err

@@ -142,8 +142,9 @@ def _populate_coordinates(result: OrcaResult, text: str) -> None:
 def _last_final_energy_match(text: str) -> re.Match[str] | None:
     """Return the last final-energy line's match, or None when none is printed."""
     last_match: re.Match[str] | None = None
-    for match in FINAL_SINGLE_POINT_ENERGY_RE.finditer(text):
-        last_match = match
+    # A malformed final header invalidates earlier geometries' energies too.
+    for header in re.finditer(r"(?mi)^[ \t]*FINAL SINGLE POINT ENERGY[^\r\n]*", text):
+        last_match = FINAL_SINGLE_POINT_ENERGY_RE.fullmatch(text, header.start(), header.end())
     return last_match
 
 

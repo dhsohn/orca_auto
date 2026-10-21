@@ -775,8 +775,16 @@ def test_multi_file_publication_failure_restores_previous_set(
 
     original_replace = os.replace
 
+    injected = False
+
     def fail_second_artifact(source, target, *args, **kwargs):
-        if str(source).startswith(constants_mod._PUBLICATION_TEMP_PREFIX) and target == "sp.out":
+        nonlocal injected
+        if (
+            not injected
+            and str(source).startswith(constants_mod._PUBLICATION_TEMP_PREFIX)
+            and target == "sp.out"
+        ):
+            injected = True
             raise OSError("injected second artifact failure")
         return original_replace(source, target, *args, **kwargs)
 
@@ -1406,3 +1414,110 @@ def test_remove_scratch_workspace_leaves_a_durable_dir_outside_the_runs_root_alo
     removal = remove_scratch_workspace(policy.root, "attempt-stale2")
     assert removal.removed_durable_entries == ()
     assert stray.exists()
+
+
+@pytest.mark.parametrize("written", [False, True])
+def test_prepared_journal_unknown_outcome_preserves_recoverability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_shm: Path,
+    written: bool,
+) -> None:
+    policy = _policy(monkeypatch, fake_shm)
+    selected = _durable_input(tmp_path)
+    selected.with_suffix(".out").write_bytes(b"old output")
+    workspace = EngineScratchWorkspace.create(policy, selected)
+    (workspace.path / "sp.out").write_bytes(b"new output")
+    original_write = publication_mod._atomic_write_json_at
+
+    def fail_prepared(directory_fd: int, name: str, payload: dict) -> None:
+        if payload["phase"] == "prepared":
+            if written:
+                original_write(directory_fd, name, payload)
+            raise OSError("prepared journal fsync failed")
+        original_write(directory_fd, name, payload)
+
+    monkeypatch.setattr(publication_mod, "_atomic_write_json_at", fail_prepared)
+    with pytest.raises(OSError, match="prepared journal"):
+        workspace.publish()
+    assert selected.with_suffix(".out").read_bytes() == b"old output"
+    assert not any(path.name.startswith(".orca_auto_") for path in selected.parent.iterdir())
+    monkeypatch.setattr(publication_mod, "_atomic_write_json_at", original_write)
+    workspace.publish()
+    workspace.cleanup()
+    retry = EngineScratchWorkspace.create(policy, selected)
+    retry.publish()
+    retry.cleanup()
+
+
+@pytest.mark.parametrize("boundary", ["restore", "rollback_record", "cleanup"])
+def test_rollback_can_resume_after_a_second_interruption(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    boundary: str,
+) -> None:
+    import hashlib
+
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    items = []
+    for index, name in enumerate(("sp.gbw", "sp.out")):
+        old = f"old {name}".encode()
+        new = f"new {name}".encode()
+        backup = f"{constants_mod._PUBLICATION_BACKUP_PREFIX}{index:032x}"
+        temporary = f"{constants_mod._PUBLICATION_TEMP_PREFIX}{index:032x}.tmp"
+        (durable / backup).write_bytes(old)
+        (durable / name).write_bytes(new)
+        items.append(
+            publication_mod._PreparedPublication(
+                source=durable / name,
+                temporary_name=temporary,
+                target_name=name,
+                backup_name=backup,
+                sha256=hashlib.sha256(new).hexdigest(),
+                size_bytes=len(new),
+            )
+        )
+    fd = os.open(durable, os.O_RDONLY | os.O_DIRECTORY)
+    identity = (durable.stat().st_dev, durable.stat().st_ino)
+    try:
+        publication_mod._atomic_write_json_at(
+            fd,
+            constants_mod._PUBLICATION_JOURNAL_FILE_NAME,
+            publication_mod._publication_journal_payload(items, phase="prepared"),
+        )
+        original_restore = os.replace
+        original_write = publication_mod._atomic_write_json_at
+        original_unlink = publication_mod._unlink_at_if_present
+
+        def restore(source, target, *args, **kwargs):
+            original_restore(source, target, *args, **kwargs)
+            if target == "sp.gbw":
+                raise OSError("interrupted rollback")
+
+        def write(directory_fd, name, payload):
+            original_write(directory_fd, name, payload)
+            if payload["phase"] == "rolled_back":
+                raise OSError("interrupted rollback")
+
+        def unlink(directory_fd, name):
+            original_unlink(directory_fd, name)
+            if name == items[0].backup_name:
+                raise OSError("interrupted rollback")
+
+        with monkeypatch.context() as patch:
+            target, implementation = {
+                "restore": ("replace", restore),
+                "rollback_record": ("_atomic_write_json_at", write),
+                "cleanup": ("_unlink_at_if_present", unlink),
+            }[boundary]
+            patch.setattr(os if boundary == "restore" else publication_mod, target, implementation)
+            with pytest.raises(OSError, match="interrupted rollback"):
+                publication_mod._recover_incomplete_publication(fd, durable, identity)
+        publication_mod._recover_incomplete_publication(fd, durable, identity)
+        assert publication_mod._recover_incomplete_publication(fd, durable, identity) is None
+        assert (durable / "sp.gbw").read_bytes() == b"old sp.gbw"
+        assert (durable / "sp.out").read_bytes() == b"old sp.out"
+        assert sorted(path.name for path in durable.iterdir()) == ["sp.gbw", "sp.out"]
+    finally:
+        os.close(fd)

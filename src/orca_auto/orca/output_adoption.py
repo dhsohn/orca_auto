@@ -1,6 +1,6 @@
 """Decide whether an existing ORCA ``.out`` counts as the completed run.
 
-``existing_completed_out`` is the adoption rule: the newest ``<stem>.out``
+``existing_completed_out`` is the adoption rule: the literal ``<stem>.out``
 beside the selected input that is not older than its inputs and that the
 analyzer verifies as ``COMPLETED``. ``existing_completed_exit`` turns that
 verdict into the run's exit code without launching ORCA, but only when no
@@ -25,6 +25,7 @@ from .attempt.resume import (
     state_matches_selected,
 )
 from .completion_rules import detect_completion_mode
+from .file_identity import confined_output_identity
 from .out_analyzer import analyze_output
 from .run_context import RunExecutionContext, bind_queue_identity
 from .state import save_state
@@ -36,32 +37,20 @@ logger = logging.getLogger(__name__)
 
 
 def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:
-    base_stem = selected_inp.stem
-
-    out_candidates = list(selected_inp.parent.glob(f"{base_stem}.out"))
-    out_candidates.sort(key=lambda p: (p.stat().st_mtime_ns, p.name.lower()), reverse=True)
-
-    seen: set[Path] = set()
-    for out_path in out_candidates:
-        resolved = out_path.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-
-        mode_inp = out_path.with_suffix(".inp")
-        if not mode_inp.exists():
-            mode_inp = selected_inp
-        if _out_is_older_than_inputs(out_path, selected_inp=selected_inp, mode_inp=mode_inp):
-            continue
-        mode = detect_completion_mode(mode_inp)
-        analysis = analyze_output(out_path, mode)
-        if analysis.status != AnalyzerStatus.COMPLETED:
-            continue
-        return {
-            "out_path": str(out_path),
-            "analysis": analysis,
-        }
-    return None
+    out_path = selected_inp.with_suffix(".out")
+    if not out_path.exists() and not out_path.is_symlink():
+        return None
+    before = confined_output_identity(selected_inp.parent, out_path)
+    if _out_is_older_than_inputs(out_path, selected_inp=selected_inp, mode_inp=selected_inp):
+        return None
+    mode = detect_completion_mode(selected_inp)
+    analysis = analyze_output(out_path, mode)
+    after = confined_output_identity(selected_inp.parent, out_path)
+    if before != after:
+        raise ValueError("Existing engine output changed while it was analyzed")
+    if analysis.status != AnalyzerStatus.COMPLETED:
+        return None
+    return {"out_path": str(out_path), "analysis": analysis}
 
 
 def _out_is_older_than_inputs(out_path: Path, *, selected_inp: Path, mode_inp: Path) -> bool:

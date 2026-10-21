@@ -105,7 +105,30 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
         # Authenticate before blocking admission. Mutation commands must not
         # prompt while the worker is waiting for the admission store lock.
         try:
-            authenticated = run(["sudo", "-v"], check=False)
+            # Check the actual commands, not an unrelated "true" command or
+            # sudo's global verifypw policy. Scoped NOPASSWD rules can allow
+            # these commands even when credential validation needs a password.
+            commands = (
+                ("systemctl", "reset-failed", worker_unit),
+                ("systemctl", "restart", unit),
+                ("systemctl", "restart", worker_unit),
+            )
+            listed = all(
+                run(
+                    ["sudo", "-n", "-l", "--", *command],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                ).returncode
+                == 0
+                for command in commands
+            )
+            authenticated = (
+                subprocess.CompletedProcess(["sudo", "-n", "-l"], 0)
+                if listed
+                else run(["sudo", "-v"], check=False)
+            )
         except OSError as exc:
             emit_error(f"sudo authentication failed: {exc}")
             return 1

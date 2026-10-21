@@ -8,6 +8,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Existing-output adoption matches the input basename literally and verifies a
+  confined, single-link output before and after analysis.
+- Scratch publication preserves recovery files when a journal write has an
+  unknown outcome. Rollback retains backups until its completion is durable,
+  so interrupted restoration and cleanup can be replayed safely.
+- Reports use the final energy header even when it is malformed. Optimization
+  cards publish the validated final-output energy, keeping cycle history separate.
+- Damaged multidimensional scan rows cannot become shorter, apparently valid
+  rows; subsequent geometry indices remain aligned.
+- Service restart checks permission for its exact commands before requesting
+  global sudo authentication. Mutations remain noninteractive under the idle guard.
+
 ## [10.2.1] - 2026-10-11
 
 Version 10.2.1 is a patch release fixing restart-guard timestamp precision

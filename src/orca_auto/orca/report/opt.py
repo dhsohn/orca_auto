@@ -83,8 +83,6 @@ def collect_opt_report_data(
         formula, method, basis_set = selected.formula, selected.method, selected.basis_set
         steps = tuple((step.cycle, step.energy_hartree) for step in selected.steps)
         opt_converged = selected.is_converged
-        if steps:
-            final_energy = steps[-1][1]
 
     # Characterize from the final output first so the card agrees with the
     # SI block, which reads only the final output; fall back to the attempt
@@ -95,7 +93,8 @@ def collect_opt_report_data(
     out_path = final_out_path(state)
     if out_path is not None:
         try:
-            _final_result, analysis = parsed_final_output(out_path)
+            final_result, analysis = parsed_final_output(out_path)
+            final_energy = final_result.energy_hartree
         except OSError:
             analysis = None
     if analysis is not None and out_path is not None:

@@ -1330,3 +1330,38 @@ def test_echoed_atom_count_and_job_banner_do_not_override_geometry(prefix: str) 
     result = parse_orca_output_text(text, source_path="echoed_count.out")
     assert result.n_atoms == 3
     assert result.coordinates == [("O", 0.0, 0.0, 0.0), ("H", 1.0, 0.0, 0.0), ("H", 0.0, 1.0, 0.0)]
+
+
+@pytest.mark.parametrize(
+    "ending", ["NaN", "Inf", "******", "", "-2.0e", "-2.0 (SCF not fully converged!)"]
+)
+def test_invalid_last_energy_cannot_publish_prior_energy_or_thermochemistry(
+    tmp_path: Path,
+    ending: str,
+) -> None:
+    text = (
+        "GEOMETRY OPTIMIZATION CYCLE 1\nFINAL SINGLE POINT ENERGY -1.0\n"
+        "Total enthalpy ... -0.9 Eh\n"
+        "GEOMETRY OPTIMIZATION CYCLE 2\n"
+        f"FINAL SINGLE POINT ENERGY {ending}\nORCA TERMINATED NORMALLY\n"
+    )
+    out = tmp_path / "calc.out"
+    out.write_text(text)
+    inp = tmp_path / "calc.inp"
+    inp.write_text("! HF STO-3G Opt\n")
+    parsed = parse_orca_output_text(text, source_path=str(out))
+    analyzed = analyze_output(out, CompletionMode("opt", False))
+    parts = collect_html_report_parts(
+        tmp_path,
+        {
+            "selected_inp": str(inp),
+            "attempts": [{"out_path": str(out)}],
+            "final_result": {"last_out_path": str(out)},
+        },
+    )
+    assert parsed.energy_hartree is None
+    assert parsed.enthalpy is None
+    assert analyzed.markers["energy_hartree"] is None
+    assert parts is not None and parts.opt is not None
+    assert parts.opt.steps
+    assert parts.opt.final_energy is None
