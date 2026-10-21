@@ -243,8 +243,8 @@ def test_gradient_report_is_not_labeled_energy_only_sp(tmp_path: Path, keyword: 
     assert "initial EnGrad" in text
     assert "SP report" not in text
     assert "initial SP" not in text
-    assert "classified as other" in text
-    assert "Gradient values and completeness are not validated" in text
+    assert "Calculation type" not in text
+    assert "Gradient values and completeness are not validated" not in text
     assert "-1234.567890" in text
 
 

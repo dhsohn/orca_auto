@@ -165,16 +165,6 @@ def _metric_cards(data: SpReportData) -> str:
 def sp_report_component(data: SpReportData) -> ReportComponent:
     """The SP facet is only collected alone, so it is always the primary one."""
     sections: list[tuple[str, str]] = [("Energy summary", _energy_section_html(data))]
-    if data.is_engrad:
-        sections.insert(
-            0,
-            (
-                "Calculation type",
-                "<p>EnGrad requests single-point energy and gradient. "
-                "This job is classified as other; this report summarizes energy only. "
-                "Gradient values and completeness are not validated.</p>",
-            ),
-        )
     if data.mode_summaries:
         sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
     sections.append(
