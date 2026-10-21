@@ -143,10 +143,11 @@ def parse_scan_actual_surface(out_path: Path) -> list[ScanSurfacePoint]:
                     continue
                 if any(marker in upper for marker in _SURFACE_SECTION_END_MARKERS):
                     break
+                if _is_spoiled_surface_row(line):
+                    row_number += 1
+                    continue
                 values = [float(match.group(0)) for match in _FLOAT_RE.finditer(line)]
                 if len(values) < 2:
-                    if _is_spoiled_surface_row(line):
-                        row_number += 1
                     continue
                 row_number += 1
                 if first_row_width is None:

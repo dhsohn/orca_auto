@@ -262,3 +262,62 @@ def test_fresh_generation_runs_despite_an_older_completed_generation(
 
     assert exit_code != 0
     assert [path.parent for path in launched] == [fresh_dir]
+
+
+@pytest.mark.parametrize("own_output", [False, True])
+def test_adoption_uses_literal_input_stem(tmp_path: Path, own_output: bool) -> None:
+    from orca_auto.orca.output_adoption import existing_completed_out
+
+    inp = tmp_path / "calc[1].inp"
+    inp.write_text("! SP\n")
+    (tmp_path / "calc1.out").write_text(_COMPLETED_OUT.replace("-1.1", "-999"))
+    own = inp.with_suffix(".out")
+    if own_output:
+        own.write_text(_COMPLETED_OUT)
+    result = existing_completed_out(inp)
+    if own_output:
+        assert result is not None and result["out_path"] == str(own)
+        assert result["analysis"].markers["energy_hartree"] == -1.1
+    else:
+        assert result is None
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_adoption_rejects_linked_output(tmp_path: Path, link_kind: str) -> None:
+    from orca_auto.orca.output_adoption import existing_completed_out
+
+    generation = tmp_path / "generation"
+    generation.mkdir()
+    inp = generation / "calc.inp"
+    inp.write_text("! SP\n")
+    external = tmp_path / "external.out"
+    external.write_text(_COMPLETED_OUT)
+    out = inp.with_suffix(".out")
+    if link_kind == "symlink":
+        out.symlink_to(external)
+    else:
+        os.link(external, out)
+    with pytest.raises(ValueError, match="symlink|single-link"):
+        existing_completed_out(inp)
+
+
+def test_adoption_rejects_output_changed_during_analysis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.orca import output_adoption
+
+    inp = tmp_path / "calc.inp"
+    inp.write_text("! SP\n")
+    out = inp.with_suffix(".out")
+    out.write_text(_COMPLETED_OUT)
+    real_analyze = output_adoption.analyze_output
+
+    def changing_analysis(*args: Any, **kwargs: Any) -> Any:
+        result = real_analyze(*args, **kwargs)
+        out.write_text(_COMPLETED_OUT.replace("-1.1", "-2.2"))
+        return result
+
+    monkeypatch.setattr(output_adoption, "analyze_output", changing_analysis)
+    with pytest.raises(ValueError, match="changed"):
+        output_adoption.existing_completed_out(inp)

@@ -1,7 +1,8 @@
 """Journaled publication of workspace outputs into the durable generation and
 its crash recovery: copy each artifact to a temp name, record a
 ``prepared`` / ``committed`` journal, rename into place, and on the next
-launch replay or roll back whatever an interrupted publication left. Also
+launch replay or roll back whatever an interrupted publication left. Rollback
+records a terminal rolled_back phase before deleting backups. Also
 owns the ``ScratchPublication`` result and the provenance helpers that
 attach it to exceptions for the caller's report.
 """
@@ -12,8 +13,9 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -275,7 +277,7 @@ def _load_publication_journal(
         raise EngineScratchError("engine scratch publication journal has an invalid schema")
     phase = parsed.get("phase")
     raw_items = parsed.get("items")
-    if phase not in {"prepared", "committed"} or not isinstance(raw_items, list):
+    if phase not in {"prepared", "committed", "rolled_back"} or not isinstance(raw_items, list):
         raise EngineScratchError("engine scratch publication journal has invalid state")
     items: list[_PreparedPublication] = []
     seen_names: set[str] = set()
@@ -334,6 +336,45 @@ def _assert_no_orphan_publication_files(directory_fd: int) -> None:
         )
 
 
+def _restore_publication_backup(
+    directory_fd: int,
+    directory: Path,
+    item: _PreparedPublication,
+    digest: str,
+    size: int,
+) -> None:
+    assert item.backup_name is not None
+    _unlink_at_if_present(directory_fd, item.temporary_name)
+    source_fd = open_pinned_readonly(item.backup_name, dir_fd=directory_fd)
+    try:
+        destination_fd = os.open(
+            item.temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            stat.S_IMODE(os.fstat(source_fd).st_mode),
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(destination_fd, "wb") as destination:
+            with os.fdopen(os.dup(source_fd), "rb") as source:
+                shutil.copyfileobj(source, destination, _COPY_CHUNK_BYTES)
+            destination.flush()
+            os.fsync(destination.fileno())
+    finally:
+        os.close(source_fd)
+    actual = _regular_file_sha256_at(
+        directory_fd,
+        item.temporary_name,
+        display_path=directory / item.temporary_name,
+    )
+    if actual != (digest, size):
+        raise EngineScratchError("engine scratch publication backup changed during rollback")
+    os.replace(
+        item.temporary_name,
+        item.target_name,
+        src_dir_fd=directory_fd,
+        dst_dir_fd=directory_fd,
+    )
+
+
 def _recover_incomplete_publication(
     durable_dir_fd: int,
     durable_dir: Path,
@@ -354,52 +395,50 @@ def _recover_incomplete_publication(
         os.fsync(durable_dir_fd)
         return None
     phase, items = loaded
+    # Make an observed terminal rename durable before consuming its backups.
+    os.fsync(durable_dir_fd)
     if phase == "prepared":
-        for item in items:
-            if item.backup_name is None:
-                continue
-            info = os.stat(item.backup_name, dir_fd=durable_dir_fd, follow_symlinks=False)
-            if not stat.S_ISREG(info.st_mode):
-                raise EngineScratchError(
-                    f"engine scratch publication backup is unsafe: {item.backup_name}"
-                )
+        restored: list[_PreparedPublication] = []
         for item in items:
             if item.backup_name is not None:
                 backup_info = os.stat(
-                    item.backup_name,
-                    dir_fd=durable_dir_fd,
-                    follow_symlinks=False,
+                    item.backup_name, dir_fd=durable_dir_fd, follow_symlinks=False
                 )
                 try:
                     target_info = os.stat(
-                        item.target_name,
-                        dir_fd=durable_dir_fd,
-                        follow_symlinks=False,
+                        item.target_name, dir_fd=durable_dir_fd, follow_symlinks=False
                     )
                 except FileNotFoundError:
                     target_info = None
-                if target_info is not None and stable_fs.inode_identity(
+                same_inode = target_info is not None and stable_fs.inode_identity(
                     target_info
-                ) == stable_fs.inode_identity(backup_info):
-                    _unlink_at_if_present(durable_dir_fd, item.backup_name)
-                else:
-                    if target_info is not None:
-                        digest, size = _regular_file_sha256_at(
-                            durable_dir_fd,
-                            item.target_name,
-                            display_path=durable_dir / item.target_name,
-                        )
-                        if digest != item.sha256 or size != item.size_bytes:
-                            raise EngineScratchError(
-                                "Prepared engine scratch publication target changed: "
-                                f"{durable_dir / item.target_name}"
-                            )
-                    os.replace(
-                        item.backup_name,
+                ) == stable_fs.inode_identity(backup_info)
+                if backup_info.st_nlink != 1 and not (backup_info.st_nlink == 2 and same_inode):
+                    raise EngineScratchError("engine scratch publication backup is unsafe")
+                old_digest, old_size = _regular_file_sha256_at(
+                    durable_dir_fd,
+                    item.backup_name,
+                    display_path=durable_dir / item.backup_name,
+                    allowed_link_counts=(1, 2) if same_inode else (1,),
+                )
+                if target_info is not None and not same_inode:
+                    digest, size = _regular_file_sha256_at(
+                        durable_dir_fd,
                         item.target_name,
-                        src_dir_fd=durable_dir_fd,
-                        dst_dir_fd=durable_dir_fd,
+                        display_path=durable_dir / item.target_name,
                     )
+                    if (digest, size) not in {
+                        (item.sha256, item.size_bytes),
+                        (old_digest, old_size),
+                    }:
+                        raise EngineScratchError(
+                            f"Prepared engine scratch publication target changed: "
+                            f"{durable_dir / item.target_name}"
+                        )
+                # Retain the backup until a durable rollback-complete record
+                # exists. Copying also separates a legacy hard-linked target.
+                _restore_publication_backup(durable_dir_fd, durable_dir, item, old_digest, old_size)
+                restored.append(replace(item, sha256=old_digest, size_bytes=old_size))
             else:
                 try:
                     digest, size = _regular_file_sha256_at(
@@ -412,26 +451,42 @@ def _recover_incomplete_publication(
                 else:
                     if digest != item.sha256 or size != item.size_bytes:
                         raise EngineScratchError(
-                            "Prepared engine scratch publication target changed: "
+                            f"Prepared engine scratch publication target changed: "
                             f"{durable_dir / item.target_name}"
                         )
                     _unlink_at_if_present(durable_dir_fd, item.target_name)
+                restored.append(item)
             _unlink_at_if_present(durable_dir_fd, item.temporary_name)
-    else:
-        for item in items:
-            digest, size = _regular_file_sha256_at(
-                durable_dir_fd,
-                item.target_name,
-                display_path=durable_dir / item.target_name,
+        os.fsync(durable_dir_fd)
+        _atomic_write_json_at(
+            durable_dir_fd,
+            _PUBLICATION_JOURNAL_FILE_NAME,
+            _publication_journal_payload(restored, phase="rolled_back"),
+        )
+        items = restored
+    # Both terminal phases can resume cleanup after any individual unlink.
+    for item in items:
+        if phase != "committed" and item.backup_name is None:
+            try:
+                os.stat(item.target_name, dir_fd=durable_dir_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise EngineScratchError("Rolled-back engine scratch target reappeared")
+        digest, size = _regular_file_sha256_at(
+            durable_dir_fd,
+            item.target_name,
+            display_path=durable_dir / item.target_name,
+        )
+        if digest != item.sha256 or size != item.size_bytes:
+            raise EngineScratchError(
+                f"Committed engine scratch artifact changed: {durable_dir / item.target_name}"
             )
-            if digest != item.sha256 or size != item.size_bytes:
-                raise EngineScratchError(
-                    f"Committed engine scratch artifact changed: {durable_dir / item.target_name}"
-                )
-        for item in items:
-            if item.backup_name is not None:
-                _unlink_at_if_present(durable_dir_fd, item.backup_name)
-            _unlink_at_if_present(durable_dir_fd, item.temporary_name)
+    for item in items:
+        if item.backup_name is not None:
+            _unlink_at_if_present(durable_dir_fd, item.backup_name)
+        _unlink_at_if_present(durable_dir_fd, item.temporary_name)
+    # Persist cleanup before removing its recovery record.
+    os.fsync(durable_dir_fd)
     _unlink_at_if_present(durable_dir_fd, _PUBLICATION_JOURNAL_FILE_NAME)
     _assert_no_orphan_publication_files(durable_dir_fd)
     os.fsync(durable_dir_fd)
@@ -561,7 +616,9 @@ def _publish_workspace(
             omitted_transient_bytes=omitted_bytes,
         )
     except BaseException:
-        if journal_written:
+        # A journal rename may have succeeded before its directory fsync
+        # raised. Its referenced files must survive that unknown outcome.
+        if journal_written or _load_publication_journal(durable_dir_fd, durable_dir) is not None:
             path_identity_safe = True
             try:
                 _require_directory_path_identity(

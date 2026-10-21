@@ -492,3 +492,39 @@ def test_scan_coordinate_unit_follows_the_coordinate_kind(kind: str, unit: str) 
     spec = ScanCoordinateSpec(kind=kind, atoms=(0, 1), start=1.0, end=2.0, points=3)
 
     assert spec.unit() == unit
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Inf", "**************"])
+@pytest.mark.parametrize("coordinates", ["1.2 -60.0", "1.2 -60.0 2.0"])
+def test_spoiled_multidimensional_surface_rows_keep_geometry_indices(
+    tmp_path: Path,
+    bad: str,
+    coordinates: str,
+) -> None:
+    out = tmp_path / "scan.out"
+    out.write_text(
+        "The Calculated Surface using the 'Actual Energy'\n"
+        f"{coordinates} {bad}\n"
+        f"{coordinates} -100.0\n"
+        f"{coordinates} -99.0\n"
+        "The Calculated Surface using the SCF energy\n"
+    )
+    points = parse_scan_actual_surface(out)
+    assert [point.index for point in points] == [2, 3]
+    assert [point.energy for point in points] == [-100.0, -99.0]
+    assert all(len(point.coordinates) == len(coordinates.split()) for point in points)
+
+
+@pytest.mark.parametrize("row", ["NaN -60.0 -100.0", "1.2 NaN -100.0", "1.2 *** -100.0"])
+def test_spoiled_surface_coordinate_is_not_silently_dropped(tmp_path: Path, row: str) -> None:
+    out = tmp_path / "scan.out"
+    out.write_text(
+        "The Calculated Surface using the 'Actual Energy'\n"
+        f"{row}\n1.3 -50.0 -100.0\n"
+        "The Calculated Surface using the SCF energy\n"
+    )
+    points = parse_scan_actual_surface(out)
+    assert len(points) == 1
+    assert points[0].index == 2
+    assert points[0].coordinates == (1.3, -50.0)
+    assert points[0].energy == -100.0
