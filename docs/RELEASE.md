@@ -30,6 +30,19 @@ schemas; release needs no `machine-contracts` clone. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to 10.2.3
+
+Version 10.2.3 fixes completion checks for frequency requests in active
+`%freq AnFreq true` and `%freq NumFreq true` blocks. A run missing the requested
+final frequency evidence now fails rather than completing on energy and normal
+termination alone. Each switch uses its last explicit boolean value; existing
+route-line frequency requirements still apply.
+
+Use the [10.2 idle-window upgrade procedure](#upgrading-to-102) and retain the
+prior runtime for rollback. No state or configuration migration is required.
+Historical terminal observations are not rewritten and failed calculations are
+not rerun automatically. Publication does not update running workers.
+
 ## Upgrading to 10.2.2
 
 Version 10.2.2 fixes EnGrad labels, existing-output adoption, scratch recovery,

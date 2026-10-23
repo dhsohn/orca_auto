@@ -8,6 +8,25 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [10.2.3] - 2026-10-24
+
+### Fixed
+
+- Frequency requests in active `%freq AnFreq true` and `%freq NumFreq true`
+  blocks now require final frequency evidence before completion (#407).
+  Each switch uses its last explicit boolean value; route-line frequency
+  requirements remain enforced. Runs without the requested evidence fail
+  instead of completing on energy and normal termination alone.
+- No state or configuration migration is required. Historical terminal
+  observations are unchanged; failed calculations are not rerun automatically.
+  See [Upgrading to 10.2.3](docs/RELEASE.md#upgrading-to-1023).
+
+### Validation and limits
+
+- Bounded ORCA 6.1.1 water HF/STO-3G Opt acceptance passed for both block
+  frequency switches through a real queue worker. See [Validation](docs/VALIDATION.md).
+  This does not expand general numerical-Hessian or special-atom coverage.
+
 ## [10.2.2] - 2026-10-21
 
 Version 10.2.2 packages the EnGrad labeling and correctness fixes in #403 and

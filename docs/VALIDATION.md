@@ -90,8 +90,16 @@ Hessian, is retained. The two coordinate readers are unchanged, and whether they
 agree on such outputs is not established.
 
 For the scientific-evidence change, the full repository and distribution gates
-are required. A new bounded real-engine run remains pending while both slots in
-the operational shared admission store are occupied. Do not bypass that limit.
+are required. The 10.2.3 acceptance ran the #407 source revision
+`482b4631bf354b402c12d42c4192c3bdaab363a7` with ORCA 6.1.1:
+water HF/STO-3G Opt with separate `%freq AnFreq true` and
+`%freq NumFreq true` requests. Both used the durable queue and a real worker,
+one core, 512 MB maxcore, and one shared operational admission reservation.
+Both converged at -74.965901189921 Eh with nine frequencies and zero imaginary
+modes. Machine-observation validation, artifact receipts, HTML and SI checks
+passed. Operational configuration and engine hashes were unchanged; the
+reservation was released. This bounded water case does not establish atom/mode
+association for numerical Hessians generally or extend supported engine versions.
 Historical reports remain untouched. The wheel-only systemd test renders and
 applies units to a temporary directory with injected systemctl; it does not
 restart the operational services.
