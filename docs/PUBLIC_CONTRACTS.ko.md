@@ -103,6 +103,8 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 ## 과학적 근거와 호환성
 
+주파수 요청에는 route 키워드뿐 아니라 %freq 블록의 AnFreq true 또는 NumFreq true도 포함됩니다.
+
 완료에는 정상 종료, 해결되지 않은 오류의 부재, 유한한 최종 단일점 에너지가
 필요합니다. Opt/TS는 마지막 최적화 수렴 판정을, 요청한 Freq는 최종 진동수
 섹션을 추가로 요구합니다. 나중의 명시적 SCF 수렴은 앞선 SCF 실패를 해소합니다.
