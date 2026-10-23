@@ -224,3 +224,38 @@ def test_completion_requirements_follow_requested_operations(
     mode = _detect(tmp_path, f"! HF STO-3G {route}\n* xyz 0 1\nH 0 0 0\n*\n")
     assert mode.kind == kind
     assert mode.require_frequency is frequency
+
+
+@pytest.mark.parametrize(
+    ("block", "requested"),
+    [
+        ("%freq AnFreq true end", True),
+        ("% FREQ NumFreq = TRUE end", True),
+        ("%freq\n AnFreq\n true\nend", True),
+        ("%freq Temp 298.15 # comment # NumFreq true end", True),
+        ("%freq AnFreq false NumFreq true end", True),
+        ("%freq AnFreq true AnFreq false end", False),
+        ("%freq AnFreq false AnFreq true end", True),
+        ("%freq AnFreq true end\n%freq AnFreq false end", False),
+        ("%freq AnFreq false end", False),
+        ("%freq NumFreq false end", False),
+        ("%freq Temp 298.15 end", False),
+        ("# %freq AnFreq true end", False),
+        ("%freq # AnFreq true\nend", False),
+        ('%freq "AnFreq" true end', False),
+        ('%freq AnFreq "true" end', False),
+        ("%freq end AnFreq true", False),
+        ("%method AnFreq true end", False),
+        ("%freq AnFreq end", False),
+    ],
+)
+def test_frequency_block_request(tmp_path: Path, block: str, requested: bool) -> None:
+    mode = _detect(tmp_path, "! HF STO-3G\n" + block + "\n")
+    assert mode.kind == "sp"
+    assert mode.require_frequency is requested
+
+
+@pytest.mark.parametrize("operation", ["Freq", "AnFreq", "NumFreq", "OptTS"])
+def test_false_frequency_block_keeps_route_requirement(tmp_path: Path, operation: str) -> None:
+    mode = _detect(tmp_path, f"! HF STO-3G {operation}\n%freq AnFreq false NumFreq false end\n")
+    assert mode.require_frequency

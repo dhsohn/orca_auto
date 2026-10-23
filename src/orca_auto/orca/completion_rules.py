@@ -94,9 +94,26 @@ def _has_geometry_constraints(lines: list[str]) -> bool:
     return constrained or any(hydrogen_settings.values())
 
 
+def _has_frequency_block_request(lines: list[str]) -> bool:
+    """Read AnFreq/NumFreq switches from %freq bodies, using their last boolean value."""
+    settings: dict[str, bool] = {}
+    for block in iter_blocks(lines, "freq"):
+        tokens = [token for row in block.rows for token in row.tokens]
+        for index, token in enumerate(tokens):
+            if token.quoted or token.value.lower() not in {"anfreq", "numfreq"}:
+                continue
+            value_index = value_token_index(tokens, index)
+            if value_index >= len(tokens):
+                continue
+            value = tokens[value_index]
+            if not value.quoted and value.value.lower() in {"true", "false"}:
+                settings[token.value.lower()] = value.value.lower() == "true"
+    return any(settings.values())
+
+
 @dataclass(frozen=True)
 class RouteFacts:
-    """The route keywords and ``%geom Scan`` block of the input at ``inp_path``.
+    """The route keywords and geometry/frequency settings of the input at ``inp_path``.
 
     ORCA accepts several route (``!``) lines with ``%`` blocks between them,
     so every flag reads all of ``route_lines``, never just the first. An
@@ -113,6 +130,7 @@ class RouteFacts:
     is_relaxed_scan: bool  # an optimization with a %geom Scan block
     has_constraints: bool
     is_non_stationary: bool  # a plain NEB / NEB-CI path or MD, no TS search
+    requests_frequency: bool
     is_engrad: bool = False  # explicit energy-and-gradient request
 
 
@@ -128,6 +146,8 @@ def route_facts(inp_path: Path, *, lines: list[str] | None = None) -> RouteFacts
     has_constraints = _has_geometry_constraints(lines)
     return RouteFacts(
         inp_path=inp_path,
+        requests_frequency=bool(re.search(r"\b(?:NUMFREQ|ANFREQ|FREQ)\b", routes, re.IGNORECASE))
+        or _has_frequency_block_request(lines),
         is_engrad=any(
             not token.quoted and token.value.casefold() in {"engrad", "energygrad"}
             for line in lines
@@ -193,11 +213,8 @@ def completion_mode(route: RouteFacts) -> CompletionMode:
     # Only differences in completion requirements need a mode. IRC/Freq
     # requirements are flags; detailed job labels remain in RouteFacts.
     kind = "ts" if route.is_ts else "opt" if route.is_opt else "sp"
-    frequencies = bool(
-        re.search(r"\b(?:NUMFREQ|ANFREQ|FREQ)\b", " ".join(route.route_lines), re.IGNORECASE)
-    )
     return CompletionMode(
         kind=kind,
         require_irc=route.is_irc,
-        require_frequency=route.is_ts or frequencies,
+        require_frequency=route.is_ts or route.requests_frequency,
     )

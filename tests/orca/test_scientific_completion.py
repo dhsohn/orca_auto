@@ -45,3 +45,44 @@ def test_completion_requires_requested_final_evidence(
     out.write_text(body + "****ORCA TERMINATED NORMALLY****\n")
     result = analyze_output(out, detect_completion_mode(inp))
     assert (result.status, result.reason) == (status, reason)
+
+
+@pytest.mark.parametrize("switch", ["AnFreq", "NumFreq"])
+@pytest.mark.parametrize("operation", ["", "Opt"])
+@pytest.mark.parametrize(
+    ("frequencies", "status", "reason"),
+    [
+        ("", AnalyzerStatus.INCOMPLETE, "frequency_evidence_missing"),
+        (
+            "VIBRATIONAL FREQUENCIES\n  0: 120.00 cm**-1\n",
+            AnalyzerStatus.COMPLETED,
+            "normal_termination",
+        ),
+        (
+            "VIBRATIONAL FREQUENCIES\n  0: NaN cm**-1\n",
+            AnalyzerStatus.INCOMPLETE,
+            "frequency_evidence_missing",
+        ),
+    ],
+)
+def test_frequency_block_requires_final_evidence(
+    tmp_path: Path,
+    switch: str,
+    operation: str,
+    frequencies: str,
+    status: AnalyzerStatus,
+    reason: str,
+) -> None:
+    inp = tmp_path / "job.inp"
+    inp.write_text(
+        f"! HF STO-3G {operation}\n%freq {switch} true end\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
+    )
+    out = inp.with_suffix(".out")
+    out.write_text(
+        "FINAL SINGLE POINT ENERGY -1.0\n"
+        + ("THE OPTIMIZATION HAS CONVERGED\n" if operation else "")
+        + frequencies
+        + "****ORCA TERMINATED NORMALLY****\n"
+    )
+    result = analyze_output(out, detect_completion_mode(inp))
+    assert (result.status, result.reason) == (status, reason)

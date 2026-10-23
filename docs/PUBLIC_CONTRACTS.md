@@ -103,6 +103,8 @@ Upon completion, each job publishes a structured `machine.json` artifact in its 
 
 ## Scientific evidence and compatibility
 
+Frequency requests include AnFreq true or NumFreq true in a %freq block, as well as route keywords.
+
 Completion requires normal termination, no unresolved failure and a finite final
 single-point energy. Opt/TS additionally require an explicit final optimization
 convergence verdict; requested Freq requires a final frequency section. A later
