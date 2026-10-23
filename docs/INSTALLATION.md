@@ -28,7 +28,7 @@ source ~/.local/share/orca_auto/venv/bin/activate
 
 # Install ORCA_auto
 pip install --upgrade pip
-pip install orca_auto==10.2.2
+pip install orca_auto==10.2.3
 
 # Verify installation
 orca_auto --version
