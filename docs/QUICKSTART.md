@@ -2,14 +2,14 @@
 
 **English** | [한국어](QUICKSTART.ko.md)
 
-Configure ORCA_auto, set up background worker services, submit calculations, and inspect results.
+Submit your first calculation and follow it from the queue to its results.
 If you have not installed the package yet, see the [Installation Guide](INSTALLATION.md).
 
 ---
 
 ## 1. Initialize Configuration
 
-Create a configuration file (`orca_auto.yaml`) using the interactive wizard or default template:
+Create `orca_auto.yaml` with the configuration wizard:
 
 ```bash
 # Create configuration in the default location or a specified path
@@ -47,7 +47,7 @@ Create a job directory below your configured `runs_root` and place your ORCA inp
 orca_auto run-dir ~/orca_runs/water --config ~/orca_auto.yaml
 ```
 
-Once durably enqueued, the CLI returns immediately. The background worker evaluates host capacity and launches calculations in generation-isolated workspaces.
+The command returns after saving the queue entry. The worker starts the calculation when host capacity allows and keeps each generation in its own workspace.
 
 ---
 
@@ -68,8 +68,8 @@ journalctl -u "orca_auto-queue-worker@$(id -un)" -f
 
 ## 5. Cancel Jobs and Inspect Results
 
-- **Cancel a job**: Cancel a pending or running calculation:
+- **Cancel a job** that is waiting or running:
   ```bash
   orca_auto queue cancel <QUEUE_ID_OR_DIRECTORY> --config ~/orca_auto.yaml
   ```
-- **Inspect results**: Upon completion, the job directory contains the raw ORCA output (`job.out`) and a structured observation artifact (`machine.json`) for downstream tools and automated reporting.
+- **Inspect results**: Upon completion, the job directory contains the raw ORCA output (`job.out`) and `machine.json` with structured observations for analysis and reporting.

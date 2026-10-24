@@ -2,14 +2,14 @@
 
 [English](QUICKSTART.md) | **한국어**
 
-ORCA_auto 설정 생성, 백그라운드 워커 등록, 계산 작업 큐 제출 및 모니터링 절차입니다.
+첫 계산을 제출하고 큐에서 진행 상황과 결과를 확인해 봅니다.
 아직 패키지를 설치하지 않았다면 [설치 안내](INSTALLATION.ko.md)를 먼저 확인하세요.
 
 ---
 
 ## 1. 환경 설정 파일 생성
 
-대화형 마법사나 기본 템플릿으로 설정 파일(`orca_auto.yaml`)을 생성합니다.
+설정 마법사로 `orca_auto.yaml`을 만듭니다.
 
 ```bash
 # 기본 위치(~/orca_auto/config/orca_auto.yaml 또는 지정 경로)에 설정 파일 생성
@@ -47,7 +47,7 @@ orca_auto service status
 orca_auto run-dir ~/orca_runs/water --config ~/orca_auto.yaml
 ```
 
-작업이 큐에 기록되면 CLI는 즉시 반환되며, 백그라운드 워커가 호스트 자원과 우선순위에 따라 격리된 generation 디렉터리에서 계산을 시작합니다.
+작업이 큐에 기록되면 명령이 끝납니다. 워커는 호스트 자원에 여유가 생기면 계산을 시작하고, 각 실행 세대(generation)의 파일을 별도 디렉터리에 보관합니다.
 
 ---
 
@@ -72,4 +72,4 @@ journalctl -u "orca_auto-queue-worker@$(id -un)" -f
   ```bash
   orca_auto queue cancel <QUEUE_ID_OR_DIRECTORY> --config ~/orca_auto.yaml
   ```
-- **결과 확인**: 계산이 끝나면 작업 디렉터리에 ORCA 표준 출력 파일(`job.out`)과 함께 후속 도구 연동 및 결과 분석용 구조화 데이터 파일(`machine.json`)이 생성됩니다.
+- **결과 확인**: 계산이 끝나면 작업 디렉터리에 ORCA 표준 출력 파일(`job.out`)과 함께 분석 스크립트에서 읽을 수 있는 결과 관측 파일(`machine.json`)이 생성됩니다.

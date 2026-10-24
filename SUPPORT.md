@@ -1,8 +1,8 @@
 # Support policy
 
-ORCA_auto support is best-effort and centered on reproducible project issues.
-The project is maintained as research software, not as a commercial support
-service or a substitute for local computational-chemistry judgment.
+For help with ORCA_auto, open a GitHub issue with a small example that reproduces
+the problem. Support focuses on the queue, worker, reports and documentation;
+response times depend on maintainer availability.
 
 ## Where to ask
 
@@ -36,14 +36,14 @@ private research data before posting.
 
 ## Scope boundaries
 
-The project can help with ORCA_auto behavior and documentation. It generally
-cannot provide support for:
+The project can help with ORCA_auto behavior and documentation. The following questions belong with the engine provider, local administrator
+or the researcher interpreting the calculation:
 
 - ORCA licensing or upstream ORCA bugs;
 - site-specific scheduler, MPI, filesystem, or module-system policy;
 - interpreting whether a computed result is chemically meaningful;
 - debugging private calculations that cannot be reduced to sanitized artifacts;
-- emergency production support or guaranteed response times.
+- urgent operational support that needs a guaranteed response time.
 
 If a problem depends on a real ORCA installation, distinguish that from a public
 CI/fake-engine failure. The validation guide explains this split:

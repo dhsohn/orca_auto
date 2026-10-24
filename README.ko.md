@@ -6,77 +6,58 @@
   <a href="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml"><img src="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/dhsohn/orca_auto/releases/latest"><img src="https://img.shields.io/github/v/release/dhsohn/orca_auto" alt="Release"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
-  <a href="https://github.com/dhsohn/orca_auto/blob/v10.2.3/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/dhsohn/orca_auto/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-<p align="center"><a href="https://github.com/dhsohn/orca_auto/blob/v10.2.3/README.md">English</a> · <b>한국어</b></p>
+<p align="center"><a href="https://github.com/dhsohn/orca_auto/blob/main/README.md">English</a> · <b>한국어</b></p>
 
-ORCA_auto는 Linux 및 WSL 환경을 위한 **큐 기반 ORCA 실행 및 관리 도구**입니다.
-작업 큐와 백그라운드 워커로 양자화학 계산을 실행하고, CLI 및 구조화된 데이터(`--json`, `machine.json`)로 진행 상황과 결과를 추적합니다.
+ORCA_auto는 **ORCA 계산을 큐에 넣고, 터미널을 닫은 뒤에도 진행 상황과 결과를 확인하는 도구**입니다. Linux와 WSL2에서 systemd 워커가 계산을 실행하고, 명령줄에서 대기·실행·종료 상태를 살펴볼 수 있습니다.
 
-## 주요 기능
+## 계산을 제출한 다음에도
 
-- **백그라운드 실행**: 작업을 큐에 등록하면 터미널 세션이 종료되어도 systemd 워커가 백그라운드에서 계산을 이어갑니다.
-- **구조화된 상태 및 결과 관리**: `orca_auto queue list --json`과 `orca_auto service status --json`으로 진행 상황을 조회하며, 계산 종료 시 생성되는 `machine.json`으로 후속 분석 도구 및 자동화 스크립트에 결과를 전달합니다.
-- **명시적 장애 복구**: 비정상 중단이 발생해도 명확한 복구 경로를 따르며, 실패한 화학 계산을 자동으로 다시 실행하지 않습니다.
+- **여러 계산을 큐로 관리합니다.** 입력 디렉터리를 제출하면 작업이 디스크에 기록되고, 워커가 호스트 자원 여유에 따라 실행합니다.
+- **상태와 결과를 한곳에서 확인합니다.** `orca_auto queue list`로 큐를 살펴보고, `--json` 출력과 계산별 `machine.json`을 분석 스크립트에 연결합니다.
+- **중단 원인에 맞춰 복구합니다.** 워커·호스트 중단과 계산 자체의 실패를 구분합니다. 실패한 화학 계산은 자동으로 다시 실행하지 않습니다.
+- **필요한 알림만 받습니다.** [Discord](https://github.com/dhsohn/orca_auto/blob/main/docs/DISCORD_SETUP.ko.md)나 [Slack](https://github.com/dhsohn/orca_auto/blob/main/docs/SLACK_SETUP.ko.md) 알림을 선택해 설정할 수 있습니다.
 
-## 시작하기
+## 첫 계산 시작하기
 
-**Python 3.11+**, Linux/WSL2 및 별도로 설치된 ORCA 엔진이 필요합니다.
-워커 프로세스는 `systemd`로 관리합니다.
+**Python 3.11 이상**, **Linux 또는 WSL2**, 별도로 설치한 **ORCA**가 필요합니다. 백그라운드 워커는 **systemd**로 관리합니다.
 
 ```bash
 python -m pip install orca_auto==10.2.3
 ```
 
-- **[설치 상세 안내](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/INSTALLATION.ko.md)** — PyPI 패키지 설치 및 환경 설정
-- **[빠른 시작 가이드](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/QUICKSTART.ko.md)** — 기본 환경 설정, 워커 서비스 등록 및 첫 계산 제출
+[설치 안내](https://github.com/dhsohn/orca_auto/blob/main/docs/INSTALLATION.ko.md)에서 실행 환경을 준비한 뒤, [빠른 시작](https://github.com/dhsohn/orca_auto/blob/main/docs/QUICKSTART.ko.md)을 따라 설정 파일 생성 → 워커 등록 → 입력 디렉터리 제출 → 결과 확인 순서로 진행하세요.
 
-10.2.x 설치는 [10.2.3 업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/RELEASE.md#upgrading-to-1023)(영문)를 따릅니다. %freq 블록으로 요청한 진동수 근거 검사를 수정하며 상태 마이그레이션은 필요하지 않습니다.
-10.1.x 설치는 [10.2 업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/RELEASE.md#upgrading-to-102)(영문)를 따릅니다. 10.2는 큐 Detail 표시를 확장하고 불완전한 최종 좌표가 보고서에 쓰이는 문제를 수정합니다.
-기존 10.0.x 설치는 [10.1 업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/RELEASE.md#upgrading-to-101)(영어)를 따릅니다. 10.1부터는 마지막 진동수 섹션으로 진동수 근거를 판정합니다.
-9.0.x 설치는 먼저 [10.0 업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/RELEASE.md#upgrading-to-100)(영어)를 따릅니다. 10.0은 `completed` 실행의 의미를 바꿉니다.
-8.x 이하에서 업그레이드할 때는 먼저 [9.0 업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/RELEASE.md#upgrading-to-90)(영어)를 따른 뒤 10.0 업그레이드 안내를 따릅니다.
-6.x 이하에서는 먼저 [7.0 마이그레이션](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/RELEASE.md#upgrading-to-70)(영어)을 완료한 뒤 9.0 업그레이드를 진행합니다.
+## 기존 설치 업그레이드
 
-## 계산화학 도구 생태계
+현재 버전에 맞는 안내를 따르세요. 이전 버전의 단계별 마이그레이션 내용은 링크에 정리되어 있습니다.
 
-- [Chemvas](https://github.com/dhsohn/Chemvas): 분자 구조 및 반응식 작도 도구
-- **ORCA_auto**: 계산 큐 및 백그라운드 실행 관리
-- [Chemleaf](https://github.com/dhsohn/Chemleaf): 연구 보고서 및 논문 문서화 도구
+| 현재 버전 | 읽을 안내 | 주요 변경 |
+| --- | --- | --- |
+| 10.2.x | [10.2.3](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-1023) | `%freq` 요청의 진동수 근거 검사 수정. 상태 마이그레이션 없음 |
+| 10.1.x | [10.2](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-102) | 큐 Detail 표시 확장, 불완전한 최종 좌표 거부 |
+| 10.0.x | [10.1](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-101) | 마지막 진동수 섹션으로 근거 판정 |
+| 9.x | [10.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-100) | `completed` 판정 기준 변경 |
+| 7.x–8.x | [9.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-90), 이어서 [10.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-100) | 단계별 업그레이드 |
+| 6.x 이하 | [7.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-70), 이어서 9.0과 10.0 | 이전 저장 형식 마이그레이션부터 진행 |
 
-각 도구는 독립적인 로컬 우선(Local-first) 연구 도구이며, 표준 형식(`machine.json`, 결과 번들, 입력 파일)으로 연계됩니다.
-[도구 간 연결 방식 →](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/RELATED_WORK.md#local-first-companion-tools)(영어)
+## 함께 쓰는 연구 도구
+
+[Chemvas](https://github.com/dhsohn/Chemvas)는 분자 구조와 반응식을 그리고, ORCA_auto는 계산을 실행·관리하며, [Chemleaf](https://github.com/dhsohn/Chemleaf)는 연구 문서를 작성하는 도구입니다. 각 프로젝트는 독립적으로 사용할 수 있습니다. ORCA_auto의 결과를 다른 프로그램에서 읽으려면 [공개 인터페이스 규격](https://github.com/dhsohn/orca_auto/blob/main/docs/PUBLIC_CONTRACTS.ko.md)을 참고하세요.
 
 ## 문서
 
-[명령어 레퍼런스](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/REFERENCE.ko.md) · [공개 인터페이스 규격](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/PUBLIC_CONTRACTS.ko.md) ·
-[아키텍처 설계](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/ARCHITECTURE.ko.md) · [systemd 서비스](https://github.com/dhsohn/orca_auto/blob/v10.2.3/systemd/README.ko.md) ·
-[Discord 알림 설정](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/DISCORD_SETUP.ko.md) ·
-[Slack 알림 설정](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/SLACK_SETUP.ko.md) (10.0.0 신규, 9.0.x는 Slack을 지원하지 않음)
+- **사용과 운영:** [명령어](https://github.com/dhsohn/orca_auto/blob/main/docs/REFERENCE.ko.md) · [systemd 서비스](https://github.com/dhsohn/orca_auto/blob/main/systemd/README.ko.md) · [지원](https://github.com/dhsohn/orca_auto/blob/main/SUPPORT.md)
+- **결과와 설계:** [공개 인터페이스 규격](https://github.com/dhsohn/orca_auto/blob/main/docs/PUBLIC_CONTRACTS.ko.md) · [아키텍처](https://github.com/dhsohn/orca_auto/blob/main/docs/ARCHITECTURE.ko.md) · [검증](https://github.com/dhsohn/orca_auto/blob/main/docs/VALIDATION.md) · [관련 도구](https://github.com/dhsohn/orca_auto/blob/main/docs/RELATED_WORK.md)
+- **개발과 프로젝트:** [개발 안내](https://github.com/dhsohn/orca_auto/blob/main/docs/DEVELOPMENT.ko.md) · [기여](https://github.com/dhsohn/orca_auto/blob/main/CONTRIBUTING.md) · [로드맵](https://github.com/dhsohn/orca_auto/blob/main/ROADMAP.md) · [변경 이력](https://github.com/dhsohn/orca_auto/blob/main/CHANGELOG.md)
+- **인용과 정책:** [인용](https://github.com/dhsohn/orca_auto/blob/main/CITATION.cff) · [보안](https://github.com/dhsohn/orca_auto/blob/main/SECURITY.md) · [행동 강령](https://github.com/dhsohn/orca_auto/blob/main/CODE_OF_CONDUCT.ko.md) · [라이선스](https://github.com/dhsohn/orca_auto/blob/main/LICENSE)
 
-[개발 가이드](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/DEVELOPMENT.ko.md) · [검증](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/VALIDATION.md) ·
-[로드맵](https://github.com/dhsohn/orca_auto/blob/v10.2.3/ROADMAP.md) · [변경 이력](https://github.com/dhsohn/orca_auto/blob/v10.2.3/CHANGELOG.md)
-
-[인용](https://github.com/dhsohn/orca_auto/blob/v10.2.3/CITATION.cff) · [기여](https://github.com/dhsohn/orca_auto/blob/v10.2.3/CONTRIBUTING.md) ·
-[지원](https://github.com/dhsohn/orca_auto/blob/v10.2.3/SUPPORT.md) · [보안](https://github.com/dhsohn/orca_auto/blob/v10.2.3/SECURITY.md) · [행동 강령](https://github.com/dhsohn/orca_auto/blob/v10.2.3/CODE_OF_CONDUCT.ko.md)
+버그나 개선 제안은 [GitHub Issues](https://github.com/dhsohn/orca_auto/issues)에 남겨 주세요. 계산 문제를 보고할 때 필요한 자료는 [지원 안내](https://github.com/dhsohn/orca_auto/blob/main/SUPPORT.md)에 있습니다.
 
 ## 만든 방식
 
-저는 프로그래머가 아니라 화학자입니다. 이 저장소의 코드는 AI 코딩 에이전트가 작성합니다.
-저는 ORCA_auto가 무엇을 해야 하는지 정하고, 공개 동작을
-[공개 인터페이스 규격](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/PUBLIC_CONTRACTS.ko.md)에
-기록하고, 변경이 병합되기 전에 통과해야 할 검사를 정합니다.
+저는 화학 연구에서 반복해서 쓰는 계산 도구를 만들고 있습니다. 요구사항과 [공개 동작](https://github.com/dhsohn/orca_auto/blob/main/docs/PUBLIC_CONTRACTS.ko.md), 검증 기준은 제가 정하고, 코드는 AI 코딩 에이전트를 활용해 작성합니다.
 
-코드를 한 줄씩 리뷰하지 않기 때문에, 변경은 에이전트의 "동작한다"는 보고가 아니라 증거로
-받아들입니다.
-
-- `make check`가 lint, 포맷, 타입 검사, import 경계 검사, 한영 문서 대칭 검사, 전체 테스트와
-  coverage를 실행합니다. CI도 같은 게이트를 실행하고, 생성된 `machine.json`을 공통
-  [machine-contracts](https://github.com/dhsohn/machine-contracts) v1 규격을 고정 복사한 내장 validator로 검증합니다.
-- 공개 동작을 바꾸는 변경은 같은 변경 안에서 규격 문서도 고칩니다.
-- ORCA_auto가 엔진을 실행하는 방식을 바꾸는 변경은 실제 ORCA 엔진으로 범위를 제한한 계산을 돌리고,
-  정상 종료, 구조 수렴, 진동수처럼 계산 자체의 증거로 판정합니다
-  ([검증](https://github.com/dhsohn/orca_auto/blob/v10.2.3/docs/VALIDATION.md)).
-- 복구, 큐 상태, 결과 정확성처럼 영향이 큰 변경은 별도 에이전트가 독립적으로 적대적 리뷰를
-  합니다.
+`make check`는 린트·포맷·타입·모듈 경계·한영 문서 대칭 검사와 전체 테스트를 실행합니다. 계산 실행 방식을 바꿀 때는 실제 ORCA로도 확인하며, 정상 종료·구조 수렴·진동수처럼 계산에 필요한 근거를 [검증 기준](https://github.com/dhsohn/orca_auto/blob/main/docs/VALIDATION.md)에 따라 살펴봅니다.
