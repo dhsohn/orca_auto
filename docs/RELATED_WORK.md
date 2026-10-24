@@ -1,16 +1,16 @@
 # Related Work and Project Scope
 
-ORCA_auto provides a runtime and observability layer for standalone ORCA quantum chemistry calculations on Linux and WSL.
+ORCA_auto manages standalone ORCA calculations on a Linux or WSL workstation: queueing, execution, progress and results.
 
 ## Local-first Companion Tools
 
-ORCA_auto connects with neighboring open-source tools:
+These independent open-source projects cover different parts of chemistry research:
 
 - **[Chemvas](https://github.com/dhsohn/Chemvas)**: Drawing molecular structures and reaction schemes.
 - **ORCA_auto**: Durable queueing, execution management, and observability for quantum chemical calculations.
 - **[Chemleaf](https://github.com/dhsohn/Chemleaf)**: Generating research reports, Supporting Information, and paper drafts.
 
-These tools share a versioned `machine.json` schema and standardized output bundles, allowing them to connect through local-first research pipelines.
+ORCA_auto publishes calculation observations in `machine.json`. Programs that read those results should follow its [public contracts](PUBLIC_CONTRACTS.md). Chemvas uses CDXML for editable drawings; each project owns its file formats and interfaces.
 
 ## Shell Scripts vs. ORCA_auto
 
@@ -19,8 +19,8 @@ For repeated jobs, ORCA_auto provides queue management, process supervision,
 recovery, and structured output:
 
 - Background queue execution that persists across terminal closures and reboots.
-- Process supervision via systemd rather than fragile foreground scripts.
-- Consistent structured artifacts (`job_state.json` and `machine.json`) for downstream automation.
+- Process supervision through systemd.
+- Public result observations in `machine.json`; internal recovery metadata in `job_state.json`.
 - Explicit failure classification and reproducible recovery procedures.
 - Unified activity tracking across multiple jobs.
 

@@ -2,7 +2,7 @@
 
 **English** | [한국어](INSTALLATION.ko.md)
 
-ORCA_auto is a queue runner and execution manager for ORCA on Linux and WSL2.
+Install ORCA_auto in a virtual environment, then connect it to your ORCA executable and background worker.
 
 ---
 
@@ -13,7 +13,7 @@ ORCA_auto is a queue runner and execution manager for ORCA on Linux and WSL2.
 - **Service Manager**: `systemd` (for supervised background execution)
 - **ORCA Engine**: Separately installed ORCA executable (acceptance-tested with ORCA 6.1.1; other versions are unverified)
 
-> **Upgrading**: If you are upgrading from 6.x or earlier, consult the [7.0 Upgrade Guide](RELEASE.md#upgrading-to-70).
+For upgrades from 6.x or earlier, start with the [7.0 Upgrade Guide](RELEASE.md#upgrading-to-70).
 
 ---
 
@@ -45,18 +45,18 @@ After installation, initialize your configuration file:
 orca_auto init --config ~/orca_auto.yaml
 ```
 
-Outbound notifications are optional: see [Discord Setup](DISCORD_SETUP.md), or [Slack Setup](SLACK_SETUP.md) for the Slack provider new in 10.0.0.
+To receive job notifications, configure [Discord](DISCORD_SETUP.md) or [Slack](SLACK_SETUP.md). Slack is available from 10.0.0.
 
 ### Background Execution with systemd
 
-The installed package includes service templates. Run the following from the activated virtual environment to bind its Python without cloning a repository. To select a source checkout or prepared runtime, keep using --repo PATH.
+The package includes service templates. Run these commands from the activated virtual environment to use its Python. To use a source checkout or prepared runtime, add `--repo PATH`.
 
 ~~~bash
 orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
 orca_auto service status
 ~~~
 
-> **Note**: For interactive sessions or direct command-line use without systemd, you can enqueue jobs with `orca_auto run-dir` and run the supervisor in the foreground via `orca_auto queue worker`.
+For a foreground session without systemd, submit jobs with `orca_auto run-dir` and run the supervisor with `orca_auto queue worker`.
 
 Continue with the [Quickstart Guide](QUICKSTART.md) to submit and inspect calculations.
 
