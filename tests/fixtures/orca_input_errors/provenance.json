@@ -1,0 +1,13 @@
+{
+  "engine": "ORCA 6.1.1",
+  "kind": "verbatim diagnostic excerpt from retained failed IRC output; no fresh engine execution",
+  "original_output_sha256": "100ec05d7323665d6ffa4c72a77f5778cc5f31e8cafb970c41e70d81e715472c",
+  "original_output_bytes": 13074,
+  "original_lines": [
+    182,
+    187
+  ],
+  "excerpt_file": "unknown_irc_keyword.out",
+  "excerpt_sha256": "502b07c121826b925fd504c55c74087fda1eb48eb32cace302f1ffeb7d6764f8",
+  "excerpt_bytes": 264
+}

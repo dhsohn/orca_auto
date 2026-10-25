@@ -18,6 +18,7 @@ ERROR_TERMINATION_NEEDLES: tuple[str, ...] = (
 )
 
 _INPUT_ECHO_RE = re.compile(r"\|\s*\d+>")
+_UNKNOWN_INPUT_BLOCK_IDENTIFIER_RE = re.compile(r"UNKNOWN IDENTIFIER IN \S+ BLOCK LINE\s+\d+\s*:")
 
 _OPT_CONVERGED_NEEDLES = ("THE OPTIMIZATION HAS CONVERGED", "OPTIMIZATION RUN DONE")
 _OPT_NOT_CONVERGED_RE = re.compile(
@@ -61,7 +62,8 @@ def termination_line(line: str) -> tuple[bool, bool]:
     upper = line.upper()
     return (
         any(needle in upper for needle in NORMAL_TERMINATION_NEEDLES),
-        any(needle in upper for needle in ERROR_TERMINATION_NEEDLES),
+        any(needle in upper for needle in ERROR_TERMINATION_NEEDLES)
+        or _UNKNOWN_INPUT_BLOCK_IDENTIFIER_RE.fullmatch(upper.strip()) is not None,
     )
 
 
