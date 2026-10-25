@@ -3,3 +3,6 @@
 # Windows-side tooling from flipping the whole working tree to CRLF (which
 # breaks bash scripts and floods git status with spurious diffs).
 * text=auto eol=lf
+
+# Preserve the native diagnostic's trailing whitespace and line endings.
+tests/fixtures/orca_input_errors/unknown_irc_keyword.out -text whitespace=-blank-at-eol
