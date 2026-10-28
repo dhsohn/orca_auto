@@ -90,7 +90,7 @@ jobs:
       - name: Verify artifact identity and current tag before publishing
         run: python3 scripts/release.py verify --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --artifacts release-artifacts
       - name: Publish this project's wheel and source distribution
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: upload-dist/
           skip-existing: false
