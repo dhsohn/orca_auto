@@ -8,7 +8,7 @@ ORCA_auto는 작업이 큐에 등록, 시작, 종료될 때 Slack 채널 하나�
 
 ## 1. 봇 토큰 준비 (소유자 작업)
 
-ORCA_auto는 Slack 앱, 토큰, 권한을 프로비저닝하지 않으며 범위나 채널 접근 권한을 추가하지도 않습니다. 사용자가 제공한 토큰만 사용하며, `orca_auto init`은 그 토큰을 로컬 설정 파일에 `0600` 권한으로 기록합니다. 워크스페이스 소유자가 ORCA_auto 밖에서 토큰을 한 번 준비합니다.
+워크스페이스에서 Slack 앱을 만들고 발급받은 봇 토큰을 설정합니다(`orca_auto init`은 설정 파일을 `0600` 권한으로 기록합니다).
 
 1. 워크스페이스용 Slack 앱을 만들고 봇 토큰 범위 `chat:write`를 추가합니다.
 2. 앱을 워크스페이스에 설치하고 봇 토큰(`xoxb-`로 시작)을 복사합니다.
@@ -48,7 +48,7 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 | :--- | :--- |
 | 엔드포인트 | 고정 URL `https://slack.com/api/chat.postMessage`로 JSON을 보내며, 설정한 채널만 목적지입니다 |
 | 리디렉션 | 어떤 호스트나 스킴으로도 따라가지 않습니다. 리디렉션은 `slack_http_<status>`로 보고되고 토큰은 다른 곳으로 전달되지 않습니다 |
-| 전송 확인 | 응답에 `"ok": true`, 설정한 ID와 같은 `channel`, 숫자·점·숫자 여섯 자리 형식의 `ts`가 있을 때만 전송된 것으로 봅니다. 이는 Slack의 보장이 아니라 ORCA_auto 자체의 안전 측 확인입니다 |
+| 전송 확인 | 응답에 `"ok": true`, 설정한 ID와 같은 `channel`, 숫자·점·숫자 여섯 자리 형식의 `ts`가 있을 때만 전송된 것으로 봅니다 |
 | 요청 제한 | 올바른 `Retry-After`가 있는 HTTP 429만, 그 시간만큼 기다린 뒤 `max_attempts`회(최대 10회)와 총 대기 120초 안에서 재시도합니다 |
 | 그 밖의 실패 | 네트워크 오류, 시간 초과, 다른 HTTP 상태, `"ok": false`, 읽을 수 없는 응답은 재전송 시 메시지가 두 번 게시될 수 있으므로 재시도하지 않습니다 |
 | 소유권 | 큐 등록과 종료 메시지는 제한된 백그라운드 전송기가 보내기 전에 영속 상태에서 한 번만 점유됩니다. 시작 메시지는 워커 자식 프로세스가 한 번 보냅니다. 충돌, 전송 실패, 전송기 포화 시 메시지가 사라질 수 있으며 다시 보내지 않습니다. 전송은 작업 상태를 바꾸지 않습니다 |
@@ -57,7 +57,7 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 
 ## 5. 변경 사항 적용 및 테스트
 
-설정을 검토한 뒤 직접 관리하는 설치 환경에서 워커 서비스를 재시작하고 작업을 제출합니다. 수정한 설정 파일이 실행 중인 워커보다 새로우면 재시작 보호 장치가 거부하므로, 호스트가 유휴 상태(`active_simulations: 0`)인지 확인한 뒤 [RELEASE](RELEASE.md)에 설명된 대로 `orca_auto service restart --force`를 사용하세요.
+워커 서비스를 재시작하고 작업을 제출해 확인합니다. 수정한 설정 파일이 실행 중인 워커보다 새로우면 일반 재시작이 거부되므로, 호스트가 유휴 상태(`active_simulations: 0`)인지 확인한 뒤 `orca_auto service restart --force`를 실행하세요([RELEASE](RELEASE.md) 참고).
 
 ```bash
 orca_auto service restart
@@ -67,7 +67,7 @@ orca_auto run-dir <job_path>
 
 ## 6. 9.0.x로 롤백하기 전에
 
-9.0.x는 `messenger.provider: slack`과 `slack` 섹션을 거부하므로, 이 설정으로는 9.0.x 워커가 시작되지 않습니다. 롤백하기 전에, 그리고 설정 변경에 대한 소유자의 승인을 받은 경우에만, `messenger` 블록을 Discord 설정이나 비활성 기본값으로 되돌리세요. 이 가이드는 그 변경을 대신 수행하지 않습니다.
+9.0.x는 `messenger.provider: slack`과 `slack` 섹션을 거부합니다. 9.0.x로 롤백하기 전에 `messenger` 블록을 Discord 설정이나 비활성 기본값으로 되돌리세요.
 
 ## 문제 해결
 
@@ -76,15 +76,11 @@ orca_auto run-dir <job_path>
 - **`slack_api_error`:** Slack이 `"ok": true`로 답하지 않았습니다. 앱이 채널에 참여했고 `chat:write` 권한이 있는지 확인하세요.
 - **`slack_invalid_response`:** 응답이 설정한 채널로의 전송을 확인하지 못했습니다. `default_channel_id`를 확인하세요.
 - **`slack_http_<status>`:** HTTP 오류 또는 거부된 리디렉션입니다. 마지막 시도 후의 `slack_http_429`는 요청 제한이 계속되었다는 뜻입니다.
-- **`slack_network_error`:** 연결이 실패했거나 시간이 초과되었습니다. 재시도하지 않습니다.
+- **`slack_network_error`:** 연결 실패 또는 시간 초과입니다. 재시도하지 않습니다.
 - **`slack_unconfirmed_delivery`:** Slack이 200이 아닌 성공 상태로 답해 전송을 확인하지 못했습니다. 재시도하지 않습니다.
-- **`slack_request_error`:** 요청을 만들 수 없었습니다. 가장 흔한 원인은 메시지 텍스트를 인코딩할 수 없는 경우입니다(예: 올바른 UTF-8이 아닌 경로). 설정 파일에서 읽은 토큰은 이미 검증을 통과했으므로 이 코드만으로 토큰이 잘못되었다는 뜻은 아닙니다. 재시도하지 않습니다.
+- **`slack_request_error`:** 요청을 만들지 못했습니다. 주로 경로 등 메시지 텍스트가 유효한 UTF-8이 아닐 때 발생하며, 설정 파일의 토큰 형식은 로드 시점에 이미 검증됩니다. 재시도하지 않습니다.
 
 ## 참고 자료
 
-Slack 공식 프로토콜 문서:
-
 - [`chat.postMessage` 메서드](https://docs.slack.dev/reference/methods/chat.postMessage/)
 - [Web API 요청 제한](https://docs.slack.dev/apis/web-api/rate-limits/)
-
-다음은 위 문서에서 가져온 것이 아닌 ORCA_auto 자체의 로컬 정책입니다: 고정 엔드포인트, 리디렉션을 따르지 않음, 정확한 채널과 여섯 자리 `ts` 확인, HTTP 429만 10회와 대기 120초 안에서 재시도, 그 밖의 실패는 재시도하지 않음, 전송 전 점유 후 최선 노력 전달.

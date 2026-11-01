@@ -28,12 +28,11 @@ Validates an ORCA input directory and enqueues it atomically.
 orca_auto run-dir <PATH> [--input NAME.inp] [--config PATH] [--force] [--priority N] [--json]
 ```
 - `<PATH>`: Target directory containing an ORCA `.inp` file.
+- `--input NAME.inp`: Select a regular input file inside the job directory (paths and symlinks are rejected; default: most recently modified eligible `.inp`).
 - `--force`: Force resubmission in a new generation even if an earlier attempt succeeded.
 - `--priority N`: Queue scheduling priority (default: 10; lower values = higher priority, run earlier).
 - `--json`: Output submission metadata in structured JSON format.
 - A config that does not load (`invalid_config`) or a corrupt `queue.json` (`queue_store_corrupt`) is reported as one `error:` line with exit 1, also with `--log-file`.
-
---input NAME.inp explicitly selects an input within the job directory. Paths and symlinks are rejected. Omitting it preserves selection by most recent modification time.
 
 ---
 
@@ -48,10 +47,9 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--json]
 - Each row carries `worker_log` (`<runs_root>/logs/<queue_id>.log`); the text view lists it under the table for running and failed rows.
 - Rows are the jobs in `queue.json`, each read with its own directory's root `job_state.json`. A run state without a queue row is not listed; `index rebuild` records such runs in `job_locations.json`.
 - Exits 1 without a discoverable config or an existing `runs_root`, creating nothing. A corrupt `admission_slots.json` is reported as an `admission_blockers` entry (scope `admission_store`, queue id `*`) while `active_simulations` falls back to the listing's count. `admission_blockers` lists blocked rows in `queue.json` order, then that entry.
+- Until its terminal replay marker clears, a row keeps its execution status (`completed`, `failed` or `cancelled`) and shows `result publication pending` in Detail. JSON metadata adds `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action` and `publication_owner=orca_queue_worker`, and the per-directory fence stays in `admission_blockers` even outside the requested filter or page. An invalid marker is reported for inspection rather than treated as published.
 
 ---
-
-The row keeps its execution status (`completed`, `failed` or `cancelled`) and shows `result publication pending` in its detail until the terminal replay marker clears. JSON metadata includes `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action` and `publication_owner=orca_queue_worker`. The same per-directory fence appears in `admission_blockers`, including when the row is outside the requested filter/page. An invalid marker directs inspection of the worker log and marker; it is not silently treated as published.
 
 ### `orca_auto queue cancel`
 Cancels a pending or running job.
@@ -110,7 +108,7 @@ orca_auto service status [--json]
 orca_auto service restart [--force]
 ```
 - `status`: Verifies that running worker processes match the checkout HEAD or the installed runtime build. Exits 1 (`ok: false` under `--json`) when a unit is unhealthy or a worker is stale or undetermined.
-- `restart`: Refuses to restart if active calculations are in flight to prevent calculation interruption. Use `--force` to override. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command.
+- `restart`: Refuses to restart while calculations are active unless `--force` is passed. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command.
 
 ---
 

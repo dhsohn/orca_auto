@@ -28,12 +28,11 @@ orca_auto init [--config PATH] [--force]
 orca_auto run-dir <PATH> [--input NAME.inp] [--config PATH] [--force] [--priority N] [--json]
 ```
 - `<PATH>`: ORCA 입력 파일(`.inp`)이 위치한 디렉터리 경로
+- `--input NAME.inp`: 작업 폴더 안의 일반 입력 파일을 명시적으로 선택(경로와 심볼릭 링크는 거부, 기본값: 가장 최근에 수정된 적합한 `.inp`)
 - `--force`: 이미 완료된 성공 기록이 있더라도 새 generation을 생성하여 강제 재실행
 - `--priority N`: 큐 내 우선순위 지정 (기본값: 10, 낮을수록 먼저 실행 / 높은 우선순위)
 - `--json`: 제출 결과를 JSON 형식으로 출력
 - 설정 파일을 읽을 수 없거나(`invalid_config`) `queue.json`이 손상되었을 때(`queue_store_corrupt`) `--log-file`을 지정했더라도 `error:` 한 줄과 종료 코드 1로 보고합니다.
-
---input NAME.inp는 작업 폴더 안의 입력을 명시적으로 선택합니다. 경로와 심볼릭 링크는 거부합니다. 생략하면 기존 최신 수정 파일 선택을 유지합니다.
 
 ---
 
@@ -48,10 +47,9 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--json]
 - 각 행은 `worker_log`(`<runs_root>/logs/<queue_id>.log`)를 포함하며, 텍스트 출력에서는 running·failed 행의 로그 경로를 표 아래에 나열합니다.
 - 행은 `queue.json`의 작업이며, 각 행은 자기 디렉터리의 루트 `job_state.json`과 함께 읽습니다. 큐 행이 없는 실행 상태는 나열하지 않으며, 그런 실행은 `index rebuild`가 `job_locations.json`에 기록합니다.
 - 설정 파일을 찾지 못하거나 `runs_root`가 없으면 아무것도 만들지 않고 종료 코드 1을 반환합니다. `admission_slots.json`이 손상되면 `admission_blockers` 항목(scope `admission_store`, 큐 ID `*`)으로 보고하고 `active_simulations`는 목록 자체의 집계로 대체합니다. `admission_blockers`는 막힌 행을 `queue.json` 순서로 나열하고 그 항목을 마지막에 둡니다.
+- 종료 복구 표시가 제거될 때까지 행의 실행 상태(`completed`, `failed`, `cancelled`)는 유지되고 상세에 `result publication pending`이 표시됩니다. JSON 메타데이터는 `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action`, `publication_owner=orca_queue_worker`를 담으며, 해당 폴더의 차단은 필터·페이지 범위 밖이어도 `admission_blockers`에 남습니다. 잘못된 표시는 발행 완료로 간주하지 않고 워커 로그와 복구 표시 점검을 안내합니다.
 
 ---
-
-종료 복구 표시가 제거될 때까지 실행 상태(`completed`, `failed`, `cancelled`)는 유지하고 상세에 `result publication pending`을 표시합니다. JSON 메타데이터는 `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action`, `publication_owner=orca_queue_worker`를 출력합니다. 해당 폴더의 제한은 행이 필터·페이지 범위 밖이어도 `admission_blockers`에 남습니다. 잘못된 표시는 발행 완료로 간주하지 않고 워커 로그와 복구 표시를 확인해야 합니다.
 
 ### `orca_auto queue cancel`
 대기 중이거나 실행 중인 작업을 취소합니다.
@@ -110,7 +108,7 @@ orca_auto service status [--json]
 orca_auto service restart [--force]
 ```
 - `status`: 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 종료 코드 1(`--json`에서는 `ok: false`)을 반환합니다.
-- `restart`: 실행 중인 계산이 있을 때는 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 전달합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다.
+- `restart`: 실행 중인 계산이 있으면 `--force`가 없는 한 재시작을 거부합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다.
 
 ---
 

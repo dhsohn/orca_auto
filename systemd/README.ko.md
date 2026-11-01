@@ -27,7 +27,7 @@ orca_auto-runtime@USER.target          # 런타임 최상위 관리 타깃
 ## 2. 유닛 등록 및 서비스 관리
 
 ### 유닛 등록 (설치)
-설치기는 패키지에 포함된 src/orca_auto/systemd_templates의 유닛을 /etc/systemd/system/에 렌더링합니다. --user는 필수입니다. --repo를 생략하면 현재의 격리된 Python 가상환경을 사용하므로 저장소 clone이 필요 없습니다. --repo로 소스 체크아웃(.venv 포함) 또는 준비된 런타임을 지정할 수도 있습니다. --config는 대상 사용자의 ~/orca_auto/config/orca_auto.yaml이 기본값입니다. 유닛은 ORCA_AUTO_CONFIG와 queue worker를 사용하며 TimeoutStopSec은 scheduler.max_active_simulations에 따라 정해집니다. 존재하는 설정이 잘못되면 쓰기 전에 실패합니다:
+`orca_auto systemd install`은 패키지의 `src/orca_auto/systemd_templates`를 `/etc/systemd/system/`에 렌더링합니다. `--user`는 필수입니다. `--repo`를 생략하면 저장소 clone 없이 현재 활성 가상환경을 사용하고, `--repo`를 지정하면 소스 체크아웃(`.venv` 포함)이나 준비된 런타임을 선택합니다. `--config` 기본값은 대상 사용자의 `~/orca_auto/config/orca_auto.yaml`이며, 기존 설정 파일이 잘못되면 유닛을 쓰기 전에 실패합니다. 유닛은 `ORCA_AUTO_CONFIG`와 `queue worker`를 바인딩하고 `scheduler.max_active_simulations`로 `TimeoutStopSec`을 계산합니다.
 
 ### 서비스 상태 확인
 유닛 상태와, 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 0이 아닌 종료 코드를 반환합니다:
@@ -36,7 +36,7 @@ orca_auto service status
 ```
 
 ### 서비스 재시작
-진행 중인 계산 작업의 중단을 방지하기 위해, 활성 시뮬레이션이 없는 유휴(idle) 상태일 때만 재시작을 허용합니다:
+활성 시뮬레이션이나 실행권 예약이 남아 있으면 재시작을 거부합니다(`--force`로 강제 실행 가능):
 ```bash
 orca_auto service restart
 

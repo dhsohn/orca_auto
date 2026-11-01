@@ -18,23 +18,14 @@ supported. Users design the chemistry inputs and assess the scientific results.
 
 ## Maintenance priorities
 
-- Keep submission durable and recovery explicit. Calculation failures remain
-  terminal without automatic reruns.
-- Make queue, admission and generation ownership straightforward to inspect.
-- Keep reports tied to verified artifacts and expose missing evidence honestly.
-- Prefer a small public surface, direct ownership and simple installation.
-- Keep English and Korean contracts aligned. Record real-engine acceptance
-  separately from fake-engine CI when engine behavior changes.
+- Keep submission durable and recovery explicit; calculation failures remain terminal without automatic reruns.
+- Keep queue, admission and generation ownership inspectable on disk.
+- Tie reports to verified artifacts and report missing evidence explicitly.
+- Keep the public surface small and English/Korean contracts aligned.
+- Record real-engine acceptance separately from fake-engine CI when engine behavior changes.
 
 ## Scope
 
-New capabilities require a deliberate scope decision. The project does not aim
-to replace ORCA, chemical judgment, a cluster scheduler or a general workflow
-platform. Native Windows execution and site-specific lab scripts are outside its
-supported surface. Retired workflow execution and compatibility aliases are not
-part of it.
+ORCA_auto does not aim to replace ORCA, cluster schedulers, or general workflow engines, and does not support native Windows execution or site-specific lab scripts.
 
-For changes, identify the affected public contract, use a focused issue and PR,
-and record the checks that demonstrate the resulting behavior. Public contract
-breaks require a major release; release publication and operational deployment
-remain separate steps.
+Changes should name the affected public contract and record verification checks in a focused issue and PR. Public contract breaks require a major release; release publication and operational deployment remain separate steps.

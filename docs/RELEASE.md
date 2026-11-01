@@ -32,188 +32,79 @@ described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy
 
 ## Upgrading to 10.2.3
 
-Version 10.2.3 fixes completion checks for frequency requests in active
-`%freq AnFreq true` and `%freq NumFreq true` blocks. A run missing the requested
-final frequency evidence now fails rather than completing on energy and normal
-termination alone. Each switch uses its last explicit boolean value; existing
-route-line frequency requirements still apply.
+Version 10.2.3 fixes completion checks for frequency requests in active `%freq AnFreq true` and `%freq NumFreq true` blocks. A run missing the requested final frequency evidence now fails rather than completing on energy and normal termination alone. Each switch uses its last explicit boolean value; existing route-line frequency requirements still apply.
 
-Use the [10.2 idle-window upgrade procedure](#upgrading-to-102) and retain the
-prior runtime for rollback. No state or configuration migration is required.
-Historical terminal observations are not rewritten and failed calculations are
-not rerun automatically. Publication does not update running workers.
+Follow the [10.2 idle-window upgrade procedure](#upgrading-to-102) and retain the prior runtime for rollback. No state or configuration migration is required; historical terminal observations are not rewritten and failed calculations are not rerun automatically.
 
 ## Upgrading to 10.2.2
 
-Version 10.2.2 fixes EnGrad labels, existing-output adoption, scratch recovery,
-report energy selection, damaged scan rows and command-specific restart
-permission checks. It removes no CLI option, configuration key or state field.
-EnGrad gradient values and completeness remain unvalidated.
+Version 10.2.2 fixes EnGrad labels, existing-output adoption, scratch recovery, report energy selection, damaged scan rows and command-specific restart permission checks. EnGrad gradient values and completeness remain unvalidated.
 
-Use the [10.2 idle-window upgrade procedure](#upgrading-to-102) and the normal
-restart guard. No state or configuration migration is required. Historical
-terminal observations and reports are not rewritten. Retain the prior runtime
-for rollback; resolve interrupted scratch publication with the corrected runtime
-before switching back to a version without the recovery fixes.
+Follow the [10.2 idle-window upgrade procedure](#upgrading-to-102) and retain the prior runtime for rollback. No state or configuration migration is required, and historical observations and reports are not rewritten. Resolve any interrupted scratch publication with the corrected runtime before rolling back to an earlier version.
 
 ## Upgrading to 10.2.1
 
-Version 10.2.1 fixes false restart refusals when configuration timestamps precede
-worker startup within the same second. It preserves systemd's microseconds in an
-integer comparison; actual post-start configuration changes and ambiguous start
-evidence still block restart. Same-second checkout updates remain conservatively
-stale because Git reflog evidence has only whole-second precision.
+Version 10.2.1 fixes false restart refusals when configuration timestamps precede worker startup within the same second by comparing systemd startup timestamps at microsecond precision; post-start configuration edits and ambiguous start evidence still block restart. Same-second checkout updates remain conservatively stale because Git reflog timestamps have whole-second precision.
 
-Use the [10.2 idle-window upgrade procedure](#upgrading-to-102) and the normal
-restart guard. No state or configuration migration is required. Retain the prior
-runtime for rollback; historical terminal observations remain unchanged.
+Follow the [10.2 idle-window upgrade procedure](#upgrading-to-102) and retain the prior runtime for rollback. No state or configuration migration is required, and historical observations are unchanged.
 
 ## Upgrading to 10.2
 
-Version 10.2 adds queue Detail labels and fixes input metadata and final-coordinate
-parsing. It removes or renames no public field, status, reason, CLI option or
-configuration key. Completion criteria and coarse job types are unchanged.
+Version 10.2 adds queue Detail labels and fixes input metadata and final-coordinate parsing. Public fields, statuses, CLI options, configuration keys, completion criteria and coarse job types are unchanged.
 
-- Consumers of `queue list --json` may see the expanded `detail_kind` vocabulary;
-  `unsupported` displays as `Other`, while uncertain or legacy values display as
-  `Unknown`. These are presentation labels, not execution or success evidence.
-  Existing queue rows are not backfilled; see the
-  [Detail contract](PUBLIC_CONTRACTS.md#queue-list-detail-column).
-- An incomplete final coordinate table no longer supplies stale or partial
-  geometry to a report. Geometry metadata is empty and no SI block is produced
-  when final coordinates cannot be established. Final energy and recorded
-  completion status retain their existing meaning. Historical terminal
-  observations are not regenerated or reclassified.
+- Consumers of `queue list --json` may see the expanded `detail_kind` vocabulary; `unsupported` displays as `Other`, while uncertain or legacy values display as `Unknown`. These are presentation labels, not execution or success evidence. Existing queue rows are not backfilled; see the [Detail contract](PUBLIC_CONTRACTS.md#queue-list-detail-column).
+- An incomplete final coordinate table no longer supplies stale or partial geometry to a report. Geometry metadata is empty and no SI block is produced when final coordinates cannot be established. Final energy and recorded completion status keep their existing meaning, and historical observations are not regenerated or reclassified.
 
 In an idle window:
 
-1. Wait for `queue list --json` to show `active_simulations: 0` and for all
-   admission reservations to clear.
+1. Wait for `queue list --json` to show `active_simulations: 0` and for all admission reservations to clear.
 2. Retain the current runtime, units and configuration for rollback.
 3. Install 10.2 in a new environment or [prepared runtime](RUNTIME.md).
-4. Restart under the admission guard and verify `service status --json` against
-   the running worker's version, build and source root.
+4. Restart under the admission guard and verify `service status --json` against the running worker's version, build and source root.
 
-There is no state migration. To roll back, restore the retained runtime and units
-in an idle window; observations already published by 10.2 remain as written.
-Publishing the package performs none of these deployment steps.
+No state migration is required. To roll back, restore the retained runtime and units in an idle window; observations published by 10.2 remain as written.
 
 ## Upgrading to 10.1
 
-Version 10.1 is a minor release. It removes or renames no field, status, reason,
-CLI option or configuration key, and `completed` keeps its 10.0 meaning
-([PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.md#scientific-evidence-and-compatibility)).
-Review two narrower behaviors before switching:
+Version 10.1 keeps existing fields, options and the 10.0 meaning of `completed` ([PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.md#scientific-evidence-and-compatibility)), with two stricter checks:
 
-- The last `VIBRATIONAL FREQUENCIES` section decides frequency evidence. 10.0.0
-  could complete a run on an earlier or truncated section when the last section
-  printed no supported value or an unsupported one such as `NaN cm**-1`. Such a
-  run now fails with `frequency_evidence_missing` and is not retried. Runs
-  finished under 10.0.x keep their recorded status.
+- The last `VIBRATIONAL FREQUENCIES` section decides frequency evidence. 10.0.0 could complete a run on an earlier or truncated section when the last section printed no supported value or an unsupported one such as `NaN cm**-1`. Such a run now fails with `frequency_evidence_missing` and is not retried. Runs finished under 10.0.x keep their recorded status.
 - `run-dir` refuses an input whose active `%maxcore` has no readable value in MB.
 
-After an optional report fails, `machine.json` can carry the additive
-`payload.data.results.report_generation` key. The HTML report and SI block word
-constrained TS searches and IRC evidence more narrowly. The `validation` extra
-and `orca_auto.machine_contracts` are optional, and running jobs does not need
-them.
+When an optional report fails, `machine.json` adds `payload.data.results.report_generation`. The HTML report and SI block state constrained TS searches and IRC evidence more narrowly. The `validation` extra (`orca_auto.machine_contracts`) is optional and not needed to run jobs.
 
-Switch as for any release:
+In an idle window:
 
 1. Wait for `active_simulations: 0`.
 2. Keep the 10.0.x runtime, units and configuration.
 3. Install 10.1 in a new environment or [prepared runtime](RUNTIME.md).
-4. Restart under the guard and verify `service status --json` against the
-   running worker.
+4. Restart under the guard and verify `service status --json` against the running worker.
 
-10.1 adds no state file or queue field. To roll back to 10.0.x, reinstall the
-retained runtime and units in an idle window; observations published by 10.1
-stay as written. Publishing the package performs none of these steps.
+10.1 adds no state file or queue field. To roll back to 10.0.x, reinstall the retained runtime and units in an idle window; observations published by 10.1 remain as written.
 
 ## Upgrading to 10.0
 
-Version 10.0 changes a public contract: a run is `completed` only with present
-completion evidence (a finite final single-point energy, final optimization
-convergence for Opt/TS, a final frequency section when Freq is requested), and a
-run without it fails ([ADR 0012](adr/0012-positive-scientific-completion-evidence.md),
-[PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.md#scientific-evidence-and-compatibility)).
-It also adds the optional Slack provider; Discord settings are unchanged
-([ADR 0016](adr/0016-slack-notification-provider.md)). Publishing the package
-performs none of the steps below.
+Version 10.0 changes a public contract: a run is `completed` only when required completion evidence is present (finite final single-point energy, final optimization convergence for Opt/TS, final frequency section when Freq is requested), and fails otherwise ([ADR 0012](adr/0012-positive-scientific-completion-evidence.md), [PUBLIC_CONTRACTS](PUBLIC_CONTRACTS.md#scientific-evidence-and-compatibility)). It also adds the optional Slack provider while keeping Discord settings unchanged ([ADR 0016](adr/0016-slack-notification-provider.md)).
 
 Before the maintenance window:
 
-1. Review consumers of `queue list --json`, `job_state.json` and `machine.json`
-   that select `completed` runs or resubmit `failed` ones. After the switch some
-   runs that 9.0.x would have completed fail instead, and none of them is retried
-   automatically. Runs finished under 9.0.x keep their recorded status; nothing
-   reclassifies them.
-2. Keep the current 9.0.x runtime (its environment or prepared runtime
-   directory), its installed units and its configuration file unchanged so that
-   they can be restored.
+1. Review consumers of `queue list --json`, `job_state.json` and `machine.json` that select `completed` runs or resubmit `failed` ones. Some runs that 9.0.x would have completed now fail instead without automatic retry; runs finished under 9.0.x are not reclassified.
+2. Retain the 9.0.x runtime, installed units and configuration file unchanged for rollback.
 
 In the idle window:
 
-3. Wait until `queue list --json` shows `active_simulations: 0` and
-   `<runs_root>/.admission/admission_slots.json` holds no reserved or active
-   slot; `service restart` checks again under the admission lock. No job may run
-   across the switch. Then stop the 9.0.x worker and every submitter (`run-dir`
-   callers, scripts and automation) so that nothing writes the queue or job
-   states while the snapshot is taken; take it only while no slot is reserved or
-   active and no submission, cancellation or result publication is unfinished.
-4. Copy this frozen pre-cutover evidence to a dated location outside `runs_root` and
-   keep it with the retained runtime, units and configuration: the
-   configuration file, `<runs_root>/queue.json`,
-   `<runs_root>/.admission/admission_slots.json`,
-   `<runs_root>/job_locations.json` and every `job_state.json` under
-   `runs_root` (job roots and generation directories), keeping their relative
-   paths. Do not move or delete calculation data.
-5. Install 10.0 and its units as for any release (a new environment or a
-   [prepared runtime](RUNTIME.md)), restart under the guard and verify
-   `service status --json`: the running worker's version, build and source root
-   must match the installed unit, and the worker must have started after the
-   last configuration change.
+3. Wait until `queue list --json` shows `active_simulations: 0`, `<runs_root>/.admission/admission_slots.json` holds no reserved or active slot, and no submission, cancellation or result publication is unfinished (`service restart` rechecks under the admission lock). Stop the 9.0.x worker and all submitters (`run-dir` callers, scripts, automation) before taking the snapshot; no job may run across the switch.
+4. Copy the configuration file, `<runs_root>/queue.json`, `<runs_root>/.admission/admission_slots.json`, `<runs_root>/job_locations.json` and every `job_state.json` under `runs_root` (job roots and generation directories, preserving relative paths) to a dated backup outside `runs_root`. Do not move or delete calculation data.
+5. Install 10.0 and its units in a new environment or [prepared runtime](RUNTIME.md), restart under the guard, and verify `service status --json` (worker version, build and source root match the unit, and worker start follows the last config edit).
 
 After the switch:
 
-- `queue_generation` digests are comparable only within one major version. Do
-  not compare 9.x and 10.x digests, and do not let a 9.0.x worker take over rows
-  or job states written by 10.0 unless their compatibility has been shown.
-- Rolling back to 9.0.x is an explicit owner decision made in an idle window.
-  Stop the 10.0 worker; a 9.0.x worker must not continue work that 10.0
-  started. Before restoring anything, copy aside every `job_state.json`, result
-  and queue row that 10.0 created or changed, and leave the job and generation
-  directories in place. Then restore together the step 4 copies (`queue.json`,
-  `admission_slots.json`, `job_locations.json` and every `job_state.json`), the
-  9.0.x configuration (9.0.x rejects `messenger.provider: slack`) and the
-  retained 9.0.x runtime and units. Never restore the old `queue.json` alone on
-  top of job states that 10.0 changed. Keep the 9.0.x worker and submitters
-  stopped after restoring. Before any 9.0.x worker starts, compare every
-  restored `pending` row (queue ID, job directory, generation and selected
-  input identity) with the 10.0 outcomes and generation evidence copied aside.
-  A row proven not claimed, run or resubmitted under 10.0 may resume as that
-  same existing row, not as a new submission or generation, but only by an
-  explicit owner decision after this reconciliation is complete. A row that
-  10.0 already ran, completed or advanced stays blocked, and so does a row
-  whose identity cannot be matched unambiguously; settle those only through
-  supported queue commands such as `queue cancel`, after an explicit owner
-  decision, and never by editing a status by hand. Nothing is replayed or
-  requeued automatically. Start the 9.0.x worker only after every restored
-  pending row is either approved to resume or settled. This procedure relies on the
-  pre-cutover copies, not on 9.0.x reading state written by 10.0, and it
-  deletes no data.
+- `queue_generation` digests are comparable only within one major version. Do not compare 9.x and 10.x digests or let a 9.0.x worker take over rows or job states written by 10.0 unless compatibility has been demonstrated.
+- To roll back to 9.0.x in an idle window: stop the 10.0 worker (9.0.x must not continue work started by 10.0) and copy aside every `job_state.json`, result and queue row created or modified by 10.0 while leaving job and generation directories in place. Restore the step 4 backups (`queue.json`, `admission_slots.json`, `job_locations.json` and every `job_state.json`), the 9.0.x configuration (9.0.x rejects `messenger.provider: slack`) and the retained 9.0.x runtime and units together—never restore `queue.json` alone over 10.0-modified job states. Keep the 9.0.x worker and submitters stopped while comparing every restored `pending` row (queue ID, job directory, generation, selected input identity) against the 10.0 evidence copied aside. Only rows confirmed not claimed, run or resubmitted under 10.0 may resume as existing rows; rows that 10.0 ran, completed or advanced, or whose identity is ambiguous, must be settled through supported queue commands such as `queue cancel` rather than hand-editing statuses. Start the 9.0.x worker only after every restored pending row is approved to resume or settled.
 
 ## Upgrading to 9.0
 
-Version 9.0 changes public contracts (the CHANGELOG entries marked *public
-contract*) and needs an idle-window cutover; publishing the package alone
-performs none of these steps. No job may run across the switch: the queue
-generation token ([ADR 0006](adr/0006-one-generation-identity-for-token-and-fences.md))
-and the writer of a cancelled result
-([ADR 0008](adr/0008-parent-writes-the-cancelled-result.md)) changed, and the
-worker child takes its admission slot token only from `--admission-token`. The
-idle window ensures that a 9.0 worker never supervises or settles a child that
-an 8.x worker started.
+Version 9.0 changes public contracts (the CHANGELOG entries marked *public contract*) and requires an idle-window cutover. No job may run across the switch: the queue generation token ([ADR 0006](adr/0006-one-generation-identity-for-token-and-fences.md)) and the writer of a cancelled result ([ADR 0008](adr/0008-parent-writes-the-cancelled-result.md)) changed, and the worker child takes its admission slot token only from `--admission-token`, so a 9.0 worker must not supervise or settle a child started by 8.x.
 
 Before the maintenance window:
 
@@ -287,8 +178,7 @@ Rolling back to 8.x:
 
 ## Upgrading to 8.0
 
-Version 8.0 removes public contracts and needs an idle-window
-cutover; publishing the package alone performs none of these steps.
+Version 8.0 removes public contracts and requires an idle-window cutover:
 
 - The worker unit `ExecStart` no longer passes `--app orca`, and the new
   worker rejects that option. A unit that still carries it cannot start the new
@@ -347,8 +237,6 @@ ordinary ORCA job or redirect a new worker at unfinished workflow work.
    directories intact; copy only deliberately selected inputs into a new standalone
    job directory when a new calculation is intended.
 
-Publishing 7.0.0 alone performs none of these operational steps.
-
 ## Publishing
 
 After the release PR merges and its CI passes, fetch `origin/main` in the release
@@ -374,8 +262,7 @@ commit contained in `main`. Published tags must never be moved or replaced.
    tag, then attaches the same two distributions and checksum file. It has
    repository write permission without OIDC publishing permission.
 
-The retired extension publisher is not used. Account authentication and publisher
-registration are performed by the account owner without sharing credentials.
+The retired extension publisher is not used.
 
 ## Failed or partial publication
 

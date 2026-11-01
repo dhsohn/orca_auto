@@ -2,34 +2,23 @@
 
 Please follow the [Code of Conduct](CODE_OF_CONDUCT.md) ([한국어](CODE_OF_CONDUCT.ko.md)) in all project interactions.
 
-Thank you for helping improve ORCA_auto. This project is not being prepared as a
-JOSS submission, but it intentionally borrows JOSS-style open-source operating
-practices: clear motivation, reviewable changes, objective verification, and a
-public development record.
-
 ## Project scope
 
-ORCA_auto is a queue-first runtime for ORCA-centered
-computational chemistry work on Linux and WSL. It should make calculations more
-observable and recoverable without becoming a general workflow engine, an ORCA
-replacement, or a collection of one-off site scripts.
+ORCA_auto runs standalone ORCA calculations through a persistent local queue on Linux and WSL. It is not a general workflow engine, an ORCA replacement, or a collection of site-specific scripts.
 
-Good contributions usually improve one of these surfaces:
+Contributions generally cover:
 
-- durable queue submission, cancellation, and worker behavior;
-- ORCA state/report/provenance files;
-- fail-closed execution and interrupted-run recovery;
-- documentation, examples, validation, and release hygiene.
+- durable queue submission, cancellation, and worker supervision;
+- ORCA state, report, and provenance files;
+- fail-closed execution and interruption recovery;
+- documentation, examples, validation, and release checks.
 
 ## Development workflow
 
-Use the same small-record workflow for normal changes:
-
-1. Open or identify a GitHub issue that states the problem.
+1. Open or reference a GitHub issue stating the problem.
 2. Create a focused branch or worktree from `origin/main`.
-3. Keep the change narrow enough to review.
-4. Open a pull request before merge.
-5. Let CI and any relevant local/manual checks finish before merging.
+3. Open a pull request before merge.
+4. Let CI and applicable local or manual checks pass before merging.
 
 Suggested branch prefixes:
 
@@ -41,27 +30,21 @@ Suggested branch prefixes:
 
 ## Pull request narrative
 
-Every PR should use this structure. Keep it factual and evidence-backed.
+Use these sections in every PR:
 
 ### Motivation
 
-Explain the user/research-workflow problem, failure mode, or maintenance gap.
-For ORCA runtime changes, name the calculation class or queue state involved.
+State the user problem, failure mode, or maintenance gap. For ORCA runtime changes, name the calculation class or queue state involved.
 
 ### Changes
 
-List the concrete code, docs, test, or configuration changes. Call out public
-surface changes such as CLI flags, config keys, report fields, execution behavior,
-or output layout changes.
+List code, documentation, test, or configuration changes, calling out public surface changes (CLI flags, config keys, report fields, execution behavior, output layout).
 
 ### Verification
 
-List commands actually run and the result. Do not claim a full ORCA acceptance
-unless a real ORCA binary was used. If a change only affects docs/templates, a
-targeted Markdown/YAML/template check is acceptable; say that no runtime behavior
-changed.
+List exact commands run and their results. Claim real-ORCA acceptance only when a real ORCA binary was used. For docs- or template-only changes, run the relevant checks and note that runtime behavior did not change.
 
-A good verification section looks like:
+Example:
 
 ```text
 ## Verification
@@ -106,8 +89,7 @@ bash scripts/check.sh tests/orca/attempt/test_single_attempt_contract.py -q
 bash scripts/check.sh tests/orca/test_worker_execution.py -q
 ```
 
-The fake ORCA example smoke is intentionally runnable without a licensed ORCA
-binary:
+Run the fake-ORCA smoke test without a licensed ORCA binary:
 
 ```bash
 bash examples/fake_orca_smoke/run.sh
@@ -121,34 +103,21 @@ Versioned hooks live in `.githooks/`. Enable them once per clone:
 git config core.hooksPath .githooks
 ```
 
-- `pre-commit` runs the fast half of `scripts/check.sh` (Ruff lint + format,
-  mypy, import-linter) against the STAGED snapshot — unstaged changes and
-  untracked files are set aside during the checks and restored afterwards, so
-  what passes is exactly what the commit records. Fully-staged Python files
-  are auto-formatted and re-staged, so a missing `ruff format` cannot reach CI.
-- `pre-push` runs the full `scripts/check.sh` (adds the coverage-gated pytest
-  suite) against the existing `.venv`. It fails closed on anything it cannot
-  test through: tracked changes, any untracked non-ignored file, or pushing a
-  ref other than HEAD — Git pushes commits, not your worktree, and the suite
-  must test exactly what lands on CI.
+- `pre-commit` runs the fast checks from `scripts/check.sh` (Ruff lint and format, mypy, import-linter) on the staged snapshot, setting aside unstaged and untracked files during the check. Fully staged Python files are formatted and re-staged automatically.
+- `pre-push` runs the full `scripts/check.sh` (including coverage-gated pytest) against `.venv`. It refuses to push when tracked changes or non-ignored untracked files exist, or when pushing a ref other than `HEAD`.
 
-Both need `.venv` (run `scripts/check.sh` once first) and can be bypassed with
-`git commit --no-verify` / `git push --no-verify`.
+Both require `.venv` (run `scripts/check.sh` once first) and can be bypassed with `git commit --no-verify` or `git push --no-verify`.
 
 ## ORCA, and path policy
 
 - Use absolute Linux paths for configured executables and runtime roots.
-- Do not add support for Windows drive paths, `/mnt/<drive>/...` executable
-  paths, relative executable paths, or `.exe` binaries.
-- CI is allowed to use fake engines and sanitized fixtures. It must not require
-  a licensed ORCA installation.
-- Real ORCA acceptance checks belong in PR verification when the change depends
-  on ORCA runtime semantics.
+- Do not add support for Windows drive paths, `/mnt/<drive>/...` executable paths, relative executable paths, or `.exe` binaries.
+- CI uses fake engines and sanitized fixtures and must not require a licensed ORCA installation.
+- Include real-ORCA acceptance checks in PR verification when a change depends on ORCA runtime semantics.
 
 ## Execution and failure-classification changes
 
-Execution and recovery changes are high-risk because they can waste compute or
-hide failed calculations. Required expectations:
+Changes to execution or recovery must:
 
 - keep every calculation failure terminal after one attempt;
 - reject unsupported routes before queue/generation publication;
@@ -158,30 +127,11 @@ hide failed calculations. Required expectations:
 
 ## Documentation changes
 
-- Keep README examples on the public `orca_auto ...` CLI unless the document is
-  explicitly about internals.
-- Use placeholder paths such as `/home/user/orca_runs`; never include local
-  workstation paths, tokens, chat IDs, or private calculation data.
-- If changing behavior documented in `docs/REFERENCE.md`, update both the
-  behavior text and any related examples.
-- When an English public document changes user-facing behavior or a supported
-  contract, update its Korean counterpart in the same change.
-
-## AI assistance disclosure
-
-AI tools may be used to draft code, tests, documentation, or reviews. Whoever
-submits the change remains responsible for the result: its validation, its
-licensing and the evidence behind it. If AI assistance was substantial in an
-outside contribution, disclose it briefly in the PR body and include the same
-verification evidence required for any other change.
-
-Do not paste secrets, private credentials, proprietary ORCA output, or private
-research data into AI tools.
+- Keep README examples on the public `orca_auto ...` CLI unless the document is explicitly about internals.
+- Use placeholder paths such as `/home/user/orca_runs`; never include workstation paths, tokens, channel IDs, or private calculation data.
+- When changing behavior in `docs/REFERENCE.md`, update both prose and examples.
+- Update the English and Korean counterparts together whenever user-facing behavior or a public contract changes.
 
 ## Reporting issues
 
-Please use the issue templates when possible. For calculation failures, include
-the terminal generation's sanitized `machine.json`, the command used, the
-calculation type, and the exact terminal/error marker when available. A sanitized
-`job_state.json` excerpt may help diagnose private recovery state, but it is not a
-result contract. Remove secrets and private system paths before posting logs.
+Use the issue templates when possible. For calculation failures, include the sanitized terminal `machine.json`, command run, calculation type, and terminal/error marker, plus a sanitized `job_state.json` excerpt if relevant to recovery state (`job_state.json` is internal metadata, not a result contract). Remove secrets and private paths before posting.

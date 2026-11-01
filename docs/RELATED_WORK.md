@@ -14,24 +14,22 @@ ORCA_auto publishes calculation observations in `machine.json`. Programs that re
 
 ## Shell Scripts vs. ORCA_auto
 
-Direct execution (`orca input.inp > input.out`) can suffice for a single calculation.
-For repeated jobs, ORCA_auto provides queue management, process supervision,
-recovery, and structured output:
+Direct execution (`orca input.inp > input.out`) suffices for a single run. For repeated jobs, ORCA_auto adds:
 
-- Background queue execution that persists across terminal closures and reboots.
+- Disk-backed queueing across terminal disconnects and reboots.
 - Process supervision through systemd.
-- Public result observations in `machine.json`; internal recovery metadata in `job_state.json`.
-- Explicit failure classification and reproducible recovery procedures.
-- Unified activity tracking across multiple jobs.
+- Structured observations in `machine.json` and internal recovery state in `job_state.json`.
+- Failure classification without automatic reruns of failed calculations.
+- Queue status tracking across jobs.
 
 ## Cluster Schedulers and Resource Managers
 
-Cluster schedulers like SLURM and PBS manage compute resources across large clusters. ORCA_auto focuses on workstation/single-node execution (under Linux or WSL) with systemd. It handles ORCA-specific lifecycle management, input selection, output parsing, and failure diagnosis above the OS process layer.
+Cluster schedulers (SLURM, PBS) allocate nodes across multi-host clusters. ORCA_auto targets single-host Linux and WSL workstations under systemd, handling ORCA input binding, output analysis, and recovery above OS process supervision.
 
 ## General Workflow Engines
 
-General workflow engines (such as Nextflow, Snakemake, and AiiDA) provide DAG abstractions across multi-step distributed pipelines. ORCA_auto handles durable submission, execution and reporting for standalone ORCA jobs on Linux/WSL. External tools can consume its documented machine observations; ORCA_auto does not provide workflow orchestration.
+Workflow engines (Nextflow, Snakemake, AiiDA) orchestrate multi-step DAG pipelines. ORCA_auto runs standalone ORCA jobs only; external tools can consume its documented `machine.json` observations.
 
 ## Chemistry Libraries
 
-Libraries like ASE, RDKit, and cclib handle structure generation, file parsing, and cheminformatics. ORCA_auto focuses on execution supervision and lifecycle management, rather than duplicating molecular modeling algorithms.
+Libraries such as ASE, RDKit, and cclib handle structure generation, file parsing, and cheminformatics. ORCA_auto supervises ORCA execution rather than implementing molecular modeling algorithms.
