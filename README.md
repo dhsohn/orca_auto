@@ -18,7 +18,7 @@ ORCA_auto **queues ORCA calculations and keeps them running after you close the 
 - **Manage jobs through a queue.** Submit an input directory; the job is saved to disk and the worker starts it when host resources allow.
 - **Inspect progress and results.** Use `orca_auto queue list` to check the queue, then feed `--json` output and each calculation's `machine.json` into analysis scripts.
 - **Recover according to the cause.** Worker and host interruptions are distinguished from calculation failures. Failed chemistry calculations are not retried automatically.
-- **Receive notifications where you work.** Configure optional [Discord](https://github.com/dhsohn/orca_auto/blob/main/docs/DISCORD_SETUP.md) or [Slack](https://github.com/dhsohn/orca_auto/blob/main/docs/SLACK_SETUP.md) notifications.
+- **Configure optional notifications.** Send job updates to [Discord](https://github.com/dhsohn/orca_auto/blob/main/docs/DISCORD_SETUP.md) or [Slack](https://github.com/dhsohn/orca_auto/blob/main/docs/SLACK_SETUP.md).
 
 ## Start your first calculation
 
@@ -32,7 +32,7 @@ Prepare your environment with the [installation guide](https://github.com/dhsohn
 
 ## Upgrade an existing installation
 
-Start with the guide for your installed version. The linked release notes explain each migration step.
+Follow the guide for your installed version.
 
 | Installed version | Guide | Main change |
 | --- | --- | --- |
@@ -42,10 +42,6 @@ Start with the guide for your installed version. The linked release notes explai
 | 9.x | [10.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-100) | Updated meaning of `completed` |
 | 7.x–8.x | [9.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-90), then [10.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-100) | Upgrade in stages |
 | 6.x or earlier | [7.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-70), then 9.0 and 10.0 | Migrate the older stored formats first |
-
-## Companion research tools
-
-[Chemvas](https://github.com/dhsohn/Chemvas) draws molecules and reaction schemes, ORCA_auto runs and manages calculations, and [Chemleaf](https://github.com/dhsohn/Chemleaf) supports research writing. Each is an independent project. To read ORCA_auto results in another program, start with its [public contracts](https://github.com/dhsohn/orca_auto/blob/main/docs/PUBLIC_CONTRACTS.md).
 
 ## Documentation
 
@@ -58,6 +54,4 @@ Report bugs and suggest improvements through [GitHub Issues](https://github.com/
 
 ## How this was built
 
-I build ORCA_auto for calculations I return to in chemistry research. I set the requirements, [public behavior](https://github.com/dhsohn/orca_auto/blob/main/docs/PUBLIC_CONTRACTS.md) and validation criteria, and use AI coding agents to write the code.
-
-`make check` runs lint, formatting, type and import-boundary checks, bilingual documentation checks and the full test suite. Changes to engine execution also need a run with real ORCA, assessed against the calculation's evidence—such as normal termination, geometry convergence or frequencies—under the [validation criteria](https://github.com/dhsohn/orca_auto/blob/main/docs/VALIDATION.md).
+I build ORCA_auto for chemistry research calculations, define its requirements, [public behavior](https://github.com/dhsohn/orca_auto/blob/main/docs/PUBLIC_CONTRACTS.md) and [validation criteria](https://github.com/dhsohn/orca_auto/blob/main/docs/VALIDATION.md), and use AI coding agents to write the code. `make check` runs lint, formatting, type, import-boundary, bilingual-docs and test checks; changes to engine execution or output analysis are also checked with real ORCA against calculation evidence (normal termination, geometry convergence, frequencies).

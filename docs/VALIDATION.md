@@ -33,73 +33,26 @@ evidence. Match acceptance to the job: energy/termination for SP, geometry conve
 for optimization, frequency evidence for stationary points, and endpoint/path evidence
 for IRC/NEB. A zero process exit or terminal queue row alone is insufficient.
 
-Do not invent missing evidence or run expensive calculations merely to broaden a
-source-only change. State what ran, what did not, and why the chosen acceptance applies.
+Skip real-engine runs for changes that cannot affect ORCA execution or output parsing, and record which checks ran and why.
 
-`tests/integration/test_orca_worker_smoke.py` holds bounded real-ORCA cases: an H2
-single point, electronic-state and input-echo checks, a water optimization and an
-ammonia TS/IRC. They run through a real worker only when `ORCA_REAL_EXECUTABLE`
-names an ORCA executable, and are skipped otherwise.
+`tests/integration/test_orca_worker_smoke.py` holds bounded real-ORCA cases: an H2 single point, electronic-state and input-echo checks, a water optimization and an ammonia TS/IRC. They run through a real worker only when `ORCA_REAL_EXECUTABLE` names an ORCA executable, and are skipped otherwise.
 
-Earlier real-engine evidence remains available in the
-[concurrent RAM scratch acceptance record](https://github.com/dhsohn/orca_auto/pull/346).
-It covers the named ORCA 6.1.1 cases at source revision `2d6cfa7a`, with its stated
-limits; it is not a new acceptance run of version 7.
+Earlier ORCA 6.1.1 acceptance evidence for concurrent RAM scratch is in the [concurrent RAM scratch acceptance record](https://github.com/dhsohn/orca_auto/pull/346) (source revision `2d6cfa7a`).
 
 ## Regression coverage
 
-Durable identity readers for historical data are retained where needed for
-ownership safety. Preserve standalone ORCA tests when moving or removing tests,
-including generation fencing, reports, queue crashes, admission accounting and
-cancellation.
+Retain durable identity readers needed for historical ownership safety, and preserve standalone ORCA tests (generation fencing, reports, queue crashes, admission accounting, cancellation) when reorganizing tests. Remove wrapper-only duplicate tests only after finding the behavior test that protects the same contract.
 
-For a refactor, compare output bytes or behaviors with the prior implementation.
-For a removal, search code, dispatch strings, configuration, CI, documentation and
-installed consumers; distinguish historical evidence from active behavior.
-Run independent review for public contracts, durable ownership or scientific evidence.
-Finish with `git diff --check`, source inventory and secret scanning.
+Require independent review for changes to public contracts, durable ownership, or scientific evidence. For refactors, compare output bytes or behavior against the prior implementation. For removals, check code, dispatch strings, configuration, CI, documentation and installed consumers, distinguishing historical records from active behavior. Finish with `git diff --check`, source inventory and secret checks.
 
-Test quality is checked against observable behavior. Expected values come from
-fixed contract values or independent input fixtures, not the function under test.
-When two readers are compared, also state which inputs must succeed and which
-must fail; agreement alone does not prove correctness. Artifact checks require
-every reported file to exist before comparing its contents.
+Assert observable behavior against fixed contract values or independent fixtures rather than the function under test, and demonstrate that stronger assertions reject a representative faulty implementation. When comparing two readers, check both valid and invalid inputs, and verify reported files exist before comparing contents. Prefer real boundary paths over stubs for submission and persistence tests; keep static type and ownership checks (`mypy` exercises type-only test modules); and avoid collecting impossible parameter combinations as permanent skips (environment-gated real-ORCA cases are intentional skips).
 
-Prefer real boundary paths over successful stubs when testing submission or
-persistence. Remove wrapper-only duplicates only after locating the behavior test
-that protects the same contract. Demonstrate that stronger assertions reject a
-representative faulty implementation. Keep static type and ownership checks:
-a test module with only type-checking code can still be exercised by mypy.
-Environment-gated real-ORCA cases are intentional; impossible parameter
-combinations should not be collected as permanent skips.
-
-Tests do not update an installed runtime. Release publication and idle deployment
-require the separate checks in [RELEASE](RELEASE.md) and [RUNTIME](RUNTIME.md).
+Tests do not update an installed runtime; see [RELEASE](RELEASE.md) and [RUNTIME](RUNTIME.md) for publication and idle cutover checks.
 
 ## Scientific evidence regression fixtures
 
-The small H2, water and ammonia calculations in tests/fixtures/orca_6_1_1
-retain authentic inputs and complete ORCA 6.1.1 outputs, with SHA256 provenance.
-Literal expected energies, convergence and imaginary-mode counts supplement
-synthetic edge cases; SCF recovery sequencing currently has synthetic evidence
-only. These are parser regressions, not a fresh execution of the current runner.
-`tests/orca/test_atom_mode_association.py` pins atom identity, order and
-normal-mode association on the water and ammonia outputs only. No authentic
-output with dummy, ghost or embedded atoms, or with a numerical or partial
-Hessian, is retained. The two coordinate readers are unchanged, and whether they
-agree on such outputs is not established.
+The small H2, water and ammonia calculations in `tests/fixtures/orca_6_1_1` retain authentic inputs and complete ORCA 6.1.1 outputs with SHA-256 provenance. Literal expected energies, convergence verdicts and imaginary-mode counts supplement synthetic edge cases (SCF recovery sequencing has synthetic fixtures only). `tests/orca/test_atom_mode_association.py` pins atom identity, order and normal-mode association on the water and ammonia outputs; outputs with dummy/ghost/embedded atoms or numerical/partial Hessians are not covered.
 
-For the scientific-evidence change, the full repository and distribution gates
-are required. The 10.2.3 acceptance ran the #407 source revision
-`482b4631bf354b402c12d42c4192c3bdaab363a7` with ORCA 6.1.1:
-water HF/STO-3G Opt with separate `%freq AnFreq true` and
-`%freq NumFreq true` requests. Both used the durable queue and a real worker,
-one core, 512 MB maxcore, and one shared operational admission reservation.
-Both converged at -74.965901189921 Eh with nine frequencies and zero imaginary
-modes. Machine-observation validation, artifact receipts, HTML and SI checks
-passed. Operational configuration and engine hashes were unchanged; the
-reservation was released. This bounded water case does not establish atom/mode
-association for numerical Hessians generally or extend supported engine versions.
-Historical reports remain untouched. The wheel-only systemd test renders and
-applies units to a temporary directory with injected systemctl; it does not
-restart the operational services.
+Run both the full repository gate (`make check`) and the distribution gate (`make check-packages`) for scientific-evidence changes.
+
+For 10.2.3 acceptance (source revision `482b4631bf354b402c12d42c4192c3bdaab363a7`, ORCA 6.1.1), water HF/STO-3G Opt calculations with `%freq AnFreq true` and `%freq NumFreq true` ran through the durable queue and worker (1 core, 512 MB maxcore), converging at `-74.965901189921 Eh` with nine frequencies and zero imaginary modes and passing `machine.json`, artifact-receipt, HTML and SI checks. This single water case does not establish general numerical-Hessian atom/mode association or extend supported ORCA versions.

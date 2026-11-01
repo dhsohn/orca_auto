@@ -27,7 +27,7 @@ orca_auto-runtime@USER.target          # Top-level runtime target
 ## 2. Service Management Commands
 
 ### Install Units
-The installer renders packaged src/orca_auto/systemd_templates into /etc/systemd/system/. It requires --user. Omit --repo to use the current isolated Python virtual environment, without a repository clone. An explicit --repo still selects a source checkout (with .venv) or a prepared runtime. --config defaults to the target user's ~/orca_auto/config/orca_auto.yaml. Units bind ORCA_AUTO_CONFIG and queue worker; TimeoutStopSec follows scheduler.max_active_simulations. An existing invalid config fails before any write:
+`orca_auto systemd install` renders packaged `src/orca_auto/systemd_templates` into `/etc/systemd/system/`. `--user` is required. Omitting `--repo` uses the active virtual environment without a repository clone; `--repo` selects a source checkout (with `.venv`) or a prepared runtime. `--config` defaults to the target user's `~/orca_auto/config/orca_auto.yaml`, and an invalid existing config fails before writing any unit. Rendered units bind `ORCA_AUTO_CONFIG` and `queue worker`, and compute `TimeoutStopSec` from `scheduler.max_active_simulations`.
 
 ### Check Service Status
 Verifies unit health and that running worker processes match the checkout HEAD or the installed runtime build. Returns non-zero when a unit is unhealthy or a worker is stale or undetermined:
@@ -36,7 +36,7 @@ orca_auto service status
 ```
 
 ### Service Restart
-To protect running calculations from accidental interruption, restarts are only permitted during an idle maintenance window (zero active simulations):
+Refuses restart unless active simulations and admission reservations are zero (`--force` overrides):
 ```bash
 orca_auto service restart
 

@@ -18,9 +18,9 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 | `queue cancel TARGET` | Cancels a job by queue ID, run ID, or unambiguous directory path alias. A directory path or name resolves to that directory's active generation, or to its newest finished row when none is active; a name shared by different directories, or two active generations, is ambiguous. A queue ID or run ID wins over a directory name, and a name that is an existing directory in the working directory without a queue row of its own is ambiguous too. Under `--json`, `result` is `{status, reason, queue_id, job_id, reaction_dir}`; a failure exits 1 with `reason` `target_not_found`, `ambiguous`, `already_terminal` or `cancel_failed`, and the row fields stay empty when no single row was named. Exits 1 without a discoverable config or an existing `runs_root`. |
 | `index prune` | Previews indexed rows whose disk paths no longer exist. Removes them only when `--apply` is passed. |
 | `index rebuild` | Re-derives `job_locations.json` rows from every `job_state.json` under `runs_root`, adding or updating rows by job id and never removing one. `--dry-run` reports without writing. |
-| `systemd install` | Installs systemd unit templates for the specified user and current virtual environment, or an explicit checkout/prepared runtime (`--repo`). A config that exists but does not load exits 1 and writes no units; `TimeoutStopSec` is rendered from `scheduler.max_active_simulations` and `ReadWritePaths` names only `runs_root`. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
+| `systemd install` | Installs packaged systemd unit templates for the specified user using the current isolated virtual environment, or an explicit checkout/prepared runtime (`--repo`). A config that exists but does not load exits 1 and writes no units; `TimeoutStopSec` is rendered from `scheduler.max_active_simulations` and `ReadWritePaths` names only `runs_root`. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
 | `service status` | Inspects systemd units and verifies worker process freshness against the checkout HEAD or the installed runtime build. Exits 1 (`ok: false` under `--json`) when a unit is unhealthy or a worker is stale or undetermined. |
-| `service restart` | Refuses restart if active calculations or reservations exist, preventing accidental data loss. Use `--force` to bypass. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
+| `service restart` | Refuses restart when active calculations or reservations exist unless `--force` is passed. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
 | `scratch list` | Lists RAM-scratch workspaces under `orca.runtime.scratch_root` and whether any non-live workspace blocks new scratch launches. Exits 0 even when blockers exist; supports `--json`. |
 | `scratch clear NAME` / `--all-stale` | Removes non-live (`stale`, `unverifiable`, `invalid-manifest`) scratch workspaces. Live workspaces are refused; exits 1 when a target was refused, while `--all-stale` with nothing to remove exits 0. Publication temp files of the durable generation are cleaned only when the manifest was valid and the generation lies under `runs_root`; otherwise the path is left alone and named in `durable_note`. |
 
@@ -31,14 +31,13 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 ### `queue list` Detail column
 - The Detail label comes from, in order: a specific queue `task_kind` that names an operation (never generic `orca` or `orca_run_inp`); the row's `detail_kind` when it is a supported normalized value; the row's coarse `job_type` when it names a known operation; otherwise `Unknown`. Publication and resource-wait suffixes are appended unchanged. The engine field stays `orca`.
 - `detail_kind` is an additive, presentation-only queue metadata key, also shown in `queue list --json` row metadata. `run-dir` records it from the same single read of the selected input whenever that input has a route line. Normalized values use lowercase tokens joined by `+` for requested combinations (not execution order); when several operations are present the canonical token order is primary run type, then `freq`, then `irc`, then plain `neb`. Supported values and their fixed labels are: `sp` (`SP`), `irc` (`IRC`), `neb` (`NEB`), `opt` (`Opt`), `ts` (`TS`), `freq` (`Freq`), `neb-ts` (`NEB-TS`), `neb-idpp` (`NEB-IDPP`), `neb-mmfts` (`NEB-MMFTS`), `opt+freq` (`Opt+Freq`), `ts+freq` (`TS+Freq`), `ts+irc` (`TS+IRC`), `ts+freq+irc` (`TS+Freq+IRC`), `neb-ts+freq` (`NEB-TS+Freq`), `neb-ts+irc` (`NEB-TS+IRC`), `neb-ts+freq+irc` (`NEB-TS+Freq+IRC`), `unsupported` (`Other`) and `unknown` (`Unknown`). A missing, unrecognized or legacy `other` value is no evidence and keeps the `Unknown` fallback. The coarse `job_type` and every completion, report and result classification are unchanged ([ADR 0018](adr/0018-queue-detail-other-and-unknown.md)).
-- `unsupported` / `Other` means the classifier has positive evidence of a requested operation outside its specific Detail vocabulary: an active unquoted run-type keyword such as EnGrad/EnergyGrad, NumGrad, MD, a known GOAT keyword, CIM, EDA, PrintThermoChem, PropertiesOnly or the normal-mode/mode-trajectory run types; a complete known ESD mode (`ESD(ABS)`, `ESD(FLUOR)`, `ESD(PHOSP)`, `ESD(ISC)`, `ESD(IC)`, `ESD(RR)`, `ESD(RRAMAN)`); a closed `%md`, `%goat`, `%docker`, `%solvator` or `%esd` block; a closed `%geom Scan` with nonempty scan rows; a closed `%geom TS_search EF` or `%method RunTyp` with `Gradient`, `EnGrad`, `EnergyGrad` or `NumGrad`; a unique unquoted `AnFreq`/`NumFreq true` inside a closed `%freq` block; a complete compound file directive; or `$new_job` with route-bearing segments on both sides. This is operation evidence, not validation of every ORCA option or proof of scientific success.
+- `unsupported` / `Other` means the classifier has positive evidence of a requested operation outside its specific Detail vocabulary: an active unquoted run-type keyword such as EnGrad/EnergyGrad, NumGrad, MD, a known GOAT keyword, CIM, EDA, PrintThermoChem, PropertiesOnly or the normal-mode/mode-trajectory run types; a complete known ESD mode (`ESD(ABS)`, `ESD(FLUOR)`, `ESD(PHOSP)`, `ESD(ISC)`, `ESD(IC)`, `ESD(RR)`, `ESD(RRAMAN)`); a closed `%md`, `%goat`, `%docker`, `%solvator` or `%esd` block; a closed `%geom Scan` with nonempty scan rows; a closed `%geom TS_search EF` or `%method RunTyp` with `Gradient`, `EnGrad`, `EnergyGrad` or `NumGrad`; a unique unquoted `AnFreq`/`NumFreq true` inside a closed `%freq` block; a complete compound file directive; or `$new_job` with route-bearing segments on both sides. This records a requested operation, not option validity or scientific success.
 - `unknown` / `Unknown` means the classifier lacks sufficient operation evidence, including missing, quoted, unrecognized or duplicate operation values, unclosed operation blocks, incomplete or unknown ESD modes, unrecognized NEB aliases and ambiguous combinations such as `SP IRC` or plain `NEB IRC`. Quoted and commented route names never request an operation. A route line with no active unquoted tokens records `unknown`; no route line records no Detail kind. A method-only input of one job still records `sp`, including closed `%freq` switches set to an unquoted `false`. Existing supported combinations such as `OptTS Freq IRC` remain `TS+Freq+IRC`.
 - `NEB` / `NEB-CI` and their `ZOOM-` aliases retain `NEB`; `NEB-TS` and its `FAST-`, `LOOSE-`, `TIGHT-`, `ZOOM-` and existing `FLAT-` aliases retain `NEB-TS`. Exact standalone `NEB-IDPP` and `NEB-MMFTS` requests retain their names; arbitrary prefix/suffix combinations are not aliases, and conflicting named NEB requests stay `Unknown`. Requested route or block frequencies combined with a named NEB request also stay `Unknown`; false block switches and quoted or commented names preserve the standalone label. Additional positive markers do not resolve already-uncertain operation evidence. `NEB-IDPP` names non-quantum path initialization only: its Detail label adds no energy or scientific-completion guarantee.
 - File and directory names are never evidence of what an input runs. Rows admitted before `detail_kind` existed show `Unknown` unless their `job_type` or `task_kind` names the job; `queue list` does not backfill them, reopen their inputs or rewrite any row.
 
 ### `run-dir` Behavior
-- --input NAME.inp selects a confined regular input within the job directory; omission preserves automatic selection below.
-- Automatically detects the most recently modified eligible `.inp` file in the target directory (ties broken alphabetically by filename).
+- `--input NAME.inp` selects a confined regular input within the job directory; when omitted, `run-dir` selects the most recently modified eligible `.inp` file in the target directory (ties broken alphabetically by filename).
 - Binds inputs, referenced coordinate files, and the verified ORCA executable into a fresh execution generation.
 - Files named by recognized ORCA file keywords (coordinate files, `%moinp`, `%pointcharges`, Hessian inputs including ESD `GSHessian`/`ESHessian`, NEB endpoint and restart paths) are bound into the generation. Any other quoted keyword value that looks like a file path (absolute, starting with `~`, `./` or `../` relative with either slash, or with a filename extension) is rejected at submission with `Unsupported ORCA file reference`. File names ORCA writes (`%plots` file arguments, a `%md` `Filename`) must be plain basenames.
 - On NEB-family routes, a referenced file whose basename matches a file ORCA writes for the input stem (for example `<stem>_MEP.allxyz`, and `<stem>_reactant*`/`<stem>_product*` when `%neb` enables end-point preoptimization or contains `Monitor_Internals`) is rejected at submission; rename the restart or endpoint file before resubmitting.
@@ -85,13 +84,13 @@ Admission state always lives in `<runs_root>/.admission`, and its limit is `sche
 
 ## 4. Machine Observation (`machine.json`) Schema
 
-Upon completion, each job publishes a structured `machine.json` artifact in its generation directory for downstream tools (such as Chemvas and Chemleaf):
+Upon completion, each job publishes a structured `machine.json` artifact in its generation directory:
 
 - **Envelope Schema**: Conforms to the standard `factory/machine-observation` v1 contract.
 - **Bundled Validator**: The package ships `orca_auto.machine_contracts`, byte copies of the v1 envelope and `chemistry/results-bundle` v1 schemas from `dhsohn/machine-contracts` at `bc252035d01edddf1314e6641689c6d5cb88af92` with their MIT notice and provenance, and a validator for the ORCA_auto routes. `validate_machine_path` checks the envelope, route, payload and every available artifact's bytes and SHA-256; it does not judge scientific validity. It needs the optional `validation` extra (`pip install 'orca_auto[validation]'`, which adds `jsonschema`); running jobs never needs it, and without it validation raises `ImportError` rather than passing ([ADR 0014](adr/0014-source-owned-machine-observation-validator.md)).
 - **Operation & Payload**: Emits `chemistry/orca-run` with a `chemistry/results-bundle` v1 payload.
 - **Input Provenance**: When submission source identities are recorded, `payload.data.results.execution_provenance_artifact` references the required `execution-provenance` artifact (`execution_provenance.json`, `application/json`). It preserves the captured original input/dependency identities, bound input and materialized-copy identities, resolved resource request, executable identity and any crash-recovery origin. `artifacts.input` refers to the execution `.inp`, which can differ from the original after resource normalization and reference rewriting. The provenance file records identities, not an archive of original file contents. Its filename is reserved; referenced input files with that basename are rejected before execution. Any reader can verify its receipt without reopening source paths; the release smoke checks agreement with generation state. Historical reports lacking this evidence remain readable and are not backfilled; terminal publication and replay do not rewrite it.
-- **Verification**: Completion requires normal termination, no unresolved failure and finite final energy. Opt/TS additionally require explicit optimization convergence, and requested Freq requires a final frequency section. An energy annotated with SCF nonconvergence is null and cannot establish success. The scientific-evidence contract below defines the detailed conditions and missing measurements.
+- **Verification**: Completion requires normal termination, no unresolved failure, finite final energy (an energy annotated with SCF nonconvergence is null), plus Opt/TS convergence and requested Freq evidence as defined under Scientific evidence and compatibility below.
 - **Scope Boundary**: ORCA_auto supervises process lifecycle and structures output artifacts; scientific acceptance and chemical validity remain the researcher's responsibility.
 
 ---
@@ -103,90 +102,20 @@ Upon completion, each job publishes a structured `machine.json` artifact in its 
 
 ## Scientific evidence and compatibility
 
-Frequency requests include AnFreq true or NumFreq true in a %freq block, as well as route keywords.
+Frequency requests include `AnFreq true` or `NumFreq true` in a `%freq` block as well as route keywords.
 
-Completion requires normal termination, no unresolved failure and a finite final
-single-point energy. Opt/TS additionally require an explicit final optimization
-convergence verdict; requested Freq requires a final frequency section. A later
-explicit SCF convergence clears an earlier SCF failure. Missing evidence returns
-an incomplete analysis and a failed run; no retry or inferred success occurs.
-The last `VIBRATIONAL FREQUENCIES` section decides. It is unavailable when it
-prints no supported value, or when any of its lines prints `cm**-1` without a
-supported finite decimal value (such as `NaN cm**-1` or `Inf cm**-1`); the
-whole section is then discarded, never truncated and never replaced by an
-earlier one. Such values are not accepted. The result is missing frequency
-evidence (`frequency_evidence_missing`): the analysis is incomplete, machine
-science is unknown and handoff is blocked. A worker run fails as above, so its
-`lifecycle.outcome` is `failed`; only an observation whose recorded state is
-completed while science is unknown has the outcome `uncertain`. This narrows when success is granted; it adds no
-field, status or reason and leaves the common envelope unchanged.
+Completion requires normal termination, no unresolved failure and a finite final single-point energy. Opt/TS additionally require an explicit final optimization convergence verdict; requested Freq requires a final frequency section. A later explicit SCF convergence clears an earlier SCF failure. Missing evidence yields an incomplete analysis and a failed run without retry. The last `VIBRATIONAL FREQUENCIES` section decides: if it prints no supported value, or prints `cm**-1` without a supported finite decimal value (such as `NaN cm**-1` or `Inf cm**-1`), the entire section is discarded rather than truncated or replaced by an earlier one. The run fails with `frequency_evidence_missing` (analysis incomplete, machine science `unknown`, handoff blocked, `lifecycle.outcome: "failed"`); `lifecycle.outcome` is `uncertain` only when a recorded state is `completed` while science is `unknown`.
 
-Public contract change in 10.0 ([ADR 0012](adr/0012-positive-scientific-completion-evidence.md)):
-a run that only terminated normally without this evidence was `completed` in
-9.0.x and is `failed` from 10.0. Consumers that select `completed` runs receive
-fewer of them, and automation that resubmits failed runs now also sees runs
-whose only problem is missing evidence; such runs are never retried
-automatically. Runs finished under earlier versions are not reclassified.
+In 10.0 ([ADR 0012](adr/0012-positive-scientific-completion-evidence.md)), runs that terminated normally without the required completion evidence changed from `completed` (9.0.x) to `failed`. Consumers filtering for `completed` receive fewer runs, and external resubmission scripts see evidence-missing failures; ORCA_auto never retries them automatically, and runs finished under earlier versions are not reclassified.
 
-Compatibility in 10.1 ([upgrade notes](RELEASE.md#upgrading-to-101)): no field,
-status, reason, CLI option or configuration key is removed or renamed, and
-`completed` keeps its 10.0 meaning. The last-frequency-section rule above
-corrects 10.0.0, which could complete a run on an earlier or truncated section;
-such a run now fails with `frequency_evidence_missing`.
-`payload.data.results.report_generation` is an additive key. The narrower
-report wording below leaves `machine.json` values unchanged. Runs finished under
-10.0.x are not reclassified.
+In 10.1 ([upgrade notes](RELEASE.md#upgrading-to-101)), the last-frequency-section rule corrects 10.0.0, which could complete on an earlier or truncated section (now failed with `frequency_evidence_missing`), and adds `payload.data.results.report_generation`. Runs finished under 10.0.x are not reclassified.
 
-New machine observations add payload.data.results.science without changing the
-common v1 envelope: status (verified/unknown/failed), reason, energy_hartree,
-scf_converged, optimization_converged, frequencies_available,
-imaginary_frequency_count, geometry_scope, stationary_point, output_artifact and
-one-based evidence_lines for energy/SCF/optimization. Missing measurements are
-null, including the imaginary count when no frequency section exists. Parsed
-bytes must match the input/output artifact receipts. A non-successful operation
-cannot produce verified science; insufficient science blocks successful handoff.
-The HTML report (`human-report`) and SI block (`supporting-information`) stay
-optional (`required: false`) and never affect delivery or handoff. A job type
-without one has no receipt for it. When one that the job type has could not be
-rendered or written in the first terminal publication, it has no receipt and
-payload.data.results.report_generation maps both optional artifact IDs to
-`produced`, `not-applicable` or `generation-failed`; the map is present only
-after such a failure and never carries error details. Earlier terminal
-observations are not backfilled. (Since 10.1.0.)
+`payload.data.results.science` includes `status` (`verified`/`unknown`/`failed`), `reason`, `energy_hartree`, `scf_converged`, `optimization_converged`, `frequencies_available`, `imaginary_frequency_count`, `geometry_scope`, `stationary_point`, `output_artifact` and 1-based `evidence_lines` for energy/SCF/optimization without changing the v1 envelope. Missing measurements are `null`, including `imaginary_frequency_count` when no frequency section exists. Parsed bytes must match input/output artifact receipts; non-successful runs cannot produce `verified` science, and insufficient science blocks successful handoff. The HTML report (`human-report`) and SI block (`supporting-information`) remain optional (`required: false`) and never affect delivery or handoff. Job types without one omit its receipt. If an applicable optional artifact fails during initial terminal publication, its receipt is omitted and `payload.data.results.report_generation` maps both optional artifact IDs to `produced`, `not-applicable` or `generation-failed` (present only on failure, without error details; earlier observations are not backfilled; since 10.1.0).
 
-A minimum requires an unconstrained full Opt and zero imaginary frequencies;
-a first_order_saddle requires an unconstrained TS optimization and exactly one.
-These labels describe the observed local harmonic evidence, not global stability.
-Constrained geometries, SP-only jobs and paths remain unverified stationary
-points. A constrained TS search keeps the TS completion criteria and its TS
-report and SI record; its geometry_scope is partial, and the HTML report and SI
-block state "constrained TS search: first-order saddle unverified" rather than
-presenting its imaginary mode as expected. A TS report title names the
-operation and never by itself certifies a stationary point. (Since 10.1.0.)
-IRC evidence currently proves driver/path-summary presence, not complete
-path convergence. The HTML report's "IRC path found" badge, IRC setup,
-iterations and path profile come only from execution lines of the run's final
-output, never from input echoes, comments or another attempt's output; the
-badge is not path convergence or endpoint certification. (Since 10.1.0.)
-MD, NEB and compound/multi-job outputs are not covered by full
-scientific validation. Unknown data must never be interpreted as zero or true.
+`minimum` requires an unconstrained full Opt and zero imaginary frequencies; `first_order_saddle` requires an unconstrained TS optimization and one imaginary frequency. These labels reflect local harmonic evidence, not global stability. Constrained geometries, SP-only jobs and paths remain `unverified` stationary points. A constrained TS search keeps TS completion criteria, its TS report title (which names the operation only) and its TS SI record, with `geometry_scope: "partial"` and `"constrained TS search: first-order saddle unverified"` in the HTML report and SI block (since 10.1.0).
 
-Historical terminal observations remain immutable and can lack science. Consumers
-must check field presence and verification status rather than backfill historical
-success. Public JSON additions are additive; existing field names, CLI defaults
-and the common envelope remain stable. Field meanings remain stable except where
-a major release records a change: in 10.0 the value `completed` requires the
-completion evidence above. Breaking removals and meaning changes require an ADR,
-migration instructions and a major release. The package classifier is Beta;
-acceptance evidence currently covers ORCA 6.1.1 only. Coordinate and
-normal-mode association is characterized only on supported ORCA 6.1.1 outputs.
-Outputs with dummy, ghost or embedded atoms, or with numerical or partial
-Hessians, are not characterized, and the per-atom mode annotations in their HTML
-report and SI block are not established.
+IRC evidence checks driver and path-summary presence, not full path convergence or endpoint certification. The HTML report's `"IRC path found"` badge, setup, iterations and path profile come only from execution lines of the run's final output, ignoring input echoes, comments and other attempts (since 10.1.0). MD, NEB and compound/multi-job outputs are not covered by full scientific validation. Unknown values must not be treated as `0` or `true`.
 
-Omitting --repo from systemd install selects the current isolated virtual environment and packaged templates. An explicit --repo selects a checkout or prepared runtime.
+Historical terminal observations are immutable and may omit `science`; consumers must check field presence and verification status. Public JSON additions are additive; breaking removals or field-meaning changes require an ADR, migration notes and a major release. The package classifier is Beta, with real-engine acceptance on ORCA 6.1.1 only. Atom-to-normal-mode association is characterized only on supported ORCA 6.1.1 outputs without dummy/ghost/embedded atoms or numerical/partial Hessians.
 
-Inputs requesting `EnGrad` (alias `EnergyGrad`) without an optimization use the
-`other` job category. Their HTML report is labeled EnGrad and summarizes energy;
-gradient values and gradient completeness are not validated. Completion retains
-the energy/termination checks above, so a completed job is not gradient acceptance.
+Inputs requesting `EnGrad` (alias `EnergyGrad`) without an optimization use the `other` job category. Their HTML report is labeled `EnGrad` and summarizes energy; gradient values and completeness are not validated, so `completed` reflects only the energy and termination checks above.

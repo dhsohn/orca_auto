@@ -127,17 +127,6 @@ verified path and repeat the same idle install/restart/status sequence. Do not
 redirect a symlink beneath running workers, move directories, edit installed
 files, or run pip inside a prepared runtime. Rebuild into a new directory instead.
 
-Read-only installation is protection against accidental in-place deployment;
-the owning account can deliberately change permissions. The receipt is not a
-publisher signature. The virtual environment also depends on the host Python
-standard library and operating-system shared libraries: it is not a self-contained
-container or a guarantee against host updates. Configuration and calculation data
-are intentionally mutable and are not part of the build receipt.
+The prepared virtual environment depends on the host Python standard library and operating-system shared libraries. Configuration and calculation data stay mutable and are excluded from the build receipt; the receipt has no publisher signature.
 
-`make check-packages` verifies real wheel preparation, idempotent reuse, a fake
-ORCA worker using the installed interpreter, rendering the pinned service plan,
-and that an interpreter started without `-B` writes nothing into a writable copy
-of the runtime whose source timestamps were moved. The unit tests cover
-byte/permission rejection, idle/busy restart, old-process/new-unit mismatch, and
-that the bytecode check rejects missing or timestamp-validated bytecode. These
-checks do not deploy production services.
+`make check-packages` verifies real wheel preparation, idempotent reuse, a fake ORCA worker using the installed interpreter, rendering the pinned service plan, and that an interpreter started without `-B` writes nothing into a writable copy of the runtime whose source timestamps were moved. Unit tests cover byte/permission rejection, idle/busy restart, old-process/new-unit mismatch, and rejection of missing or timestamp-validated bytecode.

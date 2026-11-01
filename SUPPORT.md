@@ -14,43 +14,34 @@ Use GitHub Issues for:
 - feature requests that improve reusable ORCA-centered workflows;
 - documentation gaps or stale examples.
 
-Use the issue templates when possible. They ask for the information needed to
-reproduce or triage the problem without exposing private data.
+Use the issue templates when possible.
 
 ## What to include
 
-For runtime or calculation issues, include sanitized versions of the relevant
-artifacts when available:
+For runtime or calculation issues, include sanitized versions of the relevant artifacts when available:
 
 - command run and exact output;
 - OS/runtime context such as Linux distribution or WSL version;
 - Python version and ORCA_auto commit or release;
-- ORCA versions if the issue depends on real engines;
+- ORCA version when the issue involves real ORCA;
 - selected `.inp` snippet, output tail, and terminal marker;
-- terminal generation `machine.json`, plus relevant sanitized `job_state.json`
-  or queue snippets for private recovery-state diagnosis;
+- terminal generation `machine.json`, plus sanitized `job_state.json` or queue snippets for recovery-state diagnosis;
 - attempt number, if applicable.
 
-Remove messenger bot tokens, channel IDs, private paths, proprietary structures, and
-private research data before posting.
+Remove bot tokens, channel IDs, private paths, proprietary structures, and private research data before posting.
 
 ## Scope boundaries
 
-The project can help with ORCA_auto behavior and documentation. The following questions belong with the engine provider, local administrator
-or the researcher interpreting the calculation:
+Out of scope for repository support:
 
 - ORCA licensing or upstream ORCA bugs;
 - site-specific scheduler, MPI, filesystem, or module-system policy;
 - interpreting whether a computed result is chemically meaningful;
 - debugging private calculations that cannot be reduced to sanitized artifacts;
-- urgent operational support that needs a guaranteed response time.
+- operational support with a guaranteed response time.
 
-If a problem depends on a real ORCA installation, distinguish that from a public
-CI/fake-engine failure. The validation guide explains this split:
-[docs/VALIDATION.md](docs/VALIDATION.md).
+Note whether an issue requires a real ORCA installation or reproduces with the fake engine; see [docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## Supported versions
 
-Unless a release note says otherwise, support focuses on the current `main`
-branch and the latest tagged GitHub release. Older versions may receive guidance
-when the issue is easy to diagnose, but fixes are normally made on `main` first.
+Support focuses on `main` and the latest tagged GitHub release; fixes are normally made on `main` first, except for release-specific issues.

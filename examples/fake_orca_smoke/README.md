@@ -1,9 +1,6 @@
 # Fake ORCA smoke example
 
-Exercises the ORCA_auto queue lifecycle without requiring a licensed
-ORCA installation. It is useful for contributor onboarding, release checks, and
-PRs that change project hygiene, docs, queue reporting, or packaging without
-changing true ORCA numerical behavior.
+Runs an end-to-end ORCA_auto queue pass without a licensed ORCA installation, for onboarding, release checks, and changes that do not alter real-ORCA execution or output parsing.
 
 Run from the repository root:
 
@@ -31,7 +28,4 @@ success:
 bash examples/fake_orca_smoke/run.sh /tmp/orca_auto_fake_smoke_demo
 ```
 
-This smoke does not prove that a real ORCA/OpenMPI/site-scheduler installation
-works, and it does not validate chemical correctness. Use the manual acceptance
-checklist in `docs/VALIDATION.md` for changes that depend on real-engine
-semantics.
+This script does not test a real ORCA/OpenMPI installation or chemical correctness; see `docs/VALIDATION.md` when real-engine behavior changes.
