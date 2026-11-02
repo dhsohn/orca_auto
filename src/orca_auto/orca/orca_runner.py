@@ -5,7 +5,6 @@ import os
 import signal
 import stat
 import subprocess
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +33,7 @@ from orca_auto.core.queue.processes import (
     terminate_process_group,
 )
 from orca_auto.core.utils.persistence import open_pinned_readonly
+from orca_auto.core.utils.process import python_interpreter_argv
 
 from .file_identity import confined_output_identity, file_content_identity, open_pinned_executable
 from .scratch import OrcaScratchPolicy
@@ -448,7 +448,7 @@ class OrcaRunner:
                     try:
                         launch_gate_fd = self._open_pinned_launch_gate()
                         launch_command = [
-                            sys.executable,
+                            *python_interpreter_argv(),
                             f"/proc/self/fd/{launch_gate_fd}",
                             str(launch_gate_fd),
                             self.orca_executable,

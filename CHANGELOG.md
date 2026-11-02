@@ -26,6 +26,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   A row claimed as the signal arrived is returned to `pending` (or
   `cancelled` when a cancel was requested meanwhile) and its slot released,
   without starting a child.
+- Python children now keep the parent's isolated mode. Under a unit started
+  with `python -I`, the queue worker, each job child and the ORCA launch gate
+  were started without `-I`. They read `PYTHONPATH`, the user site and the
+  current directory, and could import a different `orca_auto` than the
+  supervisor had verified. A parent started without `-I`, such as a
+  development run with `PYTHONPATH=src`, starts its children unchanged.
 
 ### Fixed
 

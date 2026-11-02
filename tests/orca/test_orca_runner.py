@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 
@@ -175,6 +176,30 @@ def test_command_uses_linux_binary(mock_popen: MagicMock, inp: Path) -> None:
     assert result.command == (_TEST_EXECUTABLE, "test.inp")
     assert result.input_identity["path"] == str(inp)
     assert result.input_identity["size_bytes"] == len(b"! Opt\n")
+
+
+def test_launch_gate_keeps_an_isolated_worker_isolated(
+    mock_popen: MagicMock, inp: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Under an installed unit the job child runs with -I; the launch-gate
+    # interpreter it starts must not read PYTHONPATH or the job directory.
+    from orca_auto.core.utils import process as process_utils
+
+    monkeypatch.setattr(
+        process_utils.sys,
+        "flags",
+        SimpleNamespace(isolated=1),
+    )
+    mock_popen.return_value = _mock_process(wait=0)
+
+    make_orca_runner(_TEST_EXECUTABLE, inp.parent).run(inp)
+
+    command = mock_popen.call_args.args[0]
+    assert command[:2] == [sys.executable, "-I"]
+    assert command[2].startswith("/proc/self/fd/")
+    # The gate reads only its own arguments, which follow the script path.
+    assert command[4] == _TEST_EXECUTABLE
+    assert command[6] == "test.inp"
 
 
 def test_launch_pins_thread_env_to_one(mock_popen: MagicMock, inp: Path) -> None:

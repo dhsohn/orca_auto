@@ -15,7 +15,6 @@ when cancellation was requested; the parent writes the cancelled result.
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from orca_auto.core.queue.child import ChildWorkerShutdownController, await_pare
 from orca_auto.core.queue.processes import install_shutdown_signal_handlers
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry, entry_status_is_running
+from orca_auto.core.utils.process import python_interpreter_argv
 
 from .config import AppConfig, load_config
 from .execution import execute_orca_run
@@ -59,9 +59,12 @@ def build_worker_child_command(
     queue_id: str,
     admission_token: str | None = None,
 ) -> list[str]:
-    """Argv for the child job process (``python -m orca_auto.orca.commands.worker_child``)."""
+    """Argv for the child job process (``python -m orca_auto.orca.commands.worker_child``).
+
+    The worker's isolation flags (``-I`` under an installed unit) are carried.
+    """
     command = [
-        sys.executable,
+        *python_interpreter_argv(),
         "-m",
         WORKER_JOB_MODULE,
         "--config",

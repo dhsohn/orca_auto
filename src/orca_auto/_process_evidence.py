@@ -11,6 +11,7 @@ from orca_auto.core.runtime_bundle import (
     runtime_root_for_import_source,
     verify_runtime_bundle,
 )
+from orca_auto.core.utils.process import python_interpreter_argv
 
 PROCESS_IMPORT_SOURCE_ENV = "ORCA_AUTO_PROCESS_IMPORT_SOURCE"
 
@@ -44,13 +45,7 @@ def exec_with_import_source_evidence() -> None:
         return
     os.execve(
         sys.executable,
-        [
-            sys.executable,
-            *(["-I"] if sys.flags.isolated else []),
-            "-m",
-            "orca_auto.cli",
-            *sys.argv[1:],
-        ],
+        [*python_interpreter_argv(), "-m", "orca_auto.cli", *sys.argv[1:]],
         environment,
     )
 
