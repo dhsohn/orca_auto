@@ -2509,6 +2509,123 @@ def test_frequency_block_request_reserves_same_stem_hessian(tmp_path: Path) -> N
     assert not _visible_generations(job_dir)
 
 
+@pytest.mark.parametrize(
+    "method_block",
+    [
+        "%method RunTyp Opt end",
+        "%method\n  RunTyp = Geom\nend",
+        "%method RunTyp Geometry end",
+        "%METHOD runtyp geometryopt END",
+        "%method RunTyp MD end",
+        "%method RunTyp Scan end",
+        '%method RunTyp "SP" end',
+        "%method RunTyp end",
+        "%method RunTyp SP RunTyp Opt end",
+        "%method RunTyp Opt",
+    ],
+)
+def test_unsupported_method_run_type_rejected_before_generation_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method_block: str
+) -> None:
+    # Admitted, these would be verified as a single point (no optimization
+    # convergence evidence) and their mutable same-stem XYZ bound as immutable.
+    from orca_auto.orca.execution_binding import _build
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "calc.xyz").write_text("2\nh2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    selected = job_dir / "calc.inp"
+    selected.write_text(f"! HF STO-3G\n{method_block}\n* xyzfile 0 1 calc.xyz\n", encoding="utf-8")
+
+    def unexpected_reservation(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Unsupported RunTyp reached generation reservation")
+
+    monkeypatch.setattr(_build, "_reserve_execution_generation", unexpected_reservation)
+    with pytest.raises(ValueError, match="%method RunTyp"):
+        build_submitted_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz=str(job_dir / "calc.xyz"),
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=tmp_path / "never-executed",
+        )
+    assert sorted(path.name for path in job_dir.iterdir()) == ["calc.inp", "calc.xyz"]
+
+
+@pytest.mark.parametrize(
+    "method_block",
+    [
+        "%method RunTyp Energy end",
+        "%method RunTyp = SP end",
+        "%method RunTyp Gradient end",
+        "%method RunTyp NumGrad end",
+        "%method # RunTyp Opt # end",
+        '%method "RunTyp" Opt end',
+        "%method end RunTyp Opt",
+        "%scf RunTyp Opt end",
+    ],
+)
+def test_single_point_method_run_types_and_inactive_keys_are_admitted(
+    tmp_path: Path, method_block: str
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "h2.inp"
+    selected.write_text(
+        f"! HF STO-3G\n{method_block}\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
+    )
+
+    snapshot = build_submitted_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+    assert snapshot["source_selected_inp"] == str(selected.resolve())
+
+
+@pytest.mark.parametrize(
+    ("method_block", "engrad_is_output"),
+    [
+        ("%method RunTyp Gradient end", True),
+        ("%method RunTyp EnGrad end", True),
+        ("%method RunTyp = energygrad end", True),
+        ("%method RunTyp NumGrad end", True),
+        ("%method RunTyp SP end", False),
+        ('%method RunTyp "Gradient" end', False),
+        ("%method # RunTyp Gradient # end", False),
+    ],
+)
+def test_gradient_method_run_type_writes_engrad(method_block: str, engrad_is_output: bool) -> None:
+    lines = f"! HF STO-3G\n{method_block}\n* xyz 0 1\nH 0 0 0\n*\n".splitlines()
+
+    assert _route_outputs(lines).engrad_is_output is engrad_is_output
+
+
+def test_gradient_method_run_type_reserves_same_stem_engrad(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "h2.engrad").write_text("# synthetic gradient\n", encoding="utf-8")
+    selected = job_dir / "h2.inp"
+    selected.write_text(
+        '! HF STO-3G\n%method RunTyp Gradient end\n%geom InHessName "h2.engrad" end\n'
+        "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="runtime/output file: h2.engrad"):
+        build_submitted_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+    assert not _visible_generations(job_dir)
+
+
 @pytest.mark.parametrize("route", ["! ScanTS", "! HF\n! scants Freq", "! HF # note # SCANTS"])
 def test_removed_route_rejected_before_generation_reservation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str

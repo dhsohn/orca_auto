@@ -41,6 +41,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 - 입력 파일, 참조 좌표 파일(`.xyz`), ORCA 실행 바이너리 정보를 새로운 독립 실행 디렉터리(`generation`)에 격리하여 바인딩합니다.
 - 인식된 ORCA 파일 키워드(좌표 파일, `%moinp`, `%pointcharges`, ESD `GSHessian`/`ESHessian`을 포함한 Hessian 입력, NEB 끝점·재시작 경로)가 가리키는 파일은 generation에 함께 바인딩합니다. 그 밖의 키워드 값 중 따옴표로 감싼 파일 경로(절대 경로, `~`로 시작하는 경로, 슬래시 종류와 무관한 `./`·`../` 상대 경로, 파일 확장자가 있는 이름)는 접수 단계에서 `Unsupported ORCA file reference`로 거부합니다. ORCA가 쓰는 출력 파일 이름(`%plots` 파일 인자, `%md`의 `Filename`)은 경로 없는 파일 이름이어야 합니다.
 - NEB 계열 경로에서 참조 파일의 이름이 ORCA가 입력 stem으로 쓰는 파일(예: `<stem>_MEP.allxyz`, `%neb`가 끝점 사전 최적화를 켜거나 `Monitor_Internals`를 포함하면 `<stem>_reactant*`/`<stem>_product*`)과 같으면 접수 단계에서 거부합니다. 재시작·끝점 파일의 이름을 바꾼 뒤 다시 제출합니다.
+- 활성화된 `%method RunTyp`은 `Energy`/`SP`나 gradient 값(`Gradient`, `EnGrad`, `EnergyGrad`, `NumGrad`)일 때만 접수합니다. gradient 값은 `<stem>.engrad`도 출력 파일로 예약합니다. 최적화 표기 `Opt`, `Geom`, `Geometry`, `GeometryOpt`를 포함한 그 밖의 값과 값이 없거나 따옴표로 감싼 경우는 단일점 계산으로 검증될 수 있으므로 접수 단계에서 거부합니다. 이런 작업은 `! Opt` 같은 route 키워드로 요청합니다.
 - 이미 계산이 진행 중인 활성 디렉터리에 대한 중복 제출은 자동으로 차단됩니다.
 - `--force` 플래그를 지정하면 이전에 성공한 완료 기록이 있더라도 새로운 실행 디렉터리(`generation`)를 생성하여 재계산합니다.
 - 계산 자원은 ORCA 입력 파일의 `%pal`(코어 수)과 `%maxcore`(코어당 메모리) 지시어를 최우선으로 따르며, 설정 파일은 누락된 값에 대한 기본값을 보완합니다.

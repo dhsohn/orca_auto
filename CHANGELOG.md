@@ -10,6 +10,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Submission now rejects a `%method RunTyp` value the runtime cannot classify,
+  including the optimization spellings `Opt`, `Geom`, `Geometry` and
+  `GeometryOpt`, as well as missing or quoted values. Such inputs were admitted
+  and then verified as a single point: completion did not require optimization
+  convergence evidence, and the same-stem XYZ that the optimization rewrites
+  was bound as an immutable input. Request those jobs with a route keyword
+  such as `! Opt`. `Energy`/`SP` and the gradient values (`Gradient`,
+  `EnGrad`, `EnergyGrad`, `NumGrad`) are still accepted, and a gradient value
+  now reserves `<stem>.engrad` as an output. Rows queued before the upgrade
+  are not re-checked.
+
+### Fixed
+
 - Submission now applies the 1,000-atom Hessian limit to frequency requests
   made only through an active `%freq AnFreq true` or `%freq NumFreq true`
   block, for inline and external XYZ geometries alike, and reserves the

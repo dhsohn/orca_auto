@@ -242,6 +242,24 @@ def iter_blocks(lines: Sequence[str], block_name: str) -> Iterator[OrcaBlock]:
         index = block.end + 1 if block.closed else max(block.end, index + 1)
 
 
+def method_run_type_values(lines: Sequence[str]) -> list[OrcaLineToken | None]:
+    """The value token of every unquoted ``RunTyp`` key in ``%method`` bodies.
+
+    ``None`` stands for a key with no value. Comments, quoted keys and tokens
+    after a block's closing ``end`` are not keys.
+    """
+
+    values: list[OrcaLineToken | None] = []
+    for block in iter_blocks(lines, "method"):
+        tokens = [token for row in block.rows for token in row.tokens]
+        for index, token in enumerate(tokens):
+            if token.quoted or token.value.lower() != "runtyp":
+                continue
+            value_index = value_token_index(tokens, index)
+            values.append(tokens[value_index] if value_index < len(tokens) else None)
+    return values
+
+
 def find_block(lines: Sequence[str], block_name: str) -> OrcaBlock | None:
     """Return the first ``%block_name`` block, or ``None``."""
 
