@@ -37,8 +37,7 @@ from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import list_queue
 from orca_auto.orca.queue.entries import QUEUED_NOTIFICATION_PENDING_KEY
 from orca_auto.orca.state_reading import load_state, state_path
-from tests.conftest import make_queue_entry
-from tests.core.messaging.test_slack_lifecycle import _write_config
+from tests.conftest import make_queue_entry, write_messenger_config
 from tests.queue_worker_helpers import write_completed_run_state
 
 # Obviously synthetic values: no real Slack/Discord workspace, token or channel.
@@ -172,7 +171,7 @@ def transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Transport]:
 
 
 def _loaded(tmp_path: Path, messenger: Mapping[str, object]) -> tuple[AppConfig, Path]:
-    cfg = load_config(str(_write_config(tmp_path, messenger)))
+    cfg = load_config(str(write_messenger_config(tmp_path, messenger)))
     # The real seams, not a test channel or a synchronous dispatcher.
     assert queue_notifications.notification_channel is orca_notifications.notification_channel
     assert queue_notifications.dispatch_notification is orca_notifications.dispatch_notification

@@ -19,7 +19,7 @@ import os
 import secrets
 import signal
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ import yaml
 from orca_auto.core.admission import admission_dir
 from orca_auto.core.config import CommonResourceConfig, MessengerConfig
 from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.schema import DiscordConfig
+from orca_auto.core.config.schema import DiscordConfig, SlackConfig
 from orca_auto.core.engine_scratch import _policy as _scratch_policy
 from orca_auto.core.messaging.channel import SendResult
 from orca_auto.core.queue import store as _core_queue_store
@@ -237,6 +237,62 @@ def app_cfg(tmp_path: Path, fake_orca: Path) -> Callable[..., AppConfig]:
     return factory
 
 
+def messenger_yaml_payload(messenger: MessengerConfig) -> dict[str, Any] | None:
+    """The ``messenger`` mapping ``load_config`` reads back as ``messenger``.
+
+    ``None`` for the default messenger. Only the selected provider's section is
+    written, as the loader accepts no other; a configured section of the
+    unselected provider cannot round-trip, so it raises instead of being
+    dropped silently.
+    """
+
+    if messenger == MessengerConfig():
+        return None
+    sections: dict[str, tuple[Any, Any]] = {
+        "discord": (messenger.discord, DiscordConfig()),
+        "slack": (messenger.slack, SlackConfig()),
+    }
+    if messenger.provider not in sections:
+        raise ValueError(f"unsupported messenger provider: {messenger.provider!r}")
+    for provider, (section, default) in sections.items():
+        if provider != messenger.provider and section != default:
+            raise ValueError(
+                f"messenger.{provider} is configured but provider is {messenger.provider!r}; "
+                "orca_auto.yaml carries only the selected provider's section"
+            )
+    payload: dict[str, Any] = {"provider": messenger.provider}
+    selected, default = sections[messenger.provider]
+    if selected != default:
+        payload[messenger.provider] = asdict(selected)
+    return payload
+
+
+def write_messenger_config(
+    tmp_path: Path,
+    messenger: Mapping[str, object] | None,
+    *,
+    name: str = "orca_auto.yaml",
+) -> Path:
+    """A minimal valid ``orca_auto.yaml`` in ``tmp_path`` with an empty runs root.
+
+    ``messenger`` is written verbatim, so config-loader tests can pass raw,
+    partial or invalid provider mappings that no ``AppConfig`` can express.
+    """
+
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir(exist_ok=True)
+    fake_orca = write_fake_orca(tmp_path / "fake_orca")
+    payload: dict[str, object] = {
+        "runs_root": str(runs_root),
+        "orca": {"paths": {"orca_executable": str(fake_orca)}},
+    }
+    if messenger is not None:
+        payload["messenger"] = dict(messenger)
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def config_yaml_text(cfg: AppConfig) -> str:
     """Render ``cfg`` as the ``orca_auto.yaml`` text ``load_config`` reads back.
 
@@ -262,18 +318,9 @@ def config_yaml_text(cfg: AppConfig) -> str:
             "scratch_min_free_gb": cfg.scratch.min_free_gb,
         }
     payload["orca"] = orca
-    discord = cfg.messenger.discord
-    if discord != DiscordConfig():
-        payload["messenger"] = {
-            "provider": "discord",
-            "discord": {
-                "bot_token": discord.bot_token,
-                "default_channel_id": discord.default_channel_id,
-                "timeout_seconds": discord.timeout_seconds,
-                "max_attempts": discord.max_attempts,
-                "retry_backoff_seconds": discord.retry_backoff_seconds,
-            },
-        }
+    messenger = messenger_yaml_payload(cfg.messenger)
+    if messenger is not None:
+        payload["messenger"] = messenger
     return yaml.safe_dump(payload, sort_keys=False)
 
 
