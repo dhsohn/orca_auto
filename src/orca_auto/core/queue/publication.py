@@ -4,8 +4,8 @@ One committed queue row must always end up with its queued job artifact
 published exactly once, no matter where the publisher crashes. The lease is
 the row's ``QUEUE_RECORD_SYNC_*`` metadata: the submitting driver
 (``orca.queue.enqueue_publication``) takes and completes it, the worker's
-repair pass (``orca.queue.publication_repair``) re-claims a parked one, and
-cancellation (``transitions.request_cancel``) revokes it.
+repair pass (``orca.queue.publication_repair``) re-claims a parked one, both
+finish it through :func:`complete_queue_record_lease`, and cancellation (``transitions.request_cancel``) revokes it.
 
 Protocol invariants:
 
@@ -147,6 +147,49 @@ def park_queue_record_repair_pending(
     return None, False
 
 
+def complete_queue_record_lease(
+    entries: list[QueueEntry],
+    entry: QueueEntry,
+    *,
+    expected_state: str,
+    expected_token: str,
+) -> tuple[QueueEntry | None, bool]:
+    """Mutator: token-gated CAS from one owned lease to COMPLETE (owner 0).
+
+    The submitting publisher (PREPARING) and the worker's repair (REPAIRING)
+    both finish their lease here. The COMPLETE transition belongs to that
+    lease only: a non-pending row, a cancel request, or any other sync state
+    or token (for example a cancel fence written concurrently) is never
+    overwritten. Returns ``(completed_row, True)`` on success,
+    ``(current_row, False)`` when the lease is no longer the caller's, and
+    ``(None, False)`` when no row has ``entry.queue_id``; each caller decides
+    how to report a lost lease.
+    """
+
+    for index, current in enumerate(entries):
+        if current.queue_id != entry.queue_id:
+            continue
+        if (
+            current.status != QueueStatus.PENDING
+            or current.cancel_requested
+            or queue_record_sync_state(current) != expected_state
+            or queue_record_sync_token(current) != expected_token
+        ):
+            return current, False
+        metadata = dict(current.metadata)
+        metadata.update(
+            queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_COMPLETE,
+                token=expected_token,
+                owner_pid=0,
+            )
+        )
+        completed = replace(current, metadata=metadata)
+        entries[index] = completed
+        return completed, True
+    return None, False
+
+
 def queue_record_publication_lock_path(root: str | Path, queue_id: str) -> Path:
     resolved_root = resolve_root_path(root)
     digest = sha256(str(queue_id).encode("utf-8")).hexdigest()
@@ -196,6 +239,7 @@ __all__ = [
     "QUEUE_RECORD_SYNC_TOKEN_KEY",
     "QUEUE_RECORD_SYNC_UPDATED_AT_KEY",
     "REPAIRABLE_SYNC_STATES",
+    "complete_queue_record_lease",
     "park_queue_record_repair_pending",
     "process_start_token",
     "queue_entry_is_claimable",
