@@ -24,6 +24,7 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_REPAIRING,
     REPAIRABLE_SYNC_STATES,
+    complete_queue_record_lease,
     park_queue_record_repair_pending,
     queue_record_publication_lock,
     queue_record_sync_metadata,
@@ -115,43 +116,6 @@ def _claim_repair_lease(
     return ("missing", None), False
 
 
-def _complete_repair_lease(
-    entries: list[QueueEntry],
-    entry: QueueEntry,
-    *,
-    repair_token: str,
-) -> tuple[QueueEntry | None, bool]:
-    """CAS this repair's REPAIRING lease to COMPLETE; anything else is a lost lease."""
-
-    for index, row in enumerate(entries):
-        if row.queue_id != entry.queue_id:
-            continue
-        # The COMPLETE transition belongs to this repair lease only: any
-        # other sync state or token here (for example a cancel fence
-        # written concurrently) must never be overwritten.
-        if (
-            row.status != QueueStatus.PENDING
-            or row.cancel_requested
-            or queue_record_sync_state(row) != QUEUE_RECORD_SYNC_REPAIRING
-            or queue_record_sync_token(row) != repair_token
-        ):
-            raise RuntimeError(
-                f"ORCA: queued record repair lost publication ownership: queue_id={entry.queue_id}"
-            )
-        metadata = dict(row.metadata)
-        metadata.update(
-            queue_record_sync_metadata(
-                QUEUE_RECORD_SYNC_COMPLETE,
-                token=repair_token,
-                owner_pid=0,
-            )
-        )
-        updated = replace(row, metadata=metadata)
-        entries[index] = updated
-        return updated, True
-    raise RuntimeError(f"ORCA: queue entry disappeared during repair: {entry.queue_id}")
-
-
 def _log_repair_refusal(entry: QueueEntry, *, reason: str, current: QueueEntry | None) -> None:
     """Log the two refusals; the other non-claim reasons leave nothing to do."""
 
@@ -216,8 +180,20 @@ def repair_enqueue_publication_outcome(
     def claim(entries: list[QueueEntry]) -> tuple[tuple[str, QueueEntry | None], bool]:
         return _claim_repair_lease(entries, entry, repair_token=repair_token)
 
-    def complete(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
-        return _complete_repair_lease(entries, entry, repair_token=repair_token)
+    def complete(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
+        completed, owned = complete_queue_record_lease(
+            entries,
+            entry,
+            expected_state=QUEUE_RECORD_SYNC_REPAIRING,
+            expected_token=repair_token,
+        )
+        if completed is None:
+            raise RuntimeError(f"ORCA: queue entry disappeared during repair: {entry.queue_id}")
+        if not owned:
+            raise RuntimeError(
+                f"ORCA: queued record repair lost publication ownership: queue_id={entry.queue_id}"
+            )
+        return completed, True
 
     claimed = False
     try:

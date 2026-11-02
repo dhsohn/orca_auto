@@ -28,7 +28,6 @@ from pathlib import Path
 from urllib.response import addinfourl
 
 import pytest
-import yaml
 
 import orca_auto
 from orca_auto.core.messaging import DisabledChannel, MessageChannel
@@ -43,7 +42,7 @@ from orca_auto.orca.notifications import (
 )
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.types import QueueEnqueuedNotification, RunStartedNotification
-from tests.conftest import write_fake_orca
+from tests.conftest import write_messenger_config
 
 # Obviously synthetic values: no real Slack/Discord workspace, token or channel.
 _SLACK_TOKEN = "xoxb-synthetic-lifecycle-token"
@@ -142,28 +141,6 @@ def transport(monkeypatch: pytest.MonkeyPatch) -> _Transport:
     return fake
 
 
-def _write_config(
-    tmp_path: Path,
-    messenger: Mapping[str, object] | None,
-    *,
-    name: str = "orca_auto.yaml",
-) -> Path:
-    """A minimal valid ``orca_auto.yaml`` in ``tmp_path`` with an empty runs root."""
-
-    runs_root = tmp_path / "runs"
-    runs_root.mkdir(exist_ok=True)
-    fake_orca = write_fake_orca(tmp_path / "fake_orca")
-    payload: dict[str, object] = {
-        "runs_root": str(runs_root),
-        "orca": {"paths": {"orca_executable": str(fake_orca)}},
-    }
-    if messenger is not None:
-        payload["messenger"] = dict(messenger)
-    path = tmp_path / name
-    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    return path
-
-
 def _queued_event(job_dir: Path) -> QueueEnqueuedNotification:
     return {
         "queue_id": "q-synthetic-lifecycle",
@@ -226,7 +203,7 @@ def test_slack_config_file_delivers_lifecycle_notifications_to_slack_only(
     kind: str,
     title: str,
 ) -> None:
-    config_file = _write_config(tmp_path, _SLACK_MESSENGER)
+    config_file = write_messenger_config(tmp_path, _SLACK_MESSENGER)
 
     with caplog.at_level("DEBUG"):
         cfg = load_config(str(config_file))
@@ -269,7 +246,7 @@ def test_discord_config_file_still_delivers_to_discord_only(
     caplog: pytest.LogCaptureFixture,
     messenger: Mapping[str, object],
 ) -> None:
-    config_file = _write_config(tmp_path, messenger)
+    config_file = write_messenger_config(tmp_path, messenger)
 
     with caplog.at_level("DEBUG"):
         cfg = load_config(str(config_file))
@@ -310,7 +287,7 @@ def test_default_or_incomplete_slack_config_sends_nothing_anywhere(
     transport: _Transport,
     messenger: Mapping[str, object] | None,
 ) -> None:
-    config_file = _write_config(tmp_path, messenger)
+    config_file = write_messenger_config(tmp_path, messenger)
     runs_root = tmp_path / "runs"
 
     cfg = load_config(str(config_file))
@@ -331,7 +308,7 @@ def test_slack_selected_with_a_discord_section_is_rejected_by_the_loader(
     tmp_path: Path,
     transport: _Transport,
 ) -> None:
-    config_file = _write_config(
+    config_file = write_messenger_config(
         tmp_path,
         {"provider": "slack", "discord": _DISCORD_SECTION},
     )
@@ -381,8 +358,8 @@ print(json.dumps(report))
 
 
 def test_loading_a_slack_config_imports_only_the_slack_adapter(tmp_path: Path) -> None:
-    disabled_config = _write_config(tmp_path, {"provider": "slack"}, name="disabled.yaml")
-    slack_config = _write_config(tmp_path, _SLACK_MESSENGER, name="slack.yaml")
+    disabled_config = write_messenger_config(tmp_path, {"provider": "slack"}, name="disabled.yaml")
+    slack_config = write_messenger_config(tmp_path, _SLACK_MESSENGER, name="slack.yaml")
     source_root = Path(orca_auto.__file__).resolve().parents[1]
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(

@@ -12,11 +12,12 @@ import pytest
 from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca import input_references
+from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.execution_binding import (
     retire_snapshot_intent_for_row,
     verify_orca_execution_snapshot,
 )
-from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count
+from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count, _route_outputs
 from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 from tests.conftest import build_submitted_snapshot, write_fake_orca
@@ -2341,6 +2342,171 @@ def test_orca_frequency_snapshot_rejects_inline_geometry_above_hessian_atom_cap(
             resource_request={"max_cores": 1, "max_memory_gb": 1},
             orca_executable=write_fake_orca(tmp_path / "orca"),
         )
+
+
+# Every spelling of an explicit frequency request: completion requires frequency
+# evidence for each one, so admission must apply the Hessian limits to each one.
+_FREQUENCY_REQUESTS = [
+    "! HF STO-3G Freq",
+    "! HF STO-3G NumFreq",
+    "! HF STO-3G\n! AnFreq",
+    "! HF STO-3G\n%freq AnFreq true end",
+    "! HF STO-3G\n%freq NumFreq true end",
+    "! HF STO-3G\n%freq\n  AnFreq false\n  AnFreq true\nend",
+]
+_NON_FREQUENCY_REQUESTS = [
+    "! HF STO-3G",
+    "! HF STO-3G\n%freq AnFreq false end",
+    "! HF STO-3G\n%freq AnFreq true AnFreq false end",
+    "! HF STO-3G\n# %freq AnFreq true end",
+    '! HF STO-3G\n%freq AnFreq "true" end',
+    "! HF STO-3G # Freq",
+]
+
+
+@pytest.mark.parametrize(
+    ("request_text", "requested"),
+    [(text, True) for text in _FREQUENCY_REQUESTS]
+    + [(text, False) for text in _NON_FREQUENCY_REQUESTS],
+)
+def test_hessian_admission_reads_frequency_requests_like_completion(
+    tmp_path: Path, request_text: str, requested: bool
+) -> None:
+    inp = tmp_path / "job.inp"
+    inp.write_text(request_text + "\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    lines = inp.read_text(encoding="utf-8").splitlines()
+
+    assert route_facts(inp).requests_frequency is requested
+    assert _route_outputs(lines).hessian_requested is requested
+
+
+def _inline_hydrogen_input(request_text: str, atom_count: int) -> str:
+    return request_text + "\n* xyz 0 1\n" + "H 0 0 0\n" * atom_count + "*\n"
+
+
+@pytest.mark.parametrize("request_text", _FREQUENCY_REQUESTS)
+def test_frequency_request_spellings_reject_inline_geometry_above_hessian_cap(
+    tmp_path: Path, request_text: str
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        _inline_hydrogen_input(request_text, MAX_HESSIAN_ADMISSION_ATOMS + 1), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="Hessian atom-count limit"):
+        build_submitted_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+    assert not _visible_generations(job_dir)
+
+
+@pytest.mark.parametrize("request_text", _FREQUENCY_REQUESTS)
+def test_frequency_request_spellings_admit_inline_geometry_at_hessian_cap(
+    tmp_path: Path, request_text: str
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        _inline_hydrogen_input(request_text, MAX_HESSIAN_ADMISSION_ATOMS), encoding="utf-8"
+    )
+
+    snapshot = build_submitted_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+    assert snapshot["source_selected_inp"] == str(selected.resolve())
+
+
+@pytest.mark.parametrize("request_text", _NON_FREQUENCY_REQUESTS[1:])
+def test_inactive_frequency_switches_keep_general_atom_cap(
+    tmp_path: Path, request_text: str
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        _inline_hydrogen_input(request_text, MAX_HESSIAN_ADMISSION_ATOMS + 1), encoding="utf-8"
+    )
+
+    snapshot = build_submitted_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+    assert snapshot["source_selected_inp"] == str(selected.resolve())
+
+
+@pytest.mark.parametrize(
+    ("request_text", "atom_count", "admitted"),
+    [
+        ("! HF STO-3G\n%freq AnFreq true end", MAX_HESSIAN_ADMISSION_ATOMS, True),
+        ("! HF STO-3G\n%freq AnFreq true end", MAX_HESSIAN_ADMISSION_ATOMS + 1, False),
+        ("! HF STO-3G\n%freq NumFreq true end", MAX_HESSIAN_ADMISSION_ATOMS + 1, False),
+        ("! HF STO-3G\n%freq AnFreq false end", MAX_HESSIAN_ADMISSION_ATOMS + 1, True),
+    ],
+)
+def test_frequency_block_request_applies_hessian_cap_to_external_xyz(
+    tmp_path: Path, request_text: str, atom_count: int, admitted: bool
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    geometry = job_dir / "input.xyz"
+    geometry.write_text(f"{atom_count}\ninput\n" + "H 0 0 0\n" * atom_count, encoding="utf-8")
+    selected = job_dir / "job.inp"
+    selected.write_text(f"{request_text}\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
+
+    def build() -> dict[str, Any]:
+        return build_submitted_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz=str(geometry),
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+
+    if admitted:
+        assert build()["source_selected_inp"] == str(selected.resolve())
+    else:
+        with pytest.raises(
+            ValueError, match=f"server atom-count limit of {MAX_HESSIAN_ADMISSION_ATOMS}"
+        ):
+            build()
+
+
+def test_frequency_block_request_reserves_same_stem_hessian(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "h2.hess").write_text("$hessian\n1\n1.0\n$end\n", encoding="utf-8")
+    selected = job_dir / "h2.inp"
+    selected.write_text(
+        '! HF STO-3G\n%freq AnFreq true end\n%geom InHessName "h2.hess" end\n'
+        "* xyz 0 1\nH 0 0 0\n*\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="runtime/output file: h2.hess"):
+        build_submitted_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+    assert not _visible_generations(job_dir)
 
 
 @pytest.mark.parametrize("route", ["! ScanTS", "! HF\n! scants Freq", "! HF # note # SCANTS"])

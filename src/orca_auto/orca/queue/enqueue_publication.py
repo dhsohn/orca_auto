@@ -25,6 +25,7 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_PREPARING,
     QUEUE_RECORD_SYNC_REPAIR_PENDING,
     QUEUE_RECORD_SYNC_TOKEN_KEY,
+    complete_queue_record_lease,
     park_queue_record_repair_pending,
     queue_record_publication_lock,
     queue_record_sync_metadata,
@@ -335,38 +336,6 @@ def _read_row(entries: list[QueueEntry], queue_id: str) -> tuple[QueueEntry | No
     return (owned[0] if len(owned) == 1 else None), False
 
 
-def _complete_owned_lease(
-    entries: list[QueueEntry],
-    entry: QueueEntry,
-    *,
-    publication_token: str,
-) -> tuple[QueueEntry | None, bool]:
-    """Token-gated CAS from this publisher's PREPARING lease to COMPLETE."""
-
-    for index, row in enumerate(entries):
-        if row.queue_id != entry.queue_id:
-            continue
-        if (
-            row.status != QueueStatus.PENDING
-            or row.cancel_requested
-            or queue_record_sync_state(row) != QUEUE_RECORD_SYNC_PREPARING
-            or queue_record_sync_token(row) != publication_token
-        ):
-            return None, False
-        metadata = dict(row.metadata)
-        metadata.update(
-            queue_record_sync_metadata(
-                QUEUE_RECORD_SYNC_COMPLETE,
-                token=publication_token,
-                owner_pid=0,
-            )
-        )
-        updated = replace(row, metadata=metadata)
-        entries[index] = updated
-        return updated, True
-    return None, False
-
-
 def _ownership_lost(queue_id: str, *, entry: QueueEntry) -> EnqueuePublicationOutcome:
     """Report that another lease owns the row; the worker repair pass reconciles."""
 
@@ -423,7 +392,13 @@ def _publish_and_complete(
     """Publish the record, then CAS the lease COMPLETE; a lost CAS parks the row."""
 
     def complete(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
-        return _complete_owned_lease(entries, current, publication_token=publication_token)
+        completed, owned = complete_queue_record_lease(
+            entries,
+            current,
+            expected_state=QUEUE_RECORD_SYNC_PREPARING,
+            expected_token=publication_token,
+        )
+        return (completed if owned else None), owned
 
     upsert_row_job_record(cfg, current, STATUS_QUEUED, require_task_id=True)
     completed = mutate_entries(queue_root, complete)

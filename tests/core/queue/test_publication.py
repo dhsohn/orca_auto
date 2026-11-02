@@ -8,6 +8,7 @@ import pytest
 from orca_auto.core.queue import publication, store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
     QUEUE_RECORD_SYNC_OWNER_START_KEY,
@@ -19,7 +20,7 @@ from orca_auto.core.queue.publication import (
     process_start_token,
     queue_record_sync_metadata,
 )
-from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from tests.queue_store_helpers import _claim_next, _enqueue, _install_deterministic_helpers
 
 
@@ -166,3 +167,85 @@ def test_park_queue_record_repair_pending_refuses_ownership_mismatch(
     assert result is None
     assert changed is False
     assert entries == [entry]
+
+
+def _leased_entry(
+    sync_state: str,
+    *,
+    token: str = "owned-token",
+    queue_id: str = "queue-1",
+    status: QueueStatus = QueueStatus.PENDING,
+    cancel_requested: bool = False,
+) -> QueueEntry:
+    return QueueEntry(
+        queue_id=queue_id,
+        app_name="test_app",
+        task_id="task-1",
+        task_kind="kind",
+        engine="test_engine",
+        status=status,
+        cancel_requested=cancel_requested,
+        metadata=queue_record_sync_metadata(sync_state, token=token, owner_pid=os.getpid()),
+    )
+
+
+@pytest.mark.parametrize("lease_state", [QUEUE_RECORD_SYNC_PREPARING, QUEUE_RECORD_SYNC_REPAIRING])
+def test_complete_queue_record_lease_completes_the_owned_lease(lease_state: str) -> None:
+    entry = _leased_entry(lease_state)
+    other = _leased_entry(lease_state, token="other-token", queue_id="queue-2")
+    entries = [other, entry]
+
+    result, changed = publication.complete_queue_record_lease(
+        entries, entry, expected_state=lease_state, expected_token="owned-token"
+    )
+
+    assert changed is True
+    assert result is entries[1]
+    assert entries[0] is other
+    assert entries[1].metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    assert entries[1].metadata[QUEUE_RECORD_SYNC_TOKEN_KEY] == "owned-token"
+    assert entries[1].metadata[QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
+    assert entries[1].metadata[QUEUE_RECORD_SYNC_OWNER_START_KEY] == ""
+
+
+@pytest.mark.parametrize(
+    ("row", "expected_state", "expected_token"),
+    [
+        (_leased_entry(QUEUE_RECORD_SYNC_PREPARING), QUEUE_RECORD_SYNC_REPAIRING, "owned-token"),
+        (_leased_entry(QUEUE_RECORD_SYNC_REPAIRING), QUEUE_RECORD_SYNC_PREPARING, "owned-token"),
+        (_leased_entry(QUEUE_RECORD_SYNC_PREPARING), QUEUE_RECORD_SYNC_PREPARING, "foreign"),
+        (
+            _leased_entry(QUEUE_RECORD_SYNC_PREPARING, cancel_requested=True),
+            QUEUE_RECORD_SYNC_PREPARING,
+            "owned-token",
+        ),
+        (
+            _leased_entry(QUEUE_RECORD_SYNC_PREPARING, status=QueueStatus.CANCELLED),
+            QUEUE_RECORD_SYNC_PREPARING,
+            "owned-token",
+        ),
+        (_leased_entry(QUEUE_RECORD_SYNC_COMPLETE), QUEUE_RECORD_SYNC_PREPARING, "owned-token"),
+    ],
+)
+def test_complete_queue_record_lease_never_overwrites_a_lost_lease(
+    row: QueueEntry, expected_state: str, expected_token: str
+) -> None:
+    entries = [row]
+
+    result, changed = publication.complete_queue_record_lease(
+        entries, row, expected_state=expected_state, expected_token=expected_token
+    )
+
+    assert changed is False
+    assert result is row
+    assert entries == [row]
+
+
+def test_complete_queue_record_lease_reports_a_missing_row() -> None:
+    entry = _leased_entry(QUEUE_RECORD_SYNC_PREPARING)
+
+    result, changed = publication.complete_queue_record_lease(
+        [], entry, expected_state=QUEUE_RECORD_SYNC_PREPARING, expected_token="owned-token"
+    )
+
+    assert (result, changed) == (None, False)

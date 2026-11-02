@@ -7,7 +7,10 @@ geometry scope that bounds a stationary-point claim is :func:`geometry_scope`
 for machine.json, the HTML report and the SI block alike. Each caller
 reads the input file itself. The job-type label (``job_type``) and the runtime
 outputs an input requests (``execution_binding``) classify route lines on their
-own, from the keyword rules here plus a few of their own.
+own, from the keyword rules here plus a few of their own; whether an input
+requests a frequency calculation is the one shared fact,
+:func:`requests_frequency`, so completion and the Hessian admission limit
+cannot read the same input differently.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from .input_syntax import input_file_lines, orca_route_lines, orca_route_tokens,
 # of ZOOM-NEB-TS.
 TS_ROUTE_RE = re.compile(r"\b(OPTTS|NEB-TS)\b", re.IGNORECASE)
 IRC_ROUTE_RE = re.compile(r"\bIRC\b", re.IGNORECASE)
+FREQ_ROUTE_RE = re.compile(r"\b(Freq|NumFreq|AnFreq)\b", re.IGNORECASE)
 # ORCA 6.1 simple-input keywords that run a non-TS geometry optimization:
 # convergence-prefixed (TightOpt ... SloppyOpt), coordinate-system (COpt/ZOpt)
 # and L-BFGS (L-Opt) spellings, so a TightOpt job cannot slip through as a
@@ -111,6 +115,18 @@ def _has_frequency_block_request(lines: list[str]) -> bool:
     return any(settings.values())
 
 
+def requests_frequency(lines: list[str]) -> bool:
+    """Whether the input explicitly asks for a frequency (Hessian) calculation.
+
+    A route keyword (Freq, NumFreq, AnFreq) on any route line, or an active
+    ``%freq`` AnFreq/NumFreq switch whose last boolean value is true. This is
+    the request only: whether completion also needs frequency evidence for
+    other reasons (a TS search) is :func:`completion_mode` policy.
+    """
+    routes = " ".join(orca_route_lines(lines))
+    return bool(FREQ_ROUTE_RE.search(routes)) or _has_frequency_block_request(lines)
+
+
 @dataclass(frozen=True)
 class RouteFacts:
     """The route keywords and geometry/frequency settings of the input at ``inp_path``.
@@ -146,8 +162,7 @@ def route_facts(inp_path: Path, *, lines: list[str] | None = None) -> RouteFacts
     has_constraints = _has_geometry_constraints(lines)
     return RouteFacts(
         inp_path=inp_path,
-        requests_frequency=bool(re.search(r"\b(?:NUMFREQ|ANFREQ|FREQ)\b", routes, re.IGNORECASE))
-        or _has_frequency_block_request(lines),
+        requests_frequency=requests_frequency(lines),
         is_engrad=any(
             not token.quoted and token.value.casefold() in {"engrad", "energygrad"}
             for line in lines

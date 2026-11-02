@@ -166,12 +166,12 @@ graph TD
 - 워커 종료나 워커 유실로 중단된 실행은 큐 행이 `pending`으로 돌아가고, 다음 인수는 완료 출력으로 마무리되지 않는 한 실행 전에 새 generation으로 재바인딩됩니다([ADR 0009](adr/0009-resume-only-by-rebind.md)). 실패한 실행은 큐 항목과 generation 상태 모두에 구체적인 실패 원인을 남깁니다.
 
 ### 4. 상태 확정 및 결과 저장
-- ORCA 계산이 끝나면 `orca/out_analyzer.py`가 출력 파일을 한 번 줄 단위로 읽으며 정상 종료 배너 및 오류/미수렴 마커를 분석하고, TS route이면 같은 읽기에서 마지막 진동수 구간의 허수 모드를 셉니다. (입력 echo나 주석에 포함된 오류 문구는 제외)
+- ORCA 계산이 끝나면 `orca/out_analyzer.py`가 출력 파일을 한 번 줄 단위로 읽으며 정상 종료 배너 및 오류/미수렴 마커를 분석하고, TS route이면 같은 읽기에서 마지막 진동수 구간의 허수 모드를 셉니다. 보고서와 같은 `frequencies.scan_frequency_sections` 규칙을 쓰되, 판정에 쓰지 않는 정상 모드 행렬과 좌표는 수집하지 않습니다(`include_modes_and_geometry=False`). (입력 echo나 주석에 포함된 오류 문구는 제외)
 - 검증된 계산 데이터(에너지, 수렴 여부, 열역학 데이터 등)를 바탕으로 다운스트림 도구 연동을 위한 표준 `machine.json`(v1 Envelope 규격) 및 HTML 요약본을 생성합니다. `machine.json`의 모든 필드(엔벨로프, lifecycle, artifact 영수증, 결과 요약)는 `orca/machine_observation.py`가 정규화된 작업 상태와 generation 파일에서 만들고, `report/publication.py`는 이를 HTML·SI 파일과 함께 기록하며, IRC 검증 블록을 포함한 모든 SI 블록은 `report/si.py`가 렌더링합니다.
 
 원본 근거가 기록된 결과는 `machine.json`보다 먼저 `execution_provenance.json`을 발행합니다. 보고서 발행자는 generation에 기록된 근거를 복사하고, 기계 결과는 `input`, `orca-output`과 함께 `execution-provenance` artifact로 이를 참조합니다. 영수증은 어느 읽는 쪽이든 검증할 수 있고, generation 상태와의 일치는 릴리스 smoke가 확인합니다. 종료 보고서와 그 출처 파일은 불변이며, 종료 처리를 재실행해도 출처 artifact가 없는 과거 보고서를 포함해 당시의 근거를 유지합니다.
 
-선택된 입력의 작업 종류는 규칙 하나로 정합니다. `completion_rules.route_facts`가 `.inp`를 읽어 route 줄과 플래그(TS, IRC, NEB-TS, 전체·부분 최적화, relaxed scan(`%geom Scan` 블록이 있는 최적화), 비정류 경로·동역학)를 기록합니다. 분석기의 완료 모드, HTML 보고서 구성(`report/composer.py`), 구조 종류(`evidence.structure_kind`), SI 작성(`report/si.py`)이 모두 이 기록에서 나오므로 같은 입력을 서로 다르게 분류할 수 없습니다. 입력은 호출하는 쪽마다 직접 읽습니다. 완료 모드, HTML 작성기, SI 작성기가 각각 `route_facts`를 호출하고, relaxed scan 보고서는 scan 좌표를 얻으려고 입력을 한 번 더 읽습니다. 작업 유형 표시(`job_type.detect_job_type`)와 입력이 요청하는 실행 산출물 판정(`execution_binding/_inputs.py`)은 같은 키워드 규칙에 자체 규칙 몇 개를 더해 route 줄을 따로 분류합니다. 보고서 조립기는 작업 상태로부터 페이지마다 `ReportHeader` 하나(제목, 상태와 사유, route 줄, 시각, 마지막 출력)를 만들어 Opt, SP, relaxed scan, NEB-TS, IRC 각 구성 요소의 수집기에 넘깁니다. 각 구성 요소는 두 가지 사실로 `ReportComponent` 하나(종류 이름, 배지, 메타 줄, 지표 카드, 섹션)를 만듭니다. 하나는 주 구성 요소인지 여부로, 주 구성 요소가 페이지 이름을 정하고 attempt 기록을 혼자 싣습니다. 다른 하나는 IRC 구성 요소가 있는지 여부로, 있으면 진동 요약을 IRC 쪽이 보여 줍니다. IRC 구성 요소 자신은 대신 다른 구성 요소가 최적화 추이를 이미 보여 주는지를 받습니다.
+선택된 입력의 작업 종류는 규칙 하나로 정합니다. `completion_rules.route_facts`가 `.inp`를 읽어 route 줄과 플래그(TS, IRC, NEB-TS, 전체·부분 최적화, relaxed scan(`%geom Scan` 블록이 있는 최적화), 비정류 경로·동역학)를 기록합니다. 분석기의 완료 모드, HTML 보고서 구성(`report/composer.py`), 구조 종류(`evidence.structure_kind`), SI 작성(`report/si.py`)이 모두 이 기록에서 나오므로 같은 입력을 서로 다르게 분류할 수 없습니다. 입력은 호출하는 쪽마다 직접 읽습니다. 완료 모드, HTML 작성기, SI 작성기가 각각 `route_facts`를 호출하고, relaxed scan 보고서는 scan 좌표를 얻으려고 입력을 한 번 더 읽습니다. 작업 유형 표시(`job_type.detect_job_type`)와 입력이 요청하는 실행 산출물 판정(`execution_binding/_inputs.py`)은 같은 키워드 규칙에 자체 규칙 몇 개를 더해 route 줄을 따로 분류합니다. 다만 입력이 진동수 계산을 요청하는지(route 키워드 또는 활성화된 `%freq` `AnFreq`/`NumFreq` 스위치)는 공통 함수 `completion_rules.requests_frequency` 하나로 정합니다. 완료 판정의 진동수 요구와 실행 바인딩의 Hessian 원자 수 제한·`.hess` 출력 예약이 이 함수를 읽으므로 같은 입력을 서로 다르게 해석할 수 없습니다. 보고서 조립기는 작업 상태로부터 페이지마다 `ReportHeader` 하나(제목, 상태와 사유, route 줄, 시각, 마지막 출력)를 만들어 Opt, SP, relaxed scan, NEB-TS, IRC 각 구성 요소의 수집기에 넘깁니다. 각 구성 요소는 두 가지 사실로 `ReportComponent` 하나(종류 이름, 배지, 메타 줄, 지표 카드, 섹션)를 만듭니다. 하나는 주 구성 요소인지 여부로, 주 구성 요소가 페이지 이름을 정하고 attempt 기록을 혼자 싣습니다. 다른 하나는 IRC 구성 요소가 있는지 여부로, 있으면 진동 요약을 IRC 쪽이 보여 줍니다. IRC 구성 요소 자신은 대신 다른 구성 요소가 최적화 추이를 이미 보여 주는지를 받습니다.
 
 기하 제약, 고정·강체 fragment, 수소만 최적화하거나 수소를 고정하는 설정, `RigidBodyOpt`는 최적화 좌표를 제한합니다. 이런 제약이 있는 비-TS 최적화는 부분 최적화로 분류하고 전체 표면의 최소점이라고 주장하지 않습니다. 빈 제약 블록과 명시적으로 false인 수소 설정은 제약으로 보지 않습니다. 이런 제약이 있는 TS 탐색은 TS 탐색으로 남지만(TS 완료 조건, `TS` 페이지, TS SI 레코드) `completion_rules.geometry_scope`는 `partial` 범위를 줍니다. `machine.json`은 정류점을 `unverified`로 두고, HTML 보고서와 SI 블록은 허수 모드 1개를 기대대로라고 표시하지 않고 "constrained TS search: first-order saddle unverified"라고 씁니다. `machine_observation`, `evidence`, 조립기, Opt 구성 요소, SI 작성기가 이 함수 하나를 읽고, 테스트 검증기는 규칙을 독립적으로 따로 가집니다. 릴리스 smoke의 테스트 검증기는 생성기와 독립적으로 SHA-256과 바이트 수를 계산합니다.
 
@@ -216,7 +216,7 @@ graph TD
 미리 읽은 행을 `expected_entry`로 사용), 자식 프로세스 구동 및 슬롯 연결, 종료 확정, 취소,
 셧다운, 고아 행 정리를 총괄합니다. `_admit_next`는 실행권 할당(admission) 절차를 순서대로
 수행합니다: 보류 디렉터리 확인, 발행 복구, 제출 알림, 가용 슬롯 확인, 미리 보기, 슬롯 예약,
-ID 기준 인수, 인수 실패 시 슬롯 해제 순입니다. 기반 클래스 `core.queue.worker.loop.QueueWorkerLoop`는
+미리 본 그 행의 ID 기준 인수(그 사이 행을 잃은 경우에만 큐를 다시 읽음), 인수한 행이 없으면 슬롯 해제 순입니다. 기반 클래스 `core.queue.worker.loop.QueueWorkerLoop`는
 루프 순서(회수, 취소, 수용, 대기), 셧다운 sweep, 시그널 핸들러를 관리하며 작업을
 프로세스 기반 레코드로만 다룹니다. ORCA 워커는 대기 직전에 `_periodic_upkeep`을
 실행합니다. 제출 알림을 보낸 뒤, 정리 주기가 되었고 종료 확정 재시도를 기다리는 회수
