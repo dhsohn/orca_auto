@@ -17,7 +17,7 @@ from ..completion_rules import (
     is_optimization_route,
     requests_frequency,
 )
-from ..input_blocks import find_geometry_block, iter_blocks
+from ..input_blocks import find_geometry_block, iter_blocks, method_run_type_values
 from ..input_syntax import orca_route_line, orca_route_tokens, value_token_index
 from ._models import _RouteOutputs
 
@@ -93,7 +93,17 @@ def _neb_preoptimizes_end_points(lines: list[str]) -> bool:
     return False
 
 
+# ``%method RunTyp`` values that write <basename>.engrad, as their route
+# keywords (EnGrad, NumGrad) do.
+_ENGRAD_RUN_TYPES = frozenset({"gradient", "engrad", "energygrad", "numgrad"})
+
+
 def _route_writes_engrad(lines: list[str]) -> bool:
+    if any(
+        value is not None and not value.quoted and value.value.lower() in _ENGRAD_RUN_TYPES
+        for value in method_run_type_values(lines)
+    ):
+        return True
     for line in lines:
         for token in orca_route_tokens(line):
             if token.quoted:

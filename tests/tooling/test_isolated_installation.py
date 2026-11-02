@@ -47,8 +47,9 @@ class _IsolatedInstallation:
         }
         environment.update(
             {
-                # Engine children do not inherit -I/-S, but must still import
-                # this regular package, not the repository's editable install.
+                # The fake engine runs from its shebang without -I. Worker and
+                # job children inherit -I and find the package in the staged
+                # site-packages, as a real installation's children do.
                 "PYTHONPATH": str(self.imports),
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "ORCA_AUTO_CONFIG": str(self.config),
@@ -88,24 +89,27 @@ class _IsolatedInstallation:
         return directory
 
 
-@pytest.fixture(scope="session")
-def isolated_python(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    environment = tmp_path_factory.mktemp("isolated-interpreter")
-    venv.EnvBuilder(with_pip=False).create(environment)
-    return environment / "bin" / "python"
+def _site_packages(environment: Path) -> Path:
+    [site_packages] = (environment / "lib").glob("python3.*/site-packages")
+    return site_packages
 
 
 @pytest.fixture
-def isolated(tmp_path: Path, isolated_python: Path) -> _IsolatedInstallation:
-    imports = tmp_path / "imports"
-    imports.mkdir()
+def isolated(tmp_path: Path) -> _IsolatedInstallation:
+    environment = tmp_path / "isolated-interpreter"
+    venv.EnvBuilder(with_pip=False).create(environment)
+    isolated_python = environment / "bin" / "python"
+    # The staged package is installed where a real installation puts it: the
+    # interpreter's own site-packages, which an isolated (-I) child still reads.
+    imports = _site_packages(environment)
     shutil.copytree(
         _REPO_ROOT / "src" / "orca_auto",
         imports / "orca_auto",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     # Only the declared runtime dependency and distribution metadata accompany
-    # the staged source. -I -S disables editable .pth files and site imports.
+    # the staged source. The parent's -I -S disables editable .pth files and
+    # site imports; its bootstrap puts the staged site-packages on sys.path.
     shutil.copytree(
         Path(yaml.__file__).resolve().parent,
         imports / "yaml",
@@ -174,7 +178,7 @@ def isolated(tmp_path: Path, isolated_python: Path) -> _IsolatedInstallation:
             entrypoint,
             entrypoint
             + f"    with open({str(prefix_record)!r}, 'w') as prefix_probe:\n"
-            + "        prefix_probe.write(sys.prefix)\n",
+            + "        prefix_probe.write(f'{sys.prefix}\\n{sys.flags.isolated}')\n",
         ),
         encoding="utf-8",
     )
@@ -215,8 +219,9 @@ def test_worker_runs_fake_orca_child_from_an_isolated_installation(
     )
     _assert_success(result)
     assert isolated.engine_counter.read_text(encoding="utf-8") == "1"
-    assert (isolated.runtime / "launch-python-prefix").read_text() == str(
-        isolated.python.parent.parent
+    # The worker -> job child -> launch gate chain kept -I all the way down.
+    assert (isolated.runtime / "launch-python-prefix").read_text() == (
+        f"{isolated.python.parent.parent}\n1"
     )
     machines = list(input_dir.rglob("machine.json"))
     assert len(machines) == 1

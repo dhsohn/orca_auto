@@ -516,6 +516,36 @@ class OrcaQueueWorker(QueueWorkerLoop):
             admission_token=reserved.admission_token,
         )
 
+    def _return_reserved(self, reserved: ReservedQueueEntry) -> None:
+        """Hand a claimed row back to the queue, then release its slot.
+
+        Shutdown was requested while the row was admitted, so its child never
+        starts. The requeue is fenced on the claimed generation and honors a
+        cancel requested meanwhile; the slot is released even when the requeue
+        fails, which leaves the row to orphan reconciliation at the next start.
+        """
+        entry = reserved.entry
+        try:
+            if requeue_running_entry(reserved.queue_root, entry.queue_id, expected_entry=entry):
+                logger.info(
+                    "Returned ORCA job %s to the queue: shutdown requested before it started",
+                    entry.queue_id,
+                )
+            else:
+                logger.warning(
+                    "ORCA job %s claimed during shutdown was no longer running unstarted; "
+                    "left for reconciliation",
+                    entry.queue_id,
+                )
+        except Exception:
+            logger.exception(
+                "Failed to return ORCA job %s claimed during shutdown; "
+                "orphan reconciliation will requeue it",
+                entry.queue_id,
+            )
+        finally:
+            self._release_admission_slot(reserved.admission_token)
+
     def _start_background_process(
         self,
         *,

@@ -99,7 +99,9 @@ engine executables separately.
    Preserve `--worker-only` when that is the intended service mode. A managed
    runtime requires explicit configuration outside its directory. The unit uses
    isolated Python imports, pins the build identity in its environment, and mounts
-   the runtime read-only through `ReadOnlyPaths`.
+   the runtime read-only through `ReadOnlyPaths`. The queue worker, each job child
+   and the ORCA launch gate inherit `-I`, so none of them reads `PYTHONPATH`, the
+   user site or its working directory.
 3. Restart through the existing admission guard:
 
    ```bash

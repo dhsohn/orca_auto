@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from orca_auto import cli_worker_supervision
 from orca_auto.cli_handlers import CommandConfigError, command_config_path
+from orca_auto.core.utils.process import python_interpreter_argv
 from orca_auto.orca.config import AppConfig, load_config
 from orca_auto.terminal import emit_error, emit_json
 
@@ -56,8 +56,9 @@ def cmd_queue_worker(args: Any) -> int:
         return 1
     cfg = _load_worker_config(config_path)
     # The supervisor's own interpreter resolves the installed package (editable
-    # checkout, wheel, or prepared runtime); no checkout PYTHONPATH is injected.
-    argv = [sys.executable, "-m", QUEUE_WORKER_MODULE, "--config", config_path]
+    # checkout, wheel, or prepared runtime) with the supervisor's own isolation
+    # flags; no checkout PYTHONPATH is injected.
+    argv = [*python_interpreter_argv(), "-m", QUEUE_WORKER_MODULE, "--config", config_path]
     stop_budget = cli_worker_supervision.worker_stop_budget_seconds(
         cfg.runtime.max_concurrent if cfg is not None else None
     )

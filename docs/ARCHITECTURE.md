@@ -162,7 +162,7 @@ Normal submission and publication repair both call `queue/job_records.py` with t
 - When RAM Scratch is enabled, the child reserves its scratch workspace before it writes any run state; the reservation checks host memory and tmpfs capacity ([ADR 0004](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)). If capacity is temporarily short, the job returns to `pending` without failing, and `queue list` shows it as waiting for resources. Otherwise the calculation runs in an isolated generation workspace.
 
 ### 3. Supervision & Clean Exit
-- The worker tracks child process status and guarantees clean shutdown upon external signals (`SIGTERM`).
+- The worker tracks child process status and guarantees clean shutdown upon external signals (`SIGTERM`, `SIGINT`). Once shutdown is requested no further row is admitted; a row claimed while the signal arrived is returned to `pending` (or `cancelled` when a cancel was requested meanwhile) and its slot released, without starting a child.
 - An execution interrupted by a worker shutdown or a lost worker returns its row to `pending`, and the next claim rebinds it into a fresh generation before it runs unless its completed output settles it ([ADR 0009](adr/0009-resume-only-by-rebind.md)). Failed executions retain their specific failure causes in both the queue entry and generation state.
 
 ### 4. Convergence & Publication

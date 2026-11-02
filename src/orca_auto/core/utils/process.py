@@ -4,6 +4,7 @@ import errno
 import json
 import os
 import signal
+import sys
 from contextlib import suppress
 from pathlib import Path
 from typing import Literal
@@ -16,6 +17,21 @@ PIDFD_SIGNAL_PROCESS_GROUP = 1 << 2
 
 class StableProcessSignalError(RuntimeError):
     """Raised when a process cannot be signalled through a stable pidfd target."""
+
+
+def python_interpreter_argv() -> list[str]:
+    """``sys.executable``, plus ``-I`` when this interpreter runs isolated, for a child.
+
+    Installed and prepared-runtime units start orca_auto with ``python -I``. A
+    child started without it would read ``PYTHONPATH``, the user site and the
+    current directory, and could import another ``orca_auto`` than the one its
+    parent verified. A parent without ``-I``, such as a development run with
+    ``PYTHONPATH=src``, starts its child the same way. Only ``-I`` is carried:
+    the other import flags (``-E``, ``-s``, ``-P``, ``-B``) can also come from
+    environment variables, which the child inherits anyway unless isolated.
+    """
+
+    return [sys.executable, "-I"] if sys.flags.isolated else [sys.executable]
 
 
 def stat_starttime_field(stat_text: str) -> str | None:

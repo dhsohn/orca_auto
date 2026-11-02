@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from .input_blocks import GEOM_HEADER_RE, iter_blocks
+from .input_blocks import GEOM_HEADER_RE, iter_blocks, method_run_type_values
 from .input_references import orca_moinp_references
 from .input_syntax import active_orca_directive_text, orca_line_tokens, orca_route_tokens
 from .resource_directives import MAXCORE_RE, NPROCS_RE
@@ -21,6 +21,15 @@ COORDS_BLOCK_RE = re.compile(r"^\s*%\s*coords\b", re.IGNORECASE)
 # (resource_directives.PAL_ROUTE_RE) scans the route text for a core count, so
 # it also sees quoted or compound tokens; the two cannot share one pattern.
 PAL_ROUTE_TOKEN_RE = re.compile(r"\APAL\d+\Z", re.IGNORECASE)
+# ``%method RunTyp`` values whose job the completion analyzer and the execution
+# binding classify correctly: a plain single point, or a single point with a
+# gradient (completion needs the same evidence as ``sp``; the binding reserves
+# the ``.engrad`` it writes). Every other value -- an optimization spelled
+# ``Opt``/``Geom``/``Geometry``/``GeometryOpt``, dynamics, or anything unknown --
+# would be admitted but verified as a single point, so it is refused.
+SUPPORTED_METHOD_RUN_TYPES = frozenset(
+    {"energy", "sp", "gradient", "engrad", "energygrad", "numgrad"}
+)
 
 
 def validate_supported_xyz_geometry_syntax(
@@ -90,6 +99,23 @@ def validate_supported_xyz_geometry_syntax(
         raise ValueError(f"{label} must define exactly one supported ORCA geometry block")
     if inline_geometry_open:
         raise ValueError(f"{label} has an unterminated inline ORCA geometry block")
+
+
+def validate_supported_method_run_type(lines: list[str], *, label: str) -> None:
+    """Reject a ``%method RunTyp`` whose job orca_auto would verify as the wrong kind.
+
+    Request an optimization with a route keyword (``! Opt``) instead; that is
+    the form completion, reports and the execution binding classify.
+    """
+
+    for value in method_run_type_values(lines):
+        if value is None or value.quoted:
+            raise ValueError(f"{label} has an unreadable %method RunTyp value")
+        if value.value.lower() not in SUPPORTED_METHOD_RUN_TYPES:
+            raise ValueError(
+                f"{label} uses unsupported %method RunTyp {value.value}; request an "
+                "optimization or other job type with a route keyword such as ! Opt"
+            )
 
 
 def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> None:

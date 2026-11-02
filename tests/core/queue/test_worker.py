@@ -28,7 +28,11 @@ from orca_auto.core.queue.worker import loop as loop_mod
 from orca_auto.core.queue.worker import pid_file
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.core.queue.worker.models import ReservedQueueEntry, ReserveStatus
-from tests.process_helpers import FakeManagedProcess, recording_killpg
+from tests.process_helpers import (
+    FakeManagedProcess,
+    preserved_signal_handlers,
+    recording_killpg,
+)
 
 
 def _entry(
@@ -189,6 +193,78 @@ def test_fill_slots_starts_until_capacity_and_reports_processed() -> None:
     assert loop._fill_slots() == "processed"
     assert list(loop._running) == ["slot-1", "slot-2"]
     assert loop.admit_calls == 2
+
+
+class _ShutdownLoop(_ScriptedLoop):
+    """Records each admission and start, and gives back rows it must not start."""
+
+    def __init__(
+        self, admissions: Iterable[tuple[ReserveStatus, ReservedQueueEntry | None]], **kwargs: Any
+    ) -> None:
+        super().__init__(admissions, **kwargs)
+        self.events: list[str] = []
+        self.returned: list[str] = []
+        self.on_start: Any = None
+        self.on_admit: Any = None
+
+    def _admit_next(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
+        status, reserved = super()._admit_next()
+        self.events.append(f"admit {reserved.admission_token if reserved else status}")
+        if self.on_admit is not None:
+            self.on_admit()
+        return status, reserved
+
+    def _start_reserved(self, reserved: ReservedQueueEntry) -> bool:
+        self.events.append(f"start {reserved.admission_token}")
+        started = super()._start_reserved(reserved)
+        if self.on_start is not None:
+            self.on_start()
+        return started
+
+    def _return_reserved(self, reserved: ReservedQueueEntry) -> None:
+        self.returned.append(reserved.admission_token)
+
+
+def _three_admissions() -> list[tuple[ReserveStatus, ReservedQueueEntry | None]]:
+    return [("processed", _reserved(f"q{index}")) for index in (1, 2, 3)]
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_shutdown_signal_after_a_start_stops_further_admission(signum: signal.Signals) -> None:
+    loop = _ShutdownLoop(_three_admissions(), max_concurrent=3)
+    with preserved_signal_handlers(signal.SIGTERM, signal.SIGINT):
+        loop._install_signal_handlers()
+        loop.on_start = lambda: os.kill(os.getpid(), signum)
+        status = loop._fill_slots()
+
+    assert loop._shutdown_requested is True
+    assert status == "processed"
+    assert loop.events == ["admit q1", "start q1"]
+    assert list(loop._running) == ["q1"]
+    assert loop.returned == []
+
+
+def test_shutdown_requested_during_admission_returns_the_row_unstarted() -> None:
+    loop = _ShutdownLoop(_three_admissions(), max_concurrent=3)
+
+    def request_shutdown() -> None:
+        loop._shutdown_requested = True
+
+    loop.on_admit = request_shutdown
+    status = loop._fill_slots()
+
+    assert status == "blocked"
+    assert loop.events == ["admit q1"]
+    assert loop.returned == ["q1"]
+    assert loop._running == {}
+
+
+def test_shutdown_requested_before_the_fill_admits_nothing() -> None:
+    loop = _ShutdownLoop(_three_admissions(), max_concurrent=3)
+    loop._shutdown_requested = True
+
+    assert loop._fill_slots() == "blocked"
+    assert loop.events == []
 
 
 def test_fill_slots_preserves_blocked_status_before_starting() -> None:

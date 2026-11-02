@@ -10,6 +10,31 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Submission now rejects a `%method RunTyp` value the runtime cannot classify,
+  including the optimization spellings `Opt`, `Geom`, `Geometry` and
+  `GeometryOpt`, as well as missing or quoted values. Such inputs were admitted
+  and then verified as a single point: completion did not require optimization
+  convergence evidence, and the same-stem XYZ that the optimization rewrites
+  was bound as an immutable input. Request those jobs with a route keyword
+  such as `! Opt`. `Energy`/`SP` and the gradient values (`Gradient`,
+  `EnGrad`, `EnergyGrad`, `NumGrad`) are still accepted, and a gradient value
+  now reserves `<stem>.engrad` as an output. Rows queued before the upgrade
+  are not re-checked.
+- A worker asked to stop (`SIGTERM`, `SIGINT`) while filling several slots no
+  longer admits further rows. Before, it kept claiming rows and starting
+  children until every slot was full, and only then ran the shutdown sweep.
+  A row claimed as the signal arrived is returned to `pending` (or
+  `cancelled` when a cancel was requested meanwhile) and its slot released,
+  without starting a child.
+- Python children now keep the parent's isolated mode. Under a unit started
+  with `python -I`, the queue worker, each job child and the ORCA launch gate
+  were started without `-I`. They read `PYTHONPATH`, the user site and the
+  current directory, and could import a different `orca_auto` than the
+  supervisor had verified. A parent started without `-I`, such as a
+  development run with `PYTHONPATH=src`, starts its children unchanged.
+
+### Fixed
+
 - Submission now applies the 1,000-atom Hessian limit to frequency requests
   made only through an active `%freq AnFreq true` or `%freq NumFreq true`
   block, for inline and external XYZ geometries alike, and reserves the

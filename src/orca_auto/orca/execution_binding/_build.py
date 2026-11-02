@@ -17,7 +17,10 @@ from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMI
 from .. import input_references
 from ..file_identity import file_content_identity
 from ..input_references import orca_input_requests_moread, orca_moinp_references
-from ..input_validation import validate_supported_xyz_geometry_syntax
+from ..input_validation import (
+    validate_supported_method_run_type,
+    validate_supported_xyz_geometry_syntax,
+)
 from ..resource_directives import resource_request_from_lines
 from ._cleanup import discard_unowned_generation
 from ._confinement import (
@@ -94,6 +97,7 @@ def _load_selected_snapshot_input(
     if resource_request_from_lines(lines) != dict(resource_request):
         raise ValueError("ORCA normalized selected input does not match its resource request")
     validate_supported_xyz_geometry_syntax(lines, label="ORCA selected input")
+    validate_supported_method_run_type(lines, label="ORCA selected input")
     requests_moread = orca_input_requests_moread(lines)
     if requests_moread and not orca_moinp_references(lines):
         raise ValueError(
