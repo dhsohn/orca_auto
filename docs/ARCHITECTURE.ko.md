@@ -166,7 +166,7 @@ graph TD
 - 워커 종료나 워커 유실로 중단된 실행은 큐 행이 `pending`으로 돌아가고, 다음 인수는 완료 출력으로 마무리되지 않는 한 실행 전에 새 generation으로 재바인딩됩니다([ADR 0009](adr/0009-resume-only-by-rebind.md)). 실패한 실행은 큐 항목과 generation 상태 모두에 구체적인 실패 원인을 남깁니다.
 
 ### 4. 상태 확정 및 결과 저장
-- ORCA 계산이 끝나면 `orca/out_analyzer.py`가 출력 파일을 한 번 줄 단위로 읽으며 정상 종료 배너 및 오류/미수렴 마커를 분석하고, TS route이면 같은 읽기에서 마지막 진동수 구간의 허수 모드를 셉니다. (입력 echo나 주석에 포함된 오류 문구는 제외)
+- ORCA 계산이 끝나면 `orca/out_analyzer.py`가 출력 파일을 한 번 줄 단위로 읽으며 정상 종료 배너 및 오류/미수렴 마커를 분석하고, TS route이면 같은 읽기에서 마지막 진동수 구간의 허수 모드를 셉니다. 보고서와 같은 `frequencies.scan_frequency_sections` 규칙을 쓰되, 판정에 쓰지 않는 정상 모드 행렬과 좌표는 수집하지 않습니다(`include_modes_and_geometry=False`). (입력 echo나 주석에 포함된 오류 문구는 제외)
 - 검증된 계산 데이터(에너지, 수렴 여부, 열역학 데이터 등)를 바탕으로 다운스트림 도구 연동을 위한 표준 `machine.json`(v1 Envelope 규격) 및 HTML 요약본을 생성합니다. `machine.json`의 모든 필드(엔벨로프, lifecycle, artifact 영수증, 결과 요약)는 `orca/machine_observation.py`가 정규화된 작업 상태와 generation 파일에서 만들고, `report/publication.py`는 이를 HTML·SI 파일과 함께 기록하며, IRC 검증 블록을 포함한 모든 SI 블록은 `report/si.py`가 렌더링합니다.
 
 원본 근거가 기록된 결과는 `machine.json`보다 먼저 `execution_provenance.json`을 발행합니다. 보고서 발행자는 generation에 기록된 근거를 복사하고, 기계 결과는 `input`, `orca-output`과 함께 `execution-provenance` artifact로 이를 참조합니다. 영수증은 어느 읽는 쪽이든 검증할 수 있고, generation 상태와의 일치는 릴리스 smoke가 확인합니다. 종료 보고서와 그 출처 파일은 불변이며, 종료 처리를 재실행해도 출처 artifact가 없는 과거 보고서를 포함해 당시의 근거를 유지합니다.

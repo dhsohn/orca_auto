@@ -16,7 +16,8 @@ This module is the single source of truth for which frequency section counts,
 which lines of it are frequencies, and which of those are imaginary. The
 completion analyzer (``out_analyzer``) verifies a TS through
 :func:`scan_frequency_sections` and :meth:`FrequencyAnalysis.imaginary_count`,
-the same calls the SI and reports publish from, so a verified TS can never be
+the same calls the SI and reports publish from (it only skips collecting the
+mode matrix and geometry it does not read), so a verified TS can never be
 re-counted differently downstream (``docs/PUBLIC_CONTRACTS.md`` §4). Lines are
 split like a file read (CR, LF, CRLF only) and input echoes and comments are
 skipped, as every other execution diagnostic does.
@@ -125,12 +126,20 @@ def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
     return scan_frequency_sections(iter_output_lines(text)).analysis
 
 
-def scan_frequency_sections(lines: Iterable[str]) -> FrequencySections:
+def scan_frequency_sections(
+    lines: Iterable[str], *, include_modes_and_geometry: bool = True
+) -> FrequencySections:
     """Single pass over output lines (a file handle or :func:`iter_output_lines`).
 
     Only CR, LF and CRLF may separate the lines fed here; ``str.splitlines()``
     also breaks on form feeds and Unicode separators and would section a small
     output differently from the same output streamed from disk.
+
+    ``include_modes_and_geometry=False`` skips the ``NORMAL MODES`` matrix and
+    the coordinates, whose size grows with the square of the atom count, for a
+    caller that only needs the verdict (the completion analyzer). Which
+    section counts, its frequencies and ``seen`` are decided by the same
+    headers either way; only ``mode_matrix`` and ``atoms`` come back empty.
     """
     freqs: list[float] | None = None
     seen = False
@@ -179,11 +188,13 @@ def scan_frequency_sections(lines: Iterable[str]) -> FrequencySections:
             continue
         if upper == _MODES_HEADER:
             close_section()
-            section, current_modes, current_cols = "modes", {}, []
+            if include_modes_and_geometry:
+                section, current_modes, current_cols = "modes", {}, []
             continue
         if upper.startswith(_COORDS_HEADER):
             close_section()
-            section, current_coords = "coords", []
+            if include_modes_and_geometry:
+                section, current_coords = "coords", []
             continue
         if section == "freq":
             values = frequency_values(line)

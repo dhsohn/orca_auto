@@ -269,7 +269,11 @@ def analyze_output(
 
     try:
         with open_orca_text(out_path, byte_observer=byte_observer) as handle:
-            sections = scan_frequency_sections(_marked_lines(handle, markers))
+            # The verdict needs the final section's frequencies only; the
+            # mode matrix and geometry are report detail.
+            sections = scan_frequency_sections(
+                _marked_lines(handle, markers), include_modes_and_geometry=False
+            )
     except OSError:
         return OutAnalysis(
             status=AnalyzerStatus.INCOMPLETE, reason="output_read_error", markers=markers
