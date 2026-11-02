@@ -15,10 +15,10 @@ from ..completion_rules import (
     PARTIAL_OPT_ROUTE_RE,
     TS_ROUTE_RE,
     is_optimization_route,
+    requests_frequency,
 )
 from ..input_blocks import find_geometry_block, iter_blocks
 from ..input_syntax import orca_route_line, orca_route_tokens, value_token_index
-from ..job_type import FREQ_RE
 from ._models import _RouteOutputs
 
 _NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
@@ -114,7 +114,7 @@ def _route_outputs(lines: list[str]) -> _RouteOutputs:
     route_text = " ".join(route for line in lines if (route := orca_route_line(line)) is not None)
     return _RouteOutputs(
         engrad_is_output=_route_writes_engrad(lines),
-        hessian_requested=bool(FREQ_RE.search(route_text)),
+        hessian_requested=requests_frequency(lines),
         neb_requested=bool(_NEB_ROUTE_RE.search(route_text)),
         neb_preopt_ends=_neb_preoptimizes_end_points(lines),
         same_stem_xyz_is_output=is_optimization_route(route_text)

@@ -8,6 +8,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Submission now applies the 1,000-atom Hessian limit to frequency requests
+  made only through an active `%freq AnFreq true` or `%freq NumFreq true`
+  block, for inline and external XYZ geometries alike, and reserves the
+  input's same-stem `.hess` file as a runtime output for them. Previously only
+  route-line `Freq`/`NumFreq`/`AnFreq` keywords triggered these checks, while
+  completion already required frequency evidence for both spellings. Both
+  paths now read one shared rule, `completion_rules.requests_frequency`.
+  Queued and historical jobs are unchanged; no migration is required.
+
 ## [10.2.3] - 2026-10-24
 
 ### Fixed
