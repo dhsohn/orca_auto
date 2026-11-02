@@ -100,6 +100,71 @@ def test_dequeue_returns_none_when_the_previewed_row_is_lost(
     assert roots.dequeue_next_entry(_cfg(tmp_path)) is None
 
 
+def test_dequeue_claims_a_supplied_preview_without_listing_the_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preview = _internal_entry("orca", "previewed")
+    queue_persistence.save_entries(tmp_path, [preview])
+    cfg = _cfg(tmp_path)
+    assert roots.peek_next_entry(cfg) == preview
+    monkeypatch.setattr(
+        roots,
+        "list_orca_rows",
+        lambda *_args: pytest.fail("a claimed preview must not list the queue again"),
+    )
+
+    result = roots.dequeue_next_entry(cfg, preview=preview)
+
+    assert result is not None
+    assert result[0] == tmp_path
+    assert (result[1].queue_id, result[1].status.value) == ("previewed", "running")
+
+
+def test_dequeue_previews_afresh_when_the_supplied_preview_was_lost(tmp_path: Path) -> None:
+    lost = replace(_internal_entry("orca", "lost"), priority=1)
+    behind = replace(_internal_entry("orca", "behind"), priority=5)
+    queue_persistence.save_entries(tmp_path, [lost, behind])
+    cfg = _cfg(tmp_path)
+    assert roots.peek_next_entry(cfg) == lost
+    # Cancelled between the preview and the claim.
+    queue_persistence.save_entries(tmp_path, [replace(lost, cancel_requested=True), behind])
+
+    result = roots.dequeue_next_entry(cfg, preview=lost)
+
+    assert result is not None
+    assert result[1].queue_id == "behind"
+    statuses = {entry.queue_id: entry.status.value for entry in queue_store.list_queue(tmp_path)}
+    assert statuses == {"lost": "pending", "behind": "running"}
+
+
+def test_dequeue_fences_a_supplied_preview_on_its_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preview = _internal_entry("orca", "same-id")
+    replacement = replace(preview, task_id="orca-task-replacement")
+    queue_persistence.save_entries(tmp_path, [replacement])
+    claims: list[tuple[str, QueueEntry | None]] = []
+    real_claim = roots.dequeue_entry_if_pending
+
+    def recorded_claim(root: Path, queue_id: str, *, expected_entry: QueueEntry) -> Any:
+        claimed = real_claim(root, queue_id, expected_entry=expected_entry)
+        claims.append((expected_entry.task_id, claimed))
+        return claimed
+
+    monkeypatch.setattr(roots, "dequeue_entry_if_pending", recorded_claim)
+
+    result = roots.dequeue_next_entry(_cfg(tmp_path), preview=preview)
+
+    # The stale preview's generation is refused under the lock; the fresh
+    # preview then claims the replacement generation under its own fence.
+    assert [(task_id, claimed is not None) for task_id, claimed in claims] == [
+        (preview.task_id, False),
+        ("orca-task-replacement", True),
+    ]
+    assert result is not None
+    assert result[1].task_id == "orca-task-replacement"
+
+
 def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

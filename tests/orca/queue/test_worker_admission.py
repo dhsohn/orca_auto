@@ -139,14 +139,13 @@ def test_admission_pass_reserves_the_slot_before_it_claims_the_row(
 
     _admission_pass(worker)
 
-    # The claim previews again to fence on the row it takes; the second
-    # admission finds nothing claimable and writes nothing.
+    # The claim takes the previewed row without listing the queue again; the
+    # second admission finds nothing claimable and writes nothing.
     assert calls == [
         "capacity",
         "preview",
         "reserve",
         "claim",
-        "preview",
         "capacity",
         "preview",
     ]

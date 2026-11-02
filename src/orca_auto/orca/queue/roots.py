@@ -53,19 +53,36 @@ def dequeue_next_entry(
     cfg: AppConfig,
     *,
     skip_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    preview: QueueEntry | None = None,
 ) -> tuple[Path, QueueEntry] | None:
-    """Claim the previewed row by id, fenced on the previewed generation."""
+    """Claim the previewed row by id, fenced on the previewed generation.
+
+    ``preview`` is a row the caller has just selected with
+    :func:`peek_next_entry` and the same ``skip_entry_fn``; it is claimed
+    without listing the queue again. Only when that claim is lost (the row was
+    cancelled, replaced or claimed meanwhile) is the queue previewed afresh, so
+    a lost race still admits the next claimable row in the same pass. The
+    claim itself always re-validates under the queue lock.
+    """
+    root = queue_root(cfg)
+    if preview is not None:
+        claimed = _claim_previewed(root, preview)
+        if claimed is not None:
+            return root, claimed
     entry = peek_next_entry(cfg, skip_entry_fn=skip_entry_fn)
     if entry is None:
         return None
-    root = queue_root(cfg)
-    queue_id = str(getattr(entry, "queue_id", "")).strip()
-    if not queue_id:
-        return None
-    claimed = dequeue_entry_if_pending(root, queue_id, expected_entry=entry)
+    claimed = _claim_previewed(root, entry)
     if claimed is None:
         return None
     return root, claimed
+
+
+def _claim_previewed(root: Path, entry: QueueEntry) -> QueueEntry | None:
+    queue_id = str(getattr(entry, "queue_id", "")).strip()
+    if not queue_id:
+        return None
+    return dequeue_entry_if_pending(root, queue_id, expected_entry=entry)
 
 
 __all__ = [

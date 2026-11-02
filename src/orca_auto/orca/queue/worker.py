@@ -415,7 +415,8 @@ class OrcaQueueWorker(QueueWorkerLoop):
         # capacity; a preview that loses the race simply releases the slot again.
         if not admission_has_capacity(self.admission_root, self.max_concurrent):
             return "blocked", None
-        if roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry) is None:
+        preview = roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
+        if preview is None:
             return "idle", None
         admission_token = _try_reserve_admission_slot(
             self.admission_root, self.max_concurrent, owned=self._owns_slot
@@ -423,7 +424,11 @@ class OrcaQueueWorker(QueueWorkerLoop):
         if admission_token is None:
             return "blocked", None
         try:
-            dequeued = roots.dequeue_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
+            # The claim takes the previewed row without listing the queue
+            # again, and previews afresh only when that row was lost.
+            dequeued = roots.dequeue_next_entry(
+                self.cfg, skip_entry_fn=self._skip_entry, preview=preview
+            )
         except Exception:
             self._release_admission_slot(admission_token)
             raise

@@ -19,6 +19,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   paths now read one shared rule, `completion_rules.requests_frequency`.
   Queued and historical jobs are unchanged; no migration is required.
 
+### Changed
+
+- The completion analyzer no longer retains the normal-mode matrix and
+  geometry while it scans for the final frequency section; verdicts are
+  unchanged and reports, the SI block and `machine.json` keep the full detail.
+- A worker admission claims the row it previewed instead of listing the queue
+  a second time; it lists again only when that row was cancelled, replaced or
+  claimed meanwhile.
+
 ## [10.2.3] - 2026-10-24
 
 ### Fixed
