@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -16,7 +18,7 @@ from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import worker as queue_worker_mod
-from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_reaction_dir
 from orca_auto.orca.queue.models import OrcaRunningJob
 from orca_auto.orca.queue.worker import OrcaQueueWorker
@@ -175,6 +177,94 @@ def test_admission_pass_with_a_full_store_does_not_preview_the_queue(
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
     assert admission_file_identity(worker.admission_root) == before
     assert child_starter.started == []
+
+
+def test_shutdown_signal_after_the_first_start_claims_no_further_row(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+) -> None:
+    worker = make_worker(max_concurrent=3, sleep=lambda _seconds: None)
+    entries = [_enqueue_ready(queue_root, name) for name in ("mol_A", "mol_B", "mol_C")]
+
+    def start_then_sigterm(**kwargs: Any) -> Any:
+        process = child_starter(**kwargs)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return process
+
+    worker._start_background_process = start_then_sigterm  # type: ignore[method-assign]
+    worker._install_signal_handlers()
+    worker._worker_state_last_reconcile = time.monotonic()
+    worker._fill_slots()
+
+    assert worker._shutdown_requested is True
+    assert [started.entry.queue_id for started in child_starter.started] == [entries[0].queue_id]
+    assert queue_statuses(queue_root) == {
+        entries[0].queue_id: QueueStatus.RUNNING,
+        entries[1].queue_id: QueueStatus.PENDING,
+        entries[2].queue_id: QueueStatus.PENDING,
+    }
+    assert [slot["queue_id"] for slot in _slots(queue_root)] == [entries[0].queue_id]
+
+
+@pytest.mark.parametrize("cancel_requested", [False, True])
+def test_shutdown_during_admission_returns_the_claimed_row_and_its_slot(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_requested: bool,
+) -> None:
+    worker = make_worker(max_concurrent=2, start=child_starter, sleep=lambda _seconds: None)
+    entry = _enqueue_ready(queue_root, "mol_A")
+    real_dequeue = queue_worker_mod.roots.dequeue_next_entry
+
+    def claim_then_shutdown(*args: Any, **kwargs: Any) -> Any:
+        claimed = real_dequeue(*args, **kwargs)
+        worker._shutdown_requested = True
+        if cancel_requested:
+            cancel(queue_root, entry.queue_id)
+        return claimed
+
+    monkeypatch.setattr(queue_worker_mod.roots, "dequeue_next_entry", claim_then_shutdown)
+    worker._worker_state_last_reconcile = time.monotonic()
+
+    assert worker._fill_slots() == "blocked"
+
+    assert child_starter.started == []
+    expected = QueueStatus.CANCELLED if cancel_requested else QueueStatus.PENDING
+    assert queue_statuses(queue_root) == {entry.queue_id: expected}
+    assert _slots(queue_root) == []
+
+
+def test_shutdown_return_releases_the_slot_when_the_requeue_fails(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = make_worker(max_concurrent=2, start=child_starter, sleep=lambda _seconds: None)
+    entry = _enqueue_ready(queue_root, "mol_A")
+    real_dequeue = queue_worker_mod.roots.dequeue_next_entry
+
+    def claim_then_shutdown(*args: Any, **kwargs: Any) -> Any:
+        claimed = real_dequeue(*args, **kwargs)
+        worker._shutdown_requested = True
+        return claimed
+
+    def failed_requeue(*_args: Any, **_kwargs: Any) -> bool:
+        raise QueueLockTimeoutError("queue lock held past its deadline")
+
+    monkeypatch.setattr(queue_worker_mod.roots, "dequeue_next_entry", claim_then_shutdown)
+    monkeypatch.setattr(queue_worker_mod, "requeue_running_entry", failed_requeue)
+    worker._worker_state_last_reconcile = time.monotonic()
+
+    assert worker._fill_slots() == "blocked"
+
+    assert child_starter.started == []
+    # The row stays claimed for orphan reconciliation; the slot never leaks.
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.RUNNING}
+    assert _slots(queue_root) == []
 
 
 @pytest.mark.parametrize("claim", ["lost", "raises"])

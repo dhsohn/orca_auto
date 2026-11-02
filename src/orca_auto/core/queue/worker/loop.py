@@ -133,14 +133,26 @@ class QueueWorkerLoop:
         self._sleep_fn(self.poll_interval_seconds)
 
     def _fill_slots(self, *, max_new_jobs: int | None = None) -> str:
-        """Admit and start jobs until capacity; ``processed`` once any job started."""
+        """Admit and start jobs until capacity; ``processed`` once any job started.
+
+        A shutdown request ends the fill before the next admission. One that
+        arrives while a row is being admitted hands that row back
+        (:meth:`_return_reserved`) instead of starting its child, so no job
+        starts after the worker was asked to stop; the fill then reports
+        ``blocked`` unless an earlier job already started.
+        """
         started = 0
         while len(self._running) < self.max_concurrent:
             if max_new_jobs is not None and started >= max_new_jobs:
                 break
+            if self._shutdown_requested:
+                return "processed" if started else "blocked"
             status, reserved = self._admit_next()
             if status != "processed" or reserved is None:
                 return "processed" if started else status
+            if self._shutdown_requested:
+                self._return_reserved(reserved)
+                return "processed" if started else "blocked"
             if not self._start_reserved(reserved):
                 return "processed"
             started += 1
@@ -197,6 +209,10 @@ class QueueWorkerLoop:
         raise NotImplementedError
 
     def _start_reserved(self, reserved: ReservedQueueEntry) -> bool:
+        raise NotImplementedError
+
+    def _return_reserved(self, reserved: ReservedQueueEntry) -> None:
+        """Give back a claimed row and its slot without starting it (shutdown)."""
         raise NotImplementedError
 
     def _poll_job(self, job: ProcessBackedJob) -> int | None:

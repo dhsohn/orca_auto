@@ -20,6 +20,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `EnGrad`, `EnergyGrad`, `NumGrad`) are still accepted, and a gradient value
   now reserves `<stem>.engrad` as an output. Rows queued before the upgrade
   are not re-checked.
+- A worker asked to stop (`SIGTERM`, `SIGINT`) while filling several slots no
+  longer admits further rows. Before, it kept claiming rows and starting
+  children until every slot was full, and only then ran the shutdown sweep.
+  A row claimed as the signal arrived is returned to `pending` (or
+  `cancelled` when a cancel was requested meanwhile) and its slot released,
+  without starting a child.
 
 ### Fixed
 
