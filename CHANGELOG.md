@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Submission now reads a geometry header with the same comment rules as the
+  binding that reads the geometry. A closed `# ... #` comment before or inside
+  the header (`# geometry # * xyz 0 1`, `* xyz 0 # singlet # 1`, and the same
+  for `xyzfile`) was refused as an unsupported geometry format. A quoted
+  header keyword, charge or multiplicity is still refused, and a quoted
+  `xyzfile` path is still accepted.
 - `job_state.json` is now validated where it is read. A schema-v1 ORCA state
   with a wrongly typed field (for example `engine_payload.attempts: 42`) is
   classified as corrupt instead of crashing the reader or being reshaped (a
