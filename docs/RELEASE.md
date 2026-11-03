@@ -30,6 +30,12 @@ schemas; release needs no `machine-contracts` clone. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to 10.2.4
+
+Version 10.2.4 fixes input, state and store reads that could block on a FIFO or misread a damaged file, keeps job index rows consistent between settlement and rebuild, and makes crash recovery keep the submitted resource request after a configuration default change. Submission now also rejects block settings and `%method RunTyp` values that the runtime cannot classify, and applies the Hessian atom limit to frequency requests in `%freq` blocks; inputs already queued are not re-validated.
+
+Follow the [10.2 idle-window upgrade procedure](#upgrading-to-102) and retain the prior runtime for rollback. No state or configuration migration is required; historical terminal observations are not rewritten and failed calculations are not rerun automatically. Run `orca_auto index rebuild` after the switch if index rows written by earlier versions lack a requested resource or carry a generation-directory molecule key.
+
 ## Upgrading to 10.2.3
 
 Version 10.2.3 fixes completion checks for frequency requests in active `%freq AnFreq true` and `%freq NumFreq true` blocks. A run missing the requested final frequency evidence now fails rather than completing on energy and normal termination alone. Each switch uses its last explicit boolean value; existing route-line frequency requirements still apply.

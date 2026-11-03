@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v10.2.3/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
+  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v10.2.4/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@ ORCA_auto는 **ORCA 계산을 큐에 넣고, 터미널을 닫은 뒤에도 진�
 **Python 3.11 이상**, **Linux 또는 WSL2**, 별도로 설치한 **ORCA**가 필요합니다. 백그라운드 워커는 **systemd**로 관리합니다.
 
 ```bash
-python -m pip install orca_auto==10.2.3
+python -m pip install orca_auto==10.2.4
 ```
 
 [설치 안내](https://github.com/dhsohn/orca_auto/blob/main/docs/INSTALLATION.ko.md)에서 실행 환경을 준비한 뒤, [빠른 시작](https://github.com/dhsohn/orca_auto/blob/main/docs/QUICKSTART.ko.md)을 따라 설정 파일 생성 → 워커 등록 → 입력 디렉터리 제출 → 결과 확인 순서로 진행하세요.
@@ -36,7 +36,7 @@ python -m pip install orca_auto==10.2.3
 
 | 현재 버전 | 읽을 안내 | 주요 변경 |
 | --- | --- | --- |
-| 10.2.x | [10.2.3](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-1023) | `%freq` 요청의 진동수 근거 검사 수정. 상태 마이그레이션 없음 |
+| 10.2.x | [10.2.4](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-1024) | 입력·상태·복구 신뢰성 수정. 상태 마이그레이션 없음 |
 | 10.1.x | [10.2](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-102) | 큐 Detail 표시 확장, 불완전한 최종 좌표 거부 |
 | 10.0.x | [10.1](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-101) | 마지막 진동수 섹션으로 근거 판정 |
 | 9.x | [10.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-100) | `completed` 판정 기준 변경 |

@@ -8,7 +8,33 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [10.2.4] - 2026-11-03
+
+Version 10.2.4 collects reliability fixes to input reading, state and store
+reads, the job index, report publication, worker admission and crash
+recovery since 10.2.3. No state or configuration migration is required;
+historical terminal observations are not rewritten and failed calculations
+are not rerun automatically. See
+[Upgrading to 10.2.4](docs/RELEASE.md#upgrading-to-1024).
+
 ### Fixed
+
+- Crash recovery of a job whose input has no `%pal`/`%maxcore` no longer
+  fails after the configuration defaults change. Recovery re-normalized the
+  source with the current defaults and refused the job as diverged from its
+  queued request; it now fills missing directives from the request resolved
+  at submission, as the ordinary run already did (#440).
+- RAM scratch now stages a bound input larger than one source input's
+  64 MiB limit under the generation budget, as binding, claim and completion
+  already accept it; each dependency keeps the source limit and the whole
+  closure the generation budget (#439).
+- Crash recovery reads the submitted source through the stable regular-file
+  reader. A FIFO source made the recovery child wait in `open()` while holding
+  the job's `run.lock`; it is now refused at once and the lock is released
+  (#439).
+- A terminal record written with no existing index row now restores the
+  submitted resource request, as `index rebuild` does from the same state;
+  both use one state-to-index conversion (#439).
 
 - `index rebuild` from scratch restores a job's requested resources. The
   state envelope's `resources.request` is empty by design; the rebuild now
