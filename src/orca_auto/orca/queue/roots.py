@@ -49,33 +49,33 @@ def peek_next_entry(
     )
 
 
+def claim_entry(cfg: AppConfig, entry: QueueEntry) -> tuple[Path, QueueEntry] | None:
+    """Claim exactly ``entry`` by id, fenced on its generation, or nothing.
+
+    The claim never substitutes another row: when ``entry`` was cancelled,
+    replaced or claimed meanwhile it returns ``None`` and the caller selects,
+    validates and claims the next candidate itself. The claim re-validates the
+    row under the queue lock.
+    """
+    root = queue_root(cfg)
+    claimed = _claim_previewed(root, entry)
+    return None if claimed is None else (root, claimed)
+
+
 def dequeue_next_entry(
     cfg: AppConfig,
     *,
     skip_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    preview: QueueEntry | None = None,
 ) -> tuple[Path, QueueEntry] | None:
-    """Claim the previewed row by id, fenced on the previewed generation.
+    """Preview the next claimable row and claim exactly that row.
 
-    ``preview`` is a row the caller has just selected with
-    :func:`peek_next_entry` and the same ``skip_entry_fn``; it is claimed
-    without listing the queue again. Only when that claim is lost (the row was
-    cancelled, replaced or claimed meanwhile) is the queue previewed afresh, so
-    a lost race still admits the next claimable row in the same pass. The
-    claim itself always re-validates under the queue lock.
+    No publication check runs here; the worker's admission validates each
+    candidate between the preview and :func:`claim_entry`.
     """
-    root = queue_root(cfg)
-    if preview is not None:
-        claimed = _claim_previewed(root, preview)
-        if claimed is not None:
-            return root, claimed
     entry = peek_next_entry(cfg, skip_entry_fn=skip_entry_fn)
     if entry is None:
         return None
-    claimed = _claim_previewed(root, entry)
-    if claimed is None:
-        return None
-    return root, claimed
+    return claim_entry(cfg, entry)
 
 
 def _claim_previewed(root: Path, entry: QueueEntry) -> QueueEntry | None:
@@ -86,6 +86,7 @@ def _claim_previewed(root: Path, entry: QueueEntry) -> QueueEntry | None:
 
 
 __all__ = [
+    "claim_entry",
     "dequeue_next_entry",
     "list_orca_rows",
     "peek_next_entry",

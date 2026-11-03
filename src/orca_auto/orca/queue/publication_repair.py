@@ -15,6 +15,7 @@ import stat
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
+from enum import Enum
 from pathlib import Path
 
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
@@ -368,16 +369,34 @@ def _fence_invalid_orca_publication(
     )
 
 
-def repair_queue_publication(
+class PublicationVerdict(Enum):
+    """Whether one pending row may be claimed now, after its publication check.
+
+    Only ``ELIGIBLE`` admits the row. ``SETTLED`` means the check finished the
+    row's business without leaving it claimable: it was fenced terminally, or
+    it is no longer a pending ORCA row (cancelled, claimed, finished, gone).
+    ``WITHHELD`` means a refusal was recorded (or the lease is busy) and the
+    row stays pending until a later pass retries it.
+    """
+
+    ELIGIBLE = "eligible"
+    SETTLED = "settled"
+    WITHHELD = "withheld"
+
+
+_REPAIRED_CLAIMABLE = frozenset({"published", "complete"})
+
+
+def check_queue_publication(
     cfg: AppConfig,
     queue_root: Path,
     entry: QueueEntry,
-) -> bool:
-    """Repair one queued-index publication before the row can be claimed."""
+) -> PublicationVerdict:
+    """Validate one row's bound paths and publication before it can be claimed."""
     if not is_orca_queue_entry(entry):
-        return True
+        return PublicationVerdict.SETTLED
     if entry.status != QueueStatus.PENDING or entry.cancel_requested:
-        return True
+        return PublicationVerdict.SETTLED
     job_dir_issue = _orca_publication_job_dir_issue(queue_root, entry)
     if job_dir_issue:
         if _fence_invalid_orca_publication(
@@ -385,22 +404,16 @@ def repair_queue_publication(
             entry,
             issue=job_dir_issue,
         ):
-            return True
-        return _record_publication_blocker(
-            queue_root, entry, f"job directory fence failed: {job_dir_issue}"
-        )
+            return PublicationVerdict.SETTLED
+        return _withhold(queue_root, entry, f"job directory fence failed: {job_dir_issue}")
     reaction_dir_text = queue_entry_reaction_dir(entry)
     try:
         reaction_dir = Path(reaction_dir_text).expanduser().resolve()
         resolved_queue_root = queue_root.expanduser().resolve()
     except (OSError, RuntimeError):
-        return _record_publication_blocker(
-            queue_root, entry, "reaction or queue path cannot be resolved"
-        )
+        return _withhold(queue_root, entry, "reaction or queue path cannot be resolved")
     if not reaction_dir_text or not reaction_dir.is_relative_to(resolved_queue_root):
-        return _record_publication_blocker(
-            queue_root, entry, "reaction directory is outside the queue root"
-        )
+        return _withhold(queue_root, entry, "reaction directory is outside the queue root")
     for key in ("selected_inp", "selected_input_path", "selected_input_xyz"):
         selected_input_text = str(entry.metadata.get(key) or "").strip()
         if not selected_input_text:
@@ -408,46 +421,78 @@ def repair_queue_publication(
         try:
             selected_input = Path(selected_input_text).expanduser().resolve()
         except (OSError, RuntimeError):
-            return _record_publication_blocker(
-                queue_root, entry, f"selected input path cannot be resolved: {key}"
-            )
+            return _withhold(queue_root, entry, f"selected input path cannot be resolved: {key}")
         if not selected_input.is_relative_to(reaction_dir):
-            return _record_publication_blocker(
+            return _withhold(
                 queue_root, entry, f"selected input is outside the reaction directory: {key}"
             )
     state = queue_record_sync_state(entry)
     if not state or state == QUEUE_RECORD_SYNC_COMPLETE:
-        if entry.metadata.get(QUEUE_RECORD_SYNC_BLOCKED_KEY):
-            return _record_publication_blocker(queue_root, entry, "")
-        return True
+        if entry.metadata.get(QUEUE_RECORD_SYNC_BLOCKED_KEY) and not _record_publication_blocker(
+            queue_root, entry, ""
+        ):
+            return PublicationVerdict.WITHHELD
+        return PublicationVerdict.ELIGIBLE
     if state not in REPAIRABLE_SYNC_STATES:
         logger.error(
             "Cannot repair ORCA queue publication with invalid state %r: %s",
             state,
             entry.queue_id,
         )
-        return _record_publication_blocker(queue_root, entry, f"invalid publication state: {state}")
+        return _withhold(queue_root, entry, f"invalid publication state: {state}")
     # The repair holds one publication-lock acquisition across claim,
     # publication, and completion, and it claims with a freshly minted token:
     # the lock, not process liveness or the recorded token, is the
     # authoritative ownership proof, and the original publisher is hard-fenced.
     outcome = repair_enqueue_publication_outcome(cfg, queue_root, entry)
     if outcome.reason == "busy":
-        return False
+        return PublicationVerdict.WITHHELD
     if not outcome.repaired:
         reason = outcome.reason
         if outcome.error is not None:
             reason = f"{reason}: {type(outcome.error).__name__}: {outcome.error}"
-        return _record_publication_blocker(queue_root, entry, reason, require_unpublished=True)
-    return True
+        return _withhold(queue_root, entry, reason, require_unpublished=True)
+    if outcome.reason in _REPAIRED_CLAIMABLE:
+        return PublicationVerdict.ELIGIBLE
+    return PublicationVerdict.SETTLED
 
 
-def repair_queue_publications(cfg: AppConfig) -> frozenset[str] | None:
-    """Return withheld queue IDs, or ``None`` when the queue cannot be inspected.
+def _withhold(
+    queue_root: Path, entry: QueueEntry, reason: str, *, require_unpublished: bool = False
+) -> PublicationVerdict:
+    _record_publication_blocker(queue_root, entry, reason, require_unpublished=require_unpublished)
+    return PublicationVerdict.WITHHELD
+
+
+def repair_queue_publication(
+    cfg: AppConfig,
+    queue_root: Path,
+    entry: QueueEntry,
+) -> bool:
+    """Whether the repair left nothing withheld for this row.
+
+    ``True`` does not mean the row may be claimed: a row the check fenced or
+    found settled is ``True`` too. Admission reads
+    :func:`check_queue_publication`, whose verdict separates the two.
+    """
+    return check_queue_publication(cfg, queue_root, entry) is not PublicationVerdict.WITHHELD
+
+
+@dataclass(frozen=True)
+class PublicationRepairPass:
+    """The result of one full repair: rows withheld and rows found claimable."""
+
+    withheld_ids: frozenset[str]
+    eligible: Mapping[str, QueueEntry]
+
+
+def repair_queue_publications(cfg: AppConfig) -> PublicationRepairPass | None:
+    """Check every row once; ``None`` when the queue cannot be inspected.
 
     A publication failure belongs to its row. Include refusals even for a
     COMPLETE lease: path validation or persisting its safety fence can fail,
     and the durable lease alone must not make that row eligible this pass.
+    ``eligible`` holds each row as it was listed when it passed.
     """
     root = roots.queue_root(cfg)
     try:
@@ -455,13 +500,22 @@ def repair_queue_publications(cfg: AppConfig) -> frozenset[str] | None:
     except Exception:
         logger.exception("Failed to inspect ORCA publication repairs: %s", root)
         return None
-    return frozenset(
-        entry.queue_id for entry in entries if not repair_queue_publication(cfg, root, entry)
-    )
+    withheld: set[str] = set()
+    eligible: dict[str, QueueEntry] = {}
+    for entry in entries:
+        verdict = check_queue_publication(cfg, root, entry)
+        if verdict is PublicationVerdict.WITHHELD:
+            withheld.add(entry.queue_id)
+        elif verdict is PublicationVerdict.ELIGIBLE:
+            eligible[entry.queue_id] = entry
+    return PublicationRepairPass(withheld_ids=frozenset(withheld), eligible=eligible)
 
 
 __all__ = [
+    "PublicationRepairPass",
+    "PublicationVerdict",
     "RepairOutcome",
+    "check_queue_publication",
     "repair_enqueue_publication_outcome",
     "repair_queue_publication",
     "repair_queue_publications",

@@ -137,7 +137,7 @@ def test_admission_pass_reserves_the_slot_before_it_claims_the_row(
         "_try_reserve_admission_slot",
         recorded("reserve", queue_worker_mod._try_reserve_admission_slot),
     )
-    monkeypatch.setattr(roots, "dequeue_next_entry", recorded("claim", roots.dequeue_next_entry))
+    monkeypatch.setattr(roots, "claim_entry", recorded("claim", roots.claim_entry))
 
     _admission_pass(worker)
 
@@ -217,7 +217,7 @@ def test_shutdown_during_admission_returns_the_claimed_row_and_its_slot(
 ) -> None:
     worker = make_worker(max_concurrent=2, start=child_starter, sleep=lambda _seconds: None)
     entry = _enqueue_ready(queue_root, "mol_A")
-    real_dequeue = queue_worker_mod.roots.dequeue_next_entry
+    real_dequeue = queue_worker_mod.roots.claim_entry
 
     def claim_then_shutdown(*args: Any, **kwargs: Any) -> Any:
         claimed = real_dequeue(*args, **kwargs)
@@ -226,7 +226,7 @@ def test_shutdown_during_admission_returns_the_claimed_row_and_its_slot(
             cancel(queue_root, entry.queue_id)
         return claimed
 
-    monkeypatch.setattr(queue_worker_mod.roots, "dequeue_next_entry", claim_then_shutdown)
+    monkeypatch.setattr(queue_worker_mod.roots, "claim_entry", claim_then_shutdown)
     worker._worker_state_last_reconcile = time.monotonic()
 
     assert worker._fill_slots() == "blocked"
@@ -245,7 +245,7 @@ def test_shutdown_return_releases_the_slot_when_the_requeue_fails(
 ) -> None:
     worker = make_worker(max_concurrent=2, start=child_starter, sleep=lambda _seconds: None)
     entry = _enqueue_ready(queue_root, "mol_A")
-    real_dequeue = queue_worker_mod.roots.dequeue_next_entry
+    real_dequeue = queue_worker_mod.roots.claim_entry
 
     def claim_then_shutdown(*args: Any, **kwargs: Any) -> Any:
         claimed = real_dequeue(*args, **kwargs)
@@ -255,7 +255,7 @@ def test_shutdown_return_releases_the_slot_when_the_requeue_fails(
     def failed_requeue(*_args: Any, **_kwargs: Any) -> bool:
         raise QueueLockTimeoutError("queue lock held past its deadline")
 
-    monkeypatch.setattr(queue_worker_mod.roots, "dequeue_next_entry", claim_then_shutdown)
+    monkeypatch.setattr(queue_worker_mod.roots, "claim_entry", claim_then_shutdown)
     monkeypatch.setattr(queue_worker_mod, "requeue_running_entry", failed_requeue)
     worker._worker_state_last_reconcile = time.monotonic()
 
@@ -273,19 +273,19 @@ def test_a_fill_pass_validates_every_pending_row_once_and_each_claim_again(
     queue_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # N pending rows and K free slots: one full repair (N validations) plus one
-    # revalidation of each later claim (K - 1), instead of a full repair per slot.
+    # N pending rows and K free slots: one full repair (N checks) plus one
+    # check of each later candidate (K - 1), instead of a full repair per slot.
     worker = make_worker(max_concurrent=3, start=child_starter, sleep=lambda _seconds: None)
     entries = [_enqueue_ready(queue_root, f"mol_{index}") for index in range(5)]
     repair = queue_worker_mod.publication_repair
     calls: list[str] = []
-    real_repair_one = repair.repair_queue_publication
+    real_check = repair.check_queue_publication
 
-    def counted(cfg: Any, root: Path, entry: QueueEntry) -> bool:
+    def counted(cfg: Any, root: Path, entry: QueueEntry) -> Any:
         calls.append(entry.queue_id)
-        return real_repair_one(cfg, root, entry)
+        return real_check(cfg, root, entry)
 
-    monkeypatch.setattr(repair, "repair_queue_publication", counted)
+    monkeypatch.setattr(repair, "check_queue_publication", counted)
     worker._worker_state_last_reconcile = time.monotonic()
 
     assert worker._fill_slots() == "processed"
@@ -294,34 +294,78 @@ def test_a_fill_pass_validates_every_pending_row_once_and_each_claim_again(
     assert len(calls) == len(entries) + (3 - 1)
 
 
-def test_a_row_invalidated_during_a_fill_pass_is_not_claimed(
+def _replace_job_dir(reaction_dir: Path) -> None:
+    """Move a bound job directory away and create a new one at the same path."""
+    reaction_dir.rename(reaction_dir.with_name(f"{reaction_dir.name}.moved"))
+    reaction_dir.mkdir()
+
+
+def test_every_candidate_is_validated_after_it_is_selected(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+) -> None:
+    # The full repair passes A, B and C; A starts. B and C then have their
+    # job directories replaced. B's own check fences it terminally, and C,
+    # the next candidate, must be checked again rather than claimed on the
+    # strength of the check at the start of the pass.
+    worker = make_worker(max_concurrent=2, start=child_starter, sleep=lambda _seconds: None)
+    first, second, third = (_enqueue_ready(queue_root, f"mol_{name}") for name in "ABC")
+
+    def start_then_replace(**kwargs: Any) -> Any:
+        process = ChildStarter.__call__(child_starter, **kwargs)
+        if len(child_starter.started) == 1:
+            _replace_job_dir(queue_root / "mol_B")
+            _replace_job_dir(queue_root / "mol_C")
+        return process
+
+    worker._start_background_process = start_then_replace  # type: ignore[method-assign]
+    worker._worker_state_last_reconcile = time.monotonic()
+
+    worker._fill_slots()
+
+    assert [started.entry.queue_id for started in child_starter.started] == [first.queue_id]
+    statuses = queue_statuses(queue_root)
+    assert statuses[first.queue_id] == QueueStatus.RUNNING
+    assert statuses[second.queue_id] == QueueStatus.FAILED
+    assert statuses[third.queue_id] == QueueStatus.FAILED
+    assert {entry.queue_id: entry.error for entry in list_queue(queue_root)}[third.queue_id] == (
+        "queue_publication_job_dir_invalid:job_dir_namespace_or_identity_changed"
+    )
+    # The slot reserved for B is released; only A's slot remains.
+    assert [slot["queue_id"] for slot in _slots(queue_root)] == [first.queue_id]
+
+
+def test_a_withheld_candidate_is_passed_over_for_the_rest_of_the_pass(
     make_worker: Callable[..., OrcaQueueWorker],
     child_starter: ChildStarter,
     queue_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The full repair passed every row at the start of the pass; the second
-    # row then fails its own revalidation (its job directory moved, say) and
-    # must be withheld, so the third row takes the slot instead.
+    # A candidate whose own check is withheld stays pending and is not offered
+    # again in the same pass; the row behind it takes the slot.
     worker = make_worker(max_concurrent=2, start=child_starter, sleep=lambda _seconds: None)
     first, second, third = (_enqueue_ready(queue_root, f"mol_{name}") for name in "ABC")
     repair = queue_worker_mod.publication_repair
-    real_repair_one = repair.repair_queue_publication
-    full_repair_done: list[bool] = []
+    real_check = repair.check_queue_publication
     real_repair_all = repair.repair_queue_publications
+    full_repair_done: list[bool] = []
+    checked: list[str] = []
 
     def repair_all(cfg: Any) -> Any:
         result = real_repair_all(cfg)
         full_repair_done.append(True)
         return result
 
-    def revalidate(cfg: Any, root: Path, entry: QueueEntry) -> bool:
-        if full_repair_done and entry.queue_id == second.queue_id:
-            return False
-        return real_repair_one(cfg, root, entry)
+    def check(cfg: Any, root: Path, entry: QueueEntry) -> Any:
+        if full_repair_done:
+            checked.append(entry.queue_id)
+            if entry.queue_id == second.queue_id:
+                return repair.PublicationVerdict.WITHHELD
+        return real_check(cfg, root, entry)
 
     monkeypatch.setattr(repair, "repair_queue_publications", repair_all)
-    monkeypatch.setattr(repair, "repair_queue_publication", revalidate)
+    monkeypatch.setattr(repair, "check_queue_publication", check)
     worker._worker_state_last_reconcile = time.monotonic()
 
     worker._fill_slots()
@@ -330,7 +374,56 @@ def test_a_row_invalidated_during_a_fill_pass_is_not_claimed(
         first.queue_id,
         third.queue_id,
     ]
+    assert checked == [second.queue_id, third.queue_id]
     assert queue_statuses(queue_root)[second.queue_id] == QueueStatus.PENDING
+
+
+def test_a_lost_claim_validates_the_next_candidate_before_claiming_it(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The first candidate of a pass relies on the full repair. When its claim
+    # is lost, the next candidate is checked on its own before it is claimed.
+    worker = make_worker(max_concurrent=1, start=child_starter, sleep=lambda _seconds: None)
+    first, second = (_enqueue_ready(queue_root, f"mol_{name}") for name in "AB")
+    repair = queue_worker_mod.publication_repair
+    real_check = repair.check_queue_publication
+    real_repair_all = repair.repair_queue_publications
+    full_repair_done: list[bool] = []
+    events: list[str] = []
+    real_claim = queue_worker_mod.roots.claim_entry
+
+    def repair_all(cfg: Any) -> Any:
+        result = real_repair_all(cfg)
+        full_repair_done.append(True)
+        return result
+
+    def check(cfg: Any, root: Path, entry: QueueEntry) -> Any:
+        if full_repair_done:
+            events.append(f"check:{entry.queue_id}")
+        return real_check(cfg, root, entry)
+
+    def claim(cfg: Any, entry: QueueEntry) -> Any:
+        events.append(f"claim:{entry.queue_id}")
+        if entry.queue_id == first.queue_id:
+            cancel(queue_root, first.queue_id)
+        return real_claim(cfg, entry)
+
+    monkeypatch.setattr(repair, "repair_queue_publications", repair_all)
+    monkeypatch.setattr(repair, "check_queue_publication", check)
+    monkeypatch.setattr(queue_worker_mod.roots, "claim_entry", claim)
+    worker._worker_state_last_reconcile = time.monotonic()
+
+    worker._fill_slots()
+
+    assert events == [
+        f"claim:{first.queue_id}",
+        f"check:{second.queue_id}",
+        f"claim:{second.queue_id}",
+    ]
+    assert [started.entry.queue_id for started in child_starter.started] == [second.queue_id]
 
 
 def test_a_direct_admission_always_runs_the_full_repair(
@@ -373,7 +466,7 @@ def test_admission_pass_releases_the_slot_when_the_claim_fails(
             raise QueueLockTimeoutError("queue lock held past its deadline")
         return None
 
-    monkeypatch.setattr(queue_worker_mod.roots, "dequeue_next_entry", failed_claim)
+    monkeypatch.setattr(queue_worker_mod.roots, "claim_entry", failed_claim)
 
     if claim == "raises":
         with pytest.raises(QueueLockTimeoutError):

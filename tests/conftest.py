@@ -552,10 +552,11 @@ def enqueue_entry(root: Path, entry: QueueEntry) -> QueueEntry:
 def claim_next_entry(root: Path) -> QueueEntry | None:
     """Claim the row the ORCA worker would take next from one queue root.
 
-    Runs the worker's own claim, ``orca.queue.roots.dequeue_next_entry``, on a
-    configuration whose only queue root is ``root``: preview the head under the
-    ORCA identity filter, then claim it by id fenced on the previewed row. The
-    worker's skip predicate is left out; it reads that worker's in-memory
+    Runs ``orca.queue.roots.dequeue_next_entry`` on a configuration whose only
+    queue root is ``root``: preview the head under the ORCA identity filter,
+    then claim exactly that row by id with the worker's ``roots.claim_entry``,
+    fenced on the previewed row. The worker's publication check and skip
+    predicate are left out; the predicate reads that worker's in-memory
     running and withheld rows. Returns the running row, or ``None`` when
     nothing is claimable or the claim was lost.
     """

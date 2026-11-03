@@ -10,6 +10,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `index rebuild` now reads each `job_state.json` through the same decoder
+  as every other reader. It used to validate the state and then read the raw
+  file again with its own rules, where an `engine_payload.job_id` took
+  precedence over `job.id`, so a state carrying both with different values
+  was indexed under a different job than the one `queue list` and the run
+  read. A state that holds a disagreeing copy of its job id, task id, queue
+  id, run id, directory, status or selected input is now corrupt for every
+  reader, and is skipped with a warning (listed under `skipped`). States the
+  worker writes hold no such copy and are unchanged.
+- Worker admission now validates every candidate it claims. When the row it
+  had checked could not be claimed (it was fenced, cancelled or replaced
+  meanwhile), the claim used to take the next pending row in its place without
+  checking that row's job directory or publication, so a row whose job
+  directory had been replaced could be started. The claim now takes only the
+  row it was given, and admission selects, checks and claims the next
+  candidate itself. A candidate whose check is withheld stays pending and is
+  skipped for the rest of that admission.
 - The SP and IRC HTML reports now say when their frequencies come from an
   earlier attempt and not from the final output (`from attempt N, not the
   final output`), as the Opt report already did. Before, an SP/Freq job that

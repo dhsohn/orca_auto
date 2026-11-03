@@ -1,7 +1,8 @@
 """Project a directory's ORCA artifacts onto one job-location row.
 
-``normalized_artifact_view`` flattens a schema-version-1 ``machine.json`` /
-state payload into the flat keys the index reads. ``record_from_artifacts``
+``normalized_artifact_view`` flattens a schema-version-1 ``machine.json``
+into the flat keys the index reads; a ``job_state.json`` reaches the index
+only as :func:`run_state_index_source` of the decoded state. ``record_from_artifacts``
 reads the identity, status, selected input, job type, molecule key, resources
 and original run directory out of a ``job_state.json`` / ``report.json`` pair
 (``report`` wins over ``state``), falling back to the existing row and finally
@@ -19,6 +20,7 @@ from orca_auto.core.indexing.store import normalize_index_text
 from orca_auto.core.utils import copy_dict_or_empty, normalize_text
 
 from ..input_artifacts import derive_selected_input_xyz
+from ..state_reading import DecodedRunState
 from ._records import build_job_location_record, resolve_job_metadata
 from ._utils import normalize_path_text, resource_dict_from_any
 
@@ -47,6 +49,28 @@ def normalized_artifact_view(source: dict[str, Any]) -> dict[str, Any]:
     view.setdefault("resource_request", resources.get("request"))
     view.setdefault("resource_actual", resources.get("actual"))
     return view
+
+
+def run_state_index_source(decoded: DecodedRunState) -> dict[str, Any]:
+    """The index keys of a decoded ``job_state.json``.
+
+    The decoder (``state_reading.decode_run_state``) has already validated the
+    envelope and refused conflicting identity copies, so the row reads only
+    what it returned. ``original_run_dir`` is the state's own ``job.dir``, as
+    the envelope view gave it.
+    """
+    state = decoded.state
+    return {
+        "job_id": state.get("job_id", ""),
+        "run_id": state.get("run_id", ""),
+        "queue_id": state.get("queue_id", ""),
+        "status": state.get("status", ""),
+        "selected_inp": state.get("selected_inp", ""),
+        "selected_input_xyz": decoded.selected_xyz_path,
+        "original_run_dir": state.get("reaction_dir", ""),
+        "resource_request": dict(decoded.resource_request),
+        "resource_actual": dict(decoded.resource_actual),
+    }
 
 
 def first_artifact_value(sources: tuple[dict[str, Any], ...], *keys: str) -> Any:
