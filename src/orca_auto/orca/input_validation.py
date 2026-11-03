@@ -11,7 +11,12 @@ from __future__ import annotations
 
 import re
 
-from .input_blocks import geometry_header_match, iter_blocks
+from .input_blocks import (
+    GRADIENT_RUN_TYPES,
+    SINGLE_POINT_RUN_TYPES,
+    geometry_header_match,
+    iter_blocks,
+)
 from .input_references import orca_moinp_references
 from .input_syntax import active_orca_directive_text, orca_line_tokens, orca_route_tokens
 from .operation_facts import OperationFacts
@@ -28,9 +33,7 @@ PAL_ROUTE_TOKEN_RE = re.compile(r"\APAL\d+\Z", re.IGNORECASE)
 # the ``.engrad`` it writes). Every other value -- an optimization spelled
 # ``Opt``/``Geom``/``Geometry``/``GeometryOpt``, dynamics, or anything unknown --
 # would be admitted but verified as a single point, so it is refused.
-SUPPORTED_METHOD_RUN_TYPES = frozenset(
-    {"energy", "sp", "gradient", "engrad", "energygrad", "numgrad"}
-)
+SUPPORTED_METHOD_RUN_TYPES = SINGLE_POINT_RUN_TYPES | GRADIENT_RUN_TYPES
 
 
 def validate_supported_xyz_geometry_syntax(

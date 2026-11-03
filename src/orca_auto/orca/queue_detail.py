@@ -12,12 +12,14 @@ from pathlib import Path
 
 from .completion_rules import RouteFacts, route_facts
 from .input_blocks import (
+    GRADIENT_RUN_TYPES,
+    OPERATION_BLOCK_KEYS,
     block_operation_declarations,
     iter_blocks,
     percent_directive_header,
     scan_coordinate_rows,
 )
-from .input_syntax import orca_line_tokens, orca_route_lines, orca_route_tokens, value_token_index
+from .input_syntax import orca_line_tokens, orca_route_lines, orca_route_tokens
 from .job_type import FREQ_RE, SP_RE, job_type_from_routes
 
 QUEUE_DETAIL_KIND_KEY = "detail_kind"
@@ -69,7 +71,7 @@ _NON_SINGLE_POINT_TOKEN_RE = re.compile(
 )
 _NON_SINGLE_POINT_BLOCKS = frozenset({"md", "goat", "docker", "solvator", "esd"})
 _OPERATION_KEYS = frozenset({"runtyp", "ts_search"})
-_FREQUENCY_SWITCHES = frozenset({"anfreq", "numfreq"})
+_FREQUENCY_SWITCHES = OPERATION_BLOCK_KEYS["freq"]
 _DEFINITE_UNSUPPORTED_TOKEN_RE = re.compile(
     r"EN(?:ERGY)?GRAD|NUMGRAD|SCANTS|EXTOPT|GOAT(?:-(?:ENTROPY|EXPLORE|REACT|DIVERSITY|TS|COARSE))?"
     r"|DOCKER|SOLVATOR|COMPOUND(?:_FILE)?|MD"
@@ -83,7 +85,7 @@ _ESD_OPERATION_RE = re.compile(
 _BLOCK_OPERATION_VALUES = {
     "freq": {key: frozenset({"true", "false"}) for key in _FREQUENCY_SWITCHES},
     "geom": {"ts_search": frozenset({"ef"})},
-    "method": {"runtyp": frozenset({"gradient", "engrad", "energygrad", "numgrad"})},
+    "method": {"runtyp": GRADIENT_RUN_TYPES},
 }
 
 
@@ -97,23 +99,16 @@ def queue_detail_kind_label(detail_kind: str) -> str | None:
 
 def _disabled_frequency_switches(lines: list[str]) -> set[tuple[int, int]]:
     """``(line, column)`` of each switch a closed ``%freq`` body sets to a bare ``false``."""
-    disabled: set[tuple[int, int]] = set()
-    for block in iter_blocks(lines, "freq"):
-        if not block.closed:
-            continue
-        located = [(row.line_index, token) for row in block.rows for token in row.tokens]
-        tokens = [token for _line_index, token in located]
-        for index, (line_index, token) in enumerate(located):
-            if token.quoted or token.value.lower() not in _FREQUENCY_SWITCHES:
-                continue
-            value_index = value_token_index(tokens, index)
-            if (
-                value_index < len(tokens)
-                and not tokens[value_index].quoted
-                and tokens[value_index].value.lower() == "false"
-            ):
-                disabled.add((line_index, token.start))
-    return disabled
+    return {
+        (declaration.line_index, declaration.column)
+        for declaration in block_operation_declarations(lines)
+        if declaration.block == "freq"
+        and declaration.block_closed
+        and not declaration.key_quoted
+        and declaration.value is not None
+        and not declaration.value.quoted
+        and declaration.value.value.lower() == "false"
+    }
 
 
 def _route_frequency_keyword_positions(lines: list[str]) -> set[tuple[int, int]]:

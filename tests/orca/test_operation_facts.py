@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from orca_auto.orca.execution_binding._inputs import _runtime_outputs
+from orca_auto.orca.input_blocks import GRADIENT_RUN_TYPES, SINGLE_POINT_RUN_TYPES
+from orca_auto.orca.input_validation import (
+    validate_consistent_operation,
+    validate_supported_method_run_type,
+)
 from orca_auto.orca.operation_facts import MethodRunType, OperationFacts, parse_operation_facts
+from orca_auto.orca.queue_detail import queue_detail_kind
 
 _H2 = "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
 
@@ -96,3 +103,30 @@ def test_route_facts_are_the_completion_route_facts() -> None:
     assert facts.route.is_opt
     assert facts.route.requests_frequency
     assert facts.route.inp_path == Path("job.inp")
+
+
+@pytest.mark.parametrize("run_type", sorted(GRADIENT_RUN_TYPES))
+def test_every_gradient_run_type_is_admitted_reserved_and_named_alike(
+    tmp_path: Path, run_type: str
+) -> None:
+    # One shared alias list: submission admits the run type, the binding
+    # reserves the .engrad it writes and the Detail names the operation. A new
+    # alias in GRADIENT_RUN_TYPES reaches all three.
+    lines = f"! HF STO-3G\n%method RunTyp {run_type.upper()} end\n{_H2}".splitlines()
+    facts = parse_operation_facts(lines, inp_path=tmp_path / "job.inp")
+
+    validate_supported_method_run_type(facts, label="job")
+    validate_consistent_operation(facts, label="job")
+    assert _runtime_outputs(facts).engrad_is_output
+    assert queue_detail_kind(tmp_path / "job.inp", lines) == "unsupported"
+
+
+@pytest.mark.parametrize("run_type", sorted(SINGLE_POINT_RUN_TYPES))
+def test_single_point_run_types_are_admitted_without_a_gradient_output(
+    tmp_path: Path, run_type: str
+) -> None:
+    lines = f"! HF STO-3G\n%method RunTyp {run_type} end\n{_H2}".splitlines()
+    facts = parse_operation_facts(lines, inp_path=tmp_path / "job.inp")
+
+    validate_supported_method_run_type(facts, label="job")
+    assert not _runtime_outputs(facts).engrad_is_output

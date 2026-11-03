@@ -9,7 +9,7 @@ from pathlib import Path
 
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS
 
-from ..input_blocks import find_geometry_block
+from ..input_blocks import GRADIENT_RUN_TYPES, find_geometry_block
 from ..operation_facts import OperationFacts
 from ._models import _RouteOutputs
 
@@ -37,11 +37,6 @@ def _inline_geometry_atom_count(selected_text: str) -> int | None:
     return atom_count
 
 
-# ``%method RunTyp`` values that write <basename>.engrad, as their route
-# keywords (EnGrad, NumGrad) do.
-_ENGRAD_RUN_TYPES = frozenset({"gradient", "engrad", "energygrad", "numgrad"})
-
-
 def _runtime_outputs(facts: OperationFacts) -> _RouteOutputs:
     """The runtime outputs one input's operation writes; build and verify both read it here."""
 
@@ -51,7 +46,7 @@ def _runtime_outputs(facts: OperationFacts) -> _RouteOutputs:
         or any(
             not run_type.quoted
             and run_type.value is not None
-            and run_type.value.lower() in _ENGRAD_RUN_TYPES
+            and run_type.value.lower() in GRADIENT_RUN_TYPES
             for run_type in facts.method_run_types
         ),
         hessian_requested=route.requests_frequency,
