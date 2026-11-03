@@ -16,9 +16,9 @@ from orca_auto.orca.frequencies import parse_frequency_analysis_text
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
+from tests.orca_output_helpers import MINIMAL_TS_FREQUENCIES
 
 _ENERGY = "FINAL SINGLE POINT ENERGY -1.0\n"
-_FREQUENCIES = "VIBRATIONAL FREQUENCIES\n0: -410.20 cm**-1\n1: 100.00 cm**-1\n"
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +59,9 @@ def _record_output_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int
 
 
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "utf-16-le"])
-@pytest.mark.parametrize("contents", [_ENERGY + _FREQUENCIES, _FREQUENCIES + _ENERGY, ""])
+@pytest.mark.parametrize(
+    "contents", [_ENERGY + MINIMAL_TS_FREQUENCIES, MINIMAL_TS_FREQUENCIES + _ENERGY, ""]
+)
 def test_cached_output_reads_once_and_preserves_both_parsers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, encoding: str, contents: str
 ) -> None:
@@ -199,7 +201,7 @@ def test_unreadable_output_preserves_errors_and_is_not_cached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = tmp_path / "unreadable.out"
-    out.write_text(_ENERGY + _FREQUENCIES, encoding="utf-8")
+    out.write_text(_ENERGY + MINIMAL_TS_FREQUENCIES, encoding="utf-8")
     read_error = PermissionError(13, "synthetic permission denied", str(out))
     original_open = builtins.open
 
@@ -230,13 +232,13 @@ def test_opt_report_and_si_share_absent_frequency_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from orca_auto.orca.report.composer import compose_job_report_html
-    from tests.orca.report.test_opt import _state
+    from tests.engine_artifact_helpers import completed_opt_state
     from tests.orca_output_helpers import write_opt_inp, write_opt_out
 
     out = tmp_path / "final.out"
     write_opt_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP Opt")
     write_opt_out(out)
-    state = _state(tmp_path, out, reason="normal_termination")
+    state = completed_opt_state(tmp_path, out, reason="normal_termination")
     reads = _record_output_reads(monkeypatch)
     assert compose_job_report_html(tmp_path, state)
     assert evidence.collect_structure_evidence(tmp_path, state, route_facts(tmp_path / "rxn.inp"))
@@ -271,7 +273,7 @@ def test_derived_output_facts_share_the_decoded_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     out = tmp_path / "final.out"
-    out.write_text(_ENERGY + _FREQUENCIES, encoding="utf-8")
+    out.write_text(_ENERGY + MINIMAL_TS_FREQUENCIES, encoding="utf-8")
     reads = _record_output_reads(monkeypatch)
 
     # Asked for first on a cold key: derived and base facts come from one read.
@@ -284,12 +286,12 @@ def test_derived_output_facts_share_the_decoded_snapshot(
     # A parser first asked for on an already-cached snapshot decodes once more
     # and is remembered from then on.
     upper = evidence.parsed_output_facts(out, _upper_text)
-    assert upper == (_ENERGY + _FREQUENCIES).upper()
+    assert upper == (_ENERGY + MINIMAL_TS_FREQUENCIES).upper()
     assert evidence.parsed_output_facts(out, _upper_text) is upper
     assert len(reads) == 2
 
     # The memo follows the file identity like the base facts do.
-    out.write_text(_ENERGY.replace("-1.0", "-10.0") + _FREQUENCIES, encoding="utf-8")
+    out.write_text(_ENERGY.replace("-1.0", "-10.0") + MINIMAL_TS_FREQUENCIES, encoding="utf-8")
     assert evidence.parsed_output_facts(out, _line_count) == 4
     assert evidence.parsed_final_output(out)[0].energy_hartree == -10.0
     assert len(reads) == 3

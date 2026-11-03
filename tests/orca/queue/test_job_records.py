@@ -14,11 +14,11 @@ from orca_auto.orca.config import load_config
 from orca_auto.orca.queue import adapter, publication_repair
 from orca_auto.orca.queue.job_records import tracking_metadata_from_queue_entry
 from tests.conftest import make_app_cfg, make_queue_entry
-from tests.orca.test_submission import _real_submission
+from tests.submission_helpers import real_submission
 
 
 def test_repair_reproduces_submission_record_after_source_changes(tmp_path, monkeypatch):
-    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    reaction_dir, args = real_submission(tmp_path, monkeypatch)
     result = submission.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
     assert result.status == "submitted"
     cfg = load_config(args.config)

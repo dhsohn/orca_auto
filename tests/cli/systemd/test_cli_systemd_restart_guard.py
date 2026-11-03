@@ -3,105 +3,26 @@ from __future__ import annotations
 import fcntl
 import json
 import multiprocessing
-import shlex
 import subprocess
 from argparse import Namespace
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from orca_auto import cli_systemd_restart, cli_systemd_restart_guard
-from orca_auto.core.admission import admission_dir, store
+from orca_auto.core.admission import store
 from orca_auto.core.utils import process as process_utils
-
-WORKER = "orca_auto-queue-worker@alice.service"
-
-
-@dataclass(frozen=True)
-class _Site:
-    config: Path
-    admission: Path
-
-
-def _site(tmp_path: Path, name: str = "service", *, lock: bool = True, slots: bool = True) -> _Site:
-    base = tmp_path / name
-    base.mkdir(parents=True)
-    (base / "runs").mkdir()
-    admission = admission_dir(base / "runs")
-    admission.mkdir()
-    if lock:
-        (admission / "admission.lock").touch(mode=0o600)
-    if slots:
-        (admission / "admission_slots.json").write_text("[]", encoding="utf-8")
-    config = base / "orca_auto.yaml"
-    config.write_text(
-        json.dumps(
-            {
-                "runs_root": str(base / "runs"),
-                "orca": {"paths": {"orca_executable": "/usr/bin/true"}},
-                "scheduler": {"max_active_simulations": 4},
-            }
-        ),
-        encoding="utf-8",
-    )
-    return _Site(config, admission)
-
-
-def _proc_stat(ticks: int = 12345) -> bytes:
-    fields = ["S", *[str(index) for index in range(1, 19)], str(ticks)]
-    return ("4242 (python worker) " + " ".join(fields)).encode()
-
-
-class _Evidence:
-    def __init__(self, sites: dict[str, _Site]) -> None:
-        self.units: dict[str, dict[str, str]] = {}
-        self.environ: dict[int, bytes] = {}
-        self.commands: list[tuple[str, ...]] = []
-        for index, (unit, site) in enumerate(sites.items(), start=4242):
-            self.units[unit] = {
-                "EnvironmentFiles": "",
-                "UnsetEnvironment": "",
-                "Environment": shlex.quote(f"ORCA_AUTO_CONFIG={site.config}"),
-                "ExecStart": (
-                    "{ path=/fixture/.venv/bin/python ; argv[]=/fixture/.venv/bin/python -m orca_auto.cli "
-                    "queue worker ; ignore_errors=no ; }"
-                ),
-                "MainPID": str(index),
-                "ExecMainStartTimestamp": "Mon 2099-01-05 00:00:00 UTC",
-            }
-            self.environ[index] = f"ORCA_AUTO_CONFIG={site.config}\0".encode()
-
-    def run(self, argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        self.commands.append(tuple(argv))
-        assert argv[:2] == ["systemctl", "show"], "guard must never mutate services"
-        property_name = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--property="))
-        return subprocess.CompletedProcess(
-            argv, 0, stdout=self.units[argv[-1]][property_name] + "\n", stderr=""
-        )
-
-    def read_process_file(self, path: str) -> bytes:
-        pid = int(Path(path).parent.name)
-        assert pid in self.environ
-        if path.endswith("/environ"):
-            return self.environ[pid]
-        assert path.endswith("/stat")
-        return _proc_stat()
-
-    def guard(self) -> Any:
-        [unit] = self.units
-        return cli_systemd_restart_guard.guard_service_restart(
-            unit, run=self.run, read_process_file=self.read_process_file
-        )
-
-
-def _assert_locked(root: Path) -> None:
-    with (root / "admission.lock").open("r+") as handle:
-        with pytest.raises(BlockingIOError):
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+from tests.runtime_helpers import (
+    WORKER,
+    RestartEvidence,
+    admission_site,
+    assert_admission_locked,
+    proc_stat_bytes,
+    reserve_admission_slot,
+)
 
 
 def _assert_unlocked(root: Path) -> None:
@@ -110,18 +31,12 @@ def _assert_unlocked(root: Path) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def _reserve(site: _Site, *, source: str = "orca_auto.orca.queue_worker") -> str:
-    token = store.reserve_slot(site.admission, 4, source=source, state="reserved")
-    assert token is not None
-    return token
-
-
 def test_idle_guard_holds_existing_lock_without_rewriting_slots(tmp_path: Path) -> None:
-    site = _site(tmp_path)
-    evidence = _Evidence({WORKER: site})
+    site = admission_site(tmp_path)
+    evidence = RestartEvidence({WORKER: site})
     before = (site.admission / "admission_slots.json").read_bytes()
     with evidence.guard():
-        _assert_locked(site.admission)
+        assert_admission_locked(site.admission)
     _assert_unlocked(site.admission)
     assert (site.admission / "admission_slots.json").read_bytes() == before
 
@@ -129,19 +44,22 @@ def test_idle_guard_holds_existing_lock_without_rewriting_slots(tmp_path: Path) 
 def test_existing_lock_with_absent_slots_file_is_idle_without_initializing_it(
     tmp_path: Path,
 ) -> None:
-    site = _site(tmp_path, slots=False)
-    with _Evidence({WORKER: site}).guard():
-        _assert_locked(site.admission)
+    site = admission_site(tmp_path, slots=False)
+    with RestartEvidence({WORKER: site}).guard():
+        assert_admission_locked(site.admission)
     _assert_unlocked(site.admission)
     assert not (site.admission / "admission_slots.json").exists()
 
 
 @pytest.mark.parametrize("engine", ["orca", "other"])
 def test_active_cross_engine_reservation_blocks_restart(tmp_path: Path, engine: str) -> None:
-    site = _site(tmp_path)
-    _reserve(site, source=f"orca_auto.{engine}.queue_worker")
+    site = admission_site(tmp_path)
+    reserve_admission_slot(site, source=f"orca_auto.{engine}.queue_worker")
     before = (site.admission / "admission_slots.json").read_bytes()
-    with pytest.raises(ValueError, match="1 active or reserved"), _Evidence({WORKER: site}).guard():
+    with (
+        pytest.raises(ValueError, match="1 active or reserved"),
+        RestartEvidence({WORKER: site}).guard(),
+    ):
         pytest.fail("an admitted calculation must block restart")
     assert (site.admission / "admission_slots.json").read_bytes() == before
     _assert_unlocked(site.admission)
@@ -149,8 +67,8 @@ def test_active_cross_engine_reservation_blocks_restart(tmp_path: Path, engine: 
 
 @pytest.mark.parametrize("engine_state", ["pending", "active", "idle"])
 def test_dead_owner_keeps_unresolved_engine_evidence(tmp_path: Path, engine_state: str) -> None:
-    site = _site(tmp_path)
-    _reserve(site)
+    site = admission_site(tmp_path)
+    reserve_admission_slot(site)
     slots_path = site.admission / "admission_slots.json"
     records = json.loads(slots_path.read_text())
     records[0]["owner_pid"] = 999999999
@@ -165,12 +83,12 @@ def test_dead_owner_keeps_unresolved_engine_evidence(tmp_path: Path, engine_stat
     slots_path.write_text(json.dumps(records))
     before = slots_path.read_bytes()
     if engine_state == "idle":
-        with _Evidence({WORKER: site}).guard():
-            _assert_locked(site.admission)
+        with RestartEvidence({WORKER: site}).guard():
+            assert_admission_locked(site.admission)
     else:
         with (
             pytest.raises(ValueError, match="1 active or reserved"),
-            _Evidence({WORKER: site}).guard(),
+            RestartEvidence({WORKER: site}).guard(),
         ):
             pytest.fail("a dead owner cannot clear unresolved engine ownership")
     assert slots_path.read_bytes() == before
@@ -180,34 +98,37 @@ def test_dead_owner_keeps_unresolved_engine_evidence(tmp_path: Path, engine_stat
 def test_unknown_slot_liveness_blocks_without_pruning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unknown: str
 ) -> None:
-    site = _site(tmp_path)
-    _reserve(site)
+    site = admission_site(tmp_path)
+    reserve_admission_slot(site)
     if unknown == "boot":
         monkeypatch.setattr(process_utils, "linux_boot_id", lambda **_kwargs: None)
     else:
         monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid, **_kwargs: None)
-    with pytest.raises(ValueError, match="1 active or reserved"), _Evidence({WORKER: site}).guard():
+    with (
+        pytest.raises(ValueError, match="1 active or reserved"),
+        RestartEvidence({WORKER: site}).guard(),
+    ):
         pytest.fail("unreadable process identity must not look idle")
 
 
 @pytest.mark.parametrize("payload", ["{broken", "{}", "[{}]"])
 def test_corrupt_admission_never_falls_back_to_zero(tmp_path: Path, payload: str) -> None:
-    site = _site(tmp_path)
+    site = admission_site(tmp_path)
     slots = site.admission / "admission_slots.json"
     slots.write_text(payload)
     with (
         pytest.raises(ValueError, match="Cannot read service admission state"),
-        _Evidence({WORKER: site}).guard(),
+        RestartEvidence({WORKER: site}).guard(),
     ):
         pytest.fail("corrupt admission cannot authorize restart")
     assert slots.read_text() == payload
 
 
 def test_missing_lock_is_not_created_by_restart(tmp_path: Path) -> None:
-    site = _site(tmp_path, lock=False)
+    site = admission_site(tmp_path, lock=False)
     with (
         pytest.raises(ValueError, match="Cannot lock existing service admission"),
-        _Evidence({WORKER: site}).guard(),
+        RestartEvidence({WORKER: site}).guard(),
     ):
         pytest.fail("restart must not initialize service-owned admission state")
     assert not (site.admission / "admission.lock").exists()
@@ -215,7 +136,7 @@ def test_missing_lock_is_not_created_by_restart(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("kind", ["symlink", "hardlink", "directory"])
 def test_nonregular_or_shared_lock_is_rejected(tmp_path: Path, kind: str) -> None:
-    site = _site(tmp_path, lock=False)
+    site = admission_site(tmp_path, lock=False)
     lock = site.admission / "admission.lock"
     if kind == "directory":
         lock.mkdir()
@@ -228,30 +149,30 @@ def test_nonregular_or_shared_lock_is_rejected(tmp_path: Path, kind: str) -> Non
             lock.hardlink_to(target)
     with (
         pytest.raises(ValueError, match="Cannot lock existing service admission"),
-        _Evidence({WORKER: site}).guard(),
+        RestartEvidence({WORKER: site}).guard(),
     ):
         pytest.fail("restart requires a stable existing single-link regular lock")
 
 
 @pytest.mark.parametrize("reserved", [False, True])
 def test_stopped_worker_still_requires_idle_admission(tmp_path: Path, reserved: bool) -> None:
-    site = _site(tmp_path)
-    evidence = _Evidence({WORKER: site})
+    site = admission_site(tmp_path)
+    evidence = RestartEvidence({WORKER: site})
     evidence.units[WORKER]["MainPID"] = "0"
     evidence.environ.clear()
     if reserved:
-        _reserve(site)
+        reserve_admission_slot(site)
         with pytest.raises(ValueError, match="1 active or reserved"), evidence.guard():
             pytest.fail("a stopped worker does not clear admitted calculations")
     else:
         with evidence.guard():
-            _assert_locked(site.admission)
+            assert_admission_locked(site.admission)
     _assert_unlocked(site.admission)
 
 
 @pytest.mark.parametrize("failure", ["returncode", "stderr", "exception"])
 def test_unreadable_systemd_evidence_refuses_restart(tmp_path: Path, failure: str) -> None:
-    evidence = _Evidence({WORKER: _site(tmp_path)})
+    evidence = RestartEvidence({WORKER: admission_site(tmp_path)})
 
     def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         result = evidence.run(argv, **kwargs)
@@ -276,21 +197,21 @@ def test_unreadable_systemd_evidence_refuses_restart(tmp_path: Path, failure: st
 def test_caller_config_cannot_hide_service_reservation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    service = _site(tmp_path, "actual-service")
-    caller = _site(tmp_path, "caller-empty")
-    _reserve(service)
+    service = admission_site(tmp_path, "actual-service")
+    caller = admission_site(tmp_path, "caller-empty")
+    reserve_admission_slot(service)
     monkeypatch.setenv("ORCA_AUTO_CONFIG", str(caller.config))
     monkeypatch.chdir(caller.config.parent)
     with (
         pytest.raises(ValueError, match="1 active or reserved"),
-        _Evidence({WORKER: service}).guard(),
+        RestartEvidence({WORKER: service}).guard(),
     ):
         pytest.fail("the running service configuration must be authoritative")
 
 
 def test_config_written_after_worker_start_is_not_trusted(tmp_path: Path) -> None:
-    site = _site(tmp_path)
-    evidence = _Evidence({WORKER: site})
+    site = admission_site(tmp_path)
+    evidence = RestartEvidence({WORKER: site})
     evidence.units[WORKER]["ExecMainStartTimestamp"] = "Mon 2000-01-03 00:00:00 UTC"
     with (
         pytest.raises(ValueError, match="Cannot verify unchanged running configuration"),
@@ -300,9 +221,9 @@ def test_config_written_after_worker_start_is_not_trusted(tmp_path: Path) -> Non
 
 
 def test_process_environment_must_match_unit_config(tmp_path: Path) -> None:
-    site = _site(tmp_path)
-    alternate = _site(tmp_path, "other")
-    evidence = _Evidence({WORKER: site})
+    site = admission_site(tmp_path)
+    alternate = admission_site(tmp_path, "other")
+    evidence = RestartEvidence({WORKER: site})
     evidence.environ[4242] = f"ORCA_AUTO_CONFIG={alternate.config}\0".encode()
     with (
         pytest.raises(ValueError, match="Cannot verify unchanged running configuration"),
@@ -313,7 +234,7 @@ def test_process_environment_must_match_unit_config(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("target", ["MainPID", "stat"])
 def test_process_identity_changes_during_check_refuse_restart(tmp_path: Path, target: str) -> None:
-    evidence = _Evidence({WORKER: _site(tmp_path)})
+    evidence = RestartEvidence({WORKER: admission_site(tmp_path)})
     evidence.environ[4243] = evidence.environ[4242]
     reads = 0
 
@@ -331,7 +252,7 @@ def test_process_identity_changes_during_check_refuse_restart(tmp_path: Path, ta
         result = evidence.read_process_file(path)
         if target == "stat" and path.endswith("/stat"):
             reads += 1
-            return _proc_stat(12345 + reads)
+            return proc_stat_bytes(12345 + reads)
         return result
 
     with (
@@ -371,14 +292,14 @@ def test_process_identity_changes_during_check_refuse_restart(tmp_path: Path, ta
 def test_unresolved_unit_configuration_is_rejected(
     tmp_path: Path, property_name: str, value: str, diagnostic: str
 ) -> None:
-    evidence = _Evidence({WORKER: _site(tmp_path)})
+    evidence = RestartEvidence({WORKER: admission_site(tmp_path)})
     evidence.units[WORKER][property_name] = value
     with pytest.raises(ValueError, match=diagnostic), evidence.guard():
         pytest.fail("an unsupported launch cannot use a guessed admission root")
 
 
 def test_unreadable_process_environment_is_not_silently_ignored(tmp_path: Path) -> None:
-    evidence = _Evidence({WORKER: _site(tmp_path)})
+    evidence = RestartEvidence({WORKER: admission_site(tmp_path)})
 
     def read_process_file(path: str) -> bytes:
         if path.endswith("/environ"):
@@ -397,7 +318,7 @@ def test_unreadable_process_environment_is_not_silently_ignored(tmp_path: Path) 
 def test_config_is_rechecked_after_lock_acquisition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    site = _site(tmp_path)
+    site = admission_site(tmp_path)
     original_lock = cli_systemd_restart_guard.admission_lock
 
     @contextmanager
@@ -409,15 +330,18 @@ def test_config_is_rechecked_after_lock_acquisition(
     monkeypatch.setattr(cli_systemd_restart_guard, "admission_lock", change_config)
     with (
         pytest.raises(ValueError, match="Service configuration or process changed"),
-        _Evidence({WORKER: site}).guard(),
+        RestartEvidence({WORKER: site}).guard(),
     ):
         pytest.fail("a configuration race must be caught before restart")
     _assert_unlocked(site.admission)
 
 
 def test_guard_releases_lock_when_guarded_operation_raises(tmp_path: Path) -> None:
-    site = _site(tmp_path)
-    with pytest.raises(RuntimeError, match="operation failed"), _Evidence({WORKER: site}).guard():
+    site = admission_site(tmp_path)
+    with (
+        pytest.raises(RuntimeError, match="operation failed"),
+        RestartEvidence({WORKER: site}).guard(),
+    ):
         raise RuntimeError("operation failed")
     _assert_unlocked(site.admission)
 
@@ -437,8 +361,8 @@ def _reserve_in_process(root: str, connection: Any) -> None:
 def test_reservation_waits_through_entire_restart_and_resumes_after_exit(
     tmp_path: Path, failure_index: int | None
 ) -> None:
-    site = _site(tmp_path)
-    evidence = _Evidence({WORKER: site})
+    site = admission_site(tmp_path)
+    evidence = RestartEvidence({WORKER: site})
     ctx = multiprocessing.get_context("spawn")
     parent, child = ctx.Pipe()
     process = ctx.Process(target=_reserve_in_process, args=(str(site.admission), child))
@@ -450,7 +374,7 @@ def test_reservation_waits_through_entire_restart_and_resumes_after_exit(
         if argv[1] == "is-active":
             return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
         assert argv[1] in {"restart", "reset-failed"}
-        _assert_locked(site.admission)
+        assert_admission_locked(site.admission)
         if not mutations:
             process.start()
             child.close()
@@ -517,8 +441,8 @@ def test_guard_compares_config_times_to_exact_subsecond_start(
     offset_ns: int,
     allowed: bool,
 ) -> None:
-    site = _site(tmp_path)
-    evidence = _Evidence({WORKER: site})
+    site = admission_site(tmp_path)
+    evidence = RestartEvidence({WORKER: site})
     # Literal UTC epoch of the observed systemd record, independently pinned.
     started_ns = 1_791_615_824_560_773_000
     original_identity = cli_systemd_restart_guard._config_identity
@@ -552,7 +476,7 @@ def test_guard_compares_config_times_to_exact_subsecond_start(
     )
     if allowed:
         with guard:
-            _assert_locked(site.admission)
+            assert_admission_locked(site.admission)
     else:
         with (
             pytest.raises(ValueError, match="Cannot verify unchanged running configuration"),

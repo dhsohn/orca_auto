@@ -640,3 +640,209 @@ def si_out_text(
         "TOTAL RUN TIME: 0 days 0 hours 1 minutes 2 seconds 3 msec",
     ]
     return "\n".join(lines)
+
+
+MINIMAL_TS_FREQUENCIES = "VIBRATIONAL FREQUENCIES\n0: -410.20 cm**-1\n1: 100.00 cm**-1\n"
+
+
+B3LYP_OPT_FREQ_COMPLETED_OUT = """\
+|  1> ! B3LYP 6-31G(d) Opt Freq
+|  2> * xyz 0 1
+|  3>   C    0.000000    0.000000    0.000000
+|  4>   O    1.200000    0.000000    0.000000
+|  5>   H   -0.500000    0.866025    0.000000
+|  6>   H   -0.500000   -0.866025    0.000000
+|  7> *
+
+CARTESIAN COORDINATES (ANGSTROEM)
+----------------------------
+ C    0.000000    0.000000    0.000000
+ O    1.200000    0.000000    0.000000
+ H   -0.500000    0.866025    0.000000
+ H   -0.500000   -0.866025    0.000000
+
+---------------------------------------------------
+| Geometry Optimization Cycle   1                 |
+---------------------------------------------------
+
+FINAL SINGLE POINT ENERGY      -113.800000000
+
+                         *************************************
+                         *  GEOMETRY CONVERGENCE              *
+                         *************************************
+Item                Value     Tolerance   Converged
+Energy change       0.000000  5.0000e-06    YES
+MAX gradient        0.010000  3.0000e-04    NO
+RMS gradient        0.005000  1.0000e-04    NO
+MAX step            0.020000  4.0000e-03    NO
+RMS step            0.008000  2.0000e-03    NO
+
+---------------------------------------------------
+| Geometry Optimization Cycle   2                 |
+---------------------------------------------------
+
+FINAL SINGLE POINT ENERGY      -113.850000000
+
+                         *************************************
+                         *  GEOMETRY CONVERGENCE              *
+                         *************************************
+Item                Value     Tolerance   Converged
+Energy change      -0.050000  5.0000e-06    NO
+MAX gradient        0.000200  3.0000e-04    YES
+RMS gradient        0.000050  1.0000e-04    YES
+MAX step            0.001000  4.0000e-03    YES
+RMS step            0.000500  2.0000e-03    YES
+
+---------------------------------------------------
+| Geometry Optimization Cycle   3                 |
+---------------------------------------------------
+
+CARTESIAN COORDINATES (ANGSTROEM)
+----------------------------
+ C    0.000100    0.000200    0.000000
+ O    1.205000    0.000100    0.000000
+ H   -0.520000    0.870000    0.000000
+ H   -0.520000   -0.870000    0.000000
+
+FINAL SINGLE POINT ENERGY      -113.867432100
+
+                         *************************************
+                         *  GEOMETRY CONVERGENCE              *
+                         *************************************
+Item                Value     Tolerance   Converged
+Energy change      -0.000001  5.0000e-06    YES
+MAX gradient        0.000010  3.0000e-04    YES
+RMS gradient        0.000005  1.0000e-04    YES
+MAX step            0.000100  4.0000e-03    YES
+RMS step            0.000050  2.0000e-03    YES
+
+THE OPTIMIZATION HAS CONVERGED
+
+VIBRATIONAL FREQUENCIES
+-----------------------
+  0:      0.00 cm**-1
+  1:      0.00 cm**-1
+  2:      0.00 cm**-1
+  3:      0.00 cm**-1
+  4:      0.00 cm**-1
+  5:      0.00 cm**-1
+  6:   1167.32 cm**-1
+  7:   1251.89 cm**-1
+  8:   1534.00 cm**-1
+  9:   1780.45 cm**-1
+ 10:   2843.21 cm**-1
+ 11:   2917.56 cm**-1
+
+---------------------------
+
+Total Enthalpy                    ... -113.834210 Eh
+Final Gibbs free energy           ... -113.862100 Eh
+
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 2 hours 15 minutes 30 seconds 0 msec
+"""
+
+
+TS_OPT_WITH_IMAGINARY_OUT = """\
+! B3LYP def2-TZVP OptTS Freq
+* xyz 0 1
+  C    0.000000    0.000000    0.000000
+  H    1.089000    0.000000    0.000000
+  H   -0.544500    0.943000    0.000000
+  H   -0.544500   -0.471500    0.816500
+  H   -0.544500   -0.471500   -0.816500
+  Cl   3.000000    0.000000    0.000000
+*
+
+CARTESIAN COORDINATES (ANGSTROEM)
+----------------------------
+ C    0.000000    0.000000    0.000000
+ H    1.089000    0.000000    0.000000
+ H   -0.544500    0.943000    0.000000
+ H   -0.544500   -0.471500    0.816500
+ H   -0.544500   -0.471500   -0.816500
+ Cl   3.000000    0.000000    0.000000
+
+FINAL SINGLE POINT ENERGY      -500.123456789
+
+THE OPTIMIZATION HAS CONVERGED
+
+VIBRATIONAL FREQUENCIES
+-----------------------
+  0:      0.00 cm**-1
+  1:      0.00 cm**-1
+  2:      0.00 cm**-1
+  3:      0.00 cm**-1
+  4:      0.00 cm**-1
+  5:      0.00 cm**-1
+  6:   -432.15 cm**-1
+  7:    523.40 cm**-1
+  8:    780.10 cm**-1
+  9:   1050.32 cm**-1
+ 10:   1320.45 cm**-1
+ 11:   1450.78 cm**-1
+ 12:   1580.90 cm**-1
+ 13:   2980.12 cm**-1
+ 14:   3050.45 cm**-1
+ 15:   3120.78 cm**-1
+
+---------------------------
+
+Total Enthalpy                    ... -500.089123 Eh
+Final Gibbs free energy           ... -500.112345 Eh
+
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 8 hours 30 minutes 45 seconds 0 msec
+"""
+
+
+TS_REAL_VIB_FORMAT_OUT = """\
+! B3LYP def2-TZVP OptTS Freq
+* xyz 0 1
+  C    0.000000    0.000000    0.000000
+  H    1.089000    0.000000    0.000000
+  Cl   3.000000    0.000000    0.000000
+*
+
+FINAL SINGLE POINT ENERGY      -500.123456789
+THE OPTIMIZATION HAS CONVERGED
+
+-----------------------
+VIBRATIONAL FREQUENCIES
+-----------------------
+
+Scaling factor for frequencies =  1.000000000  (already applied!)
+
+   0:         0.00 cm**-1
+   1:         0.00 cm**-1
+   2:         0.00 cm**-1
+   3:         0.00 cm**-1
+   4:         0.00 cm**-1
+   5:         0.00 cm**-1
+   6:      -432.15 cm**-1
+   7:       523.40 cm**-1
+   8:      1450.78 cm**-1
+
+
+------------
+NORMAL MODES
+------------
+
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 0 hours 5 minutes 0 seconds 0 msec
+"""
+
+
+NORMAL_TERMINATION_LINE = "****ORCA TERMINATED NORMALLY****"
+
+
+FINAL_ENERGY_LINE = "FINAL SINGLE POINT ENERGY -100.2"
+
+
+OPT_CONVERGED_LINE = "THE OPTIMIZATION HAS CONVERGED"
+
+
+def write_out_file(tmp_path: Path, payload: str) -> Path:
+    out = tmp_path / "a.out"
+    out.write_text(payload, encoding="utf-8")
+    return out
