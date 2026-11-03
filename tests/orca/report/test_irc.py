@@ -350,6 +350,38 @@ def test_combined_optts_freq_irc_route_renders_composite_sections(tmp_path: Path
     assert text.count('<div class="metric-label">Imaginary frequencies</div>') == 1
 
 
+def test_irc_frequencies_from_an_earlier_attempt_name_their_source(tmp_path: Path) -> None:
+    write_irc_inp(tmp_path / "rxn.inp", "! OptTS Freq IRC B3LYP def2-SVP")
+    earlier = tmp_path / "rxn_attempt1.out"
+    write_irc_out(earlier, route="! OptTS Freq IRC B3LYP def2-SVP", freq=True, opt=True)
+    final = tmp_path / "rxn.out"
+    write_irc_out(final, route="! OptTS Freq IRC B3LYP def2-SVP", opt=True)
+    state = _state(tmp_path, earlier)
+    state["attempts"].append(dict(state["attempts"][0], index=2, out_path=str(final)))
+    state["final_result"]["last_out_path"] = str(final)
+
+    data = _irc_data(tmp_path, state)
+
+    assert data.imaginary_count is not None
+    assert data.frequency_source_note == "from attempt 1, not the final output"
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
+    assert path is not None
+    assert "from attempt 1, not the final output" in path.read_text(encoding="utf-8")
+
+
+def test_irc_frequencies_from_the_final_output_carry_no_source_note(tmp_path: Path) -> None:
+    write_irc_inp(tmp_path / "rxn.inp", "! OptTS Freq IRC B3LYP def2-SVP")
+    out_path = tmp_path / "rxn.out"
+    write_irc_out(out_path, route="! OptTS Freq IRC B3LYP def2-SVP", freq=True, opt=True)
+
+    data = _irc_data(tmp_path, _state(tmp_path, out_path))
+
+    assert data.imaginary_count is not None
+    assert data.frequency_source_note == ""
+
+
 def test_irc_report_with_missing_path_summary_has_fallback(tmp_path: Path) -> None:
     write_irc_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP IRC")
     out_path = tmp_path / "rxn.out"

@@ -30,7 +30,7 @@ from .attempts import (
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    latest_frequency_analysis,
+    final_or_latest_frequency_evidence,
     terminal_actions_html,
 )
 from .modes import mode_section_html
@@ -53,6 +53,8 @@ class SpReportData:
     mode_summaries: tuple[ModeSummary, ...]
     si_block_text: str | None
     is_engrad: bool = False
+    # Where the frequencies came from when not the final output, else "".
+    frequency_source_note: str = ""
 
 
 def collect_sp_report_data(
@@ -75,8 +77,8 @@ def collect_sp_report_data(
     # the embedded SI block; fall back to the attempt chain only when the final
     # output has no frequency section (e.g. a failed run whose earlier attempt
     # still carries one).
-    if analysis is None:
-        analysis, _attempt_index = latest_frequency_analysis(attempts)
+    frequency = final_or_latest_frequency_evidence(attempts, out_path, analysis)
+    analysis = frequency.analysis if frequency is not None else None
 
     # The SI block only exists for completed jobs with a parsed energy and
     # geometry; the report is still useful without it (failed runs keep the
@@ -95,6 +97,7 @@ def collect_sp_report_data(
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         si_block_text=si_block_text,
         is_engrad=is_engrad,
+        frequency_source_note=frequency.source_note() if frequency is not None else "",
     )
 
 
@@ -157,7 +160,11 @@ def _metric_cards(data: SpReportData) -> str:
         )
         cards.append(metric_card("Charge / multiplicity", electronic_state, note))
     if data.imaginary_count is not None:
-        cards.append(metric_card("Imaginary frequencies", str(data.imaginary_count), ""))
+        cards.append(
+            metric_card(
+                "Imaginary frequencies", str(data.imaginary_count), data.frequency_source_note
+            )
+        )
     cards.append(attempts_metric_card(data.attempts, data.header.total_duration_text))
     return "".join(cards)
 

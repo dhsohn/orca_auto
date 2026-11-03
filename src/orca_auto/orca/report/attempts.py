@@ -149,6 +149,80 @@ def latest_frequency_analysis(
     return None, None
 
 
+def attempt_index_for_output(attempts: Sequence[Mapping[str, Any]], out_path: Path) -> int | None:
+    """The index of the latest attempt whose output is ``out_path``, else ``None``."""
+    # Attempt rows store the path as written; the final result path can be
+    # the resolved form of the same file. Compare resolved forms.
+    target = _resolved_or_self(out_path)
+    for position in range(len(attempts) - 1, -1, -1):
+        attempt_out = attempt_out_path(attempts[position])
+        if attempt_out is not None and _resolved_or_self(attempt_out) == target:
+            return attempt_index(attempts[position], position)
+    return None
+
+
+def _resolved_or_self(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+@dataclass(frozen=True)
+class FrequencyEvidence:
+    """The frequency section a report shows, and where it came from.
+
+    ``attempt_index`` is the attempt whose output holds the section (``None``
+    when no attempt row names that output); ``from_final_output`` is whether
+    that output is the job's final output, the one the SI block and
+    ``machine.json`` describe.
+    """
+
+    analysis: FrequencyAnalysis
+    attempt_index: int | None
+    from_final_output: bool
+
+    def source_note(self) -> str:
+        """The note a card adds when the section is not from the final output, else ``""``."""
+        if self.from_final_output or self.attempt_index is None:
+            return ""
+        return earlier_attempt_frequency_note(self.attempt_index)
+
+
+def earlier_attempt_frequency_note(attempt_index: int) -> str:
+    """The shared wording for frequencies shown from an attempt that is not the final output."""
+    return f"from attempt {attempt_index}, not the final output"
+
+
+def final_or_latest_frequency_evidence(
+    attempts: Sequence[Mapping[str, Any]],
+    final_output: Path | None,
+    final_analysis: FrequencyAnalysis | None,
+) -> FrequencyEvidence | None:
+    """The final output's frequency section, else the latest attempt's (Opt and SP reports)."""
+    if final_analysis is not None and final_output is not None:
+        return FrequencyEvidence(
+            final_analysis, attempt_index_for_output(attempts, final_output), True
+        )
+    analysis, index = latest_frequency_analysis(attempts)
+    if analysis is None:
+        return None
+    return FrequencyEvidence(analysis, index, False)
+
+
+def latest_frequency_evidence(
+    attempts: Sequence[Mapping[str, Any]], final_output: Path | None
+) -> FrequencyEvidence | None:
+    """The latest attempt's frequency section, marked final when it is the final output (IRC)."""
+    analysis, index = latest_frequency_analysis(attempts)
+    if analysis is None:
+        return None
+    final_index = (
+        attempt_index_for_output(attempts, final_output) if final_output is not None else None
+    )
+    return FrequencyEvidence(analysis, index, index is not None and index == final_index)
+
+
 def has_opt_steps(progress: OptProgress) -> bool:
     return bool(progress.steps)
 
