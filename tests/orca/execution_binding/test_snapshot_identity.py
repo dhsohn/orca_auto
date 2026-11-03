@@ -21,7 +21,7 @@ from orca_auto.orca.execution_binding import (
     orca_execution_snapshot_generation_dir,
     verify_orca_execution_snapshot,
 )
-from orca_auto.orca.execution_binding._inputs import _route_outputs
+from orca_auto.orca.execution_binding._inputs import _runtime_outputs
 from orca_auto.orca.execution_binding._recovery import (
     _recovery_seed_plan,
     _validated_submitted_dependency_identity,
@@ -31,6 +31,7 @@ from orca_auto.orca.execution_binding._snapshot_identity import (
     validated_content_descriptor,
 )
 from orca_auto.orca.execution_binding._verify import _verify_source_descriptor
+from orca_auto.orca.operation_facts import parse_operation_facts
 from orca_auto.orca.resource_directives import prepare_submission_resource_request
 from tests.conftest import build_submitted_snapshot, make_app_cfg, write_fake_orca
 
@@ -62,6 +63,11 @@ _INPUTS: dict[str, tuple[str, dict[str, str]]] = {
         },
     ),
 }
+
+
+def _route_outputs(lines: list[str]) -> Any:
+    """The binding's runtime outputs for ``lines``, through the shared operation facts."""
+    return _runtime_outputs(parse_operation_facts(lines, inp_path=Path("job.inp")))
 
 
 def _job(tmp_path: Path, name: str) -> tuple[Path, Path, Path]:

@@ -10,12 +10,11 @@ only raise ``ValueError``; rewriting stays with the modules below.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-from .completion_rules import route_facts
-from .input_blocks import GEOM_HEADER_RE, iter_blocks, method_run_type_values
+from .input_blocks import GEOM_HEADER_RE, iter_blocks
 from .input_references import orca_moinp_references
 from .input_syntax import active_orca_directive_text, orca_line_tokens, orca_route_tokens
+from .operation_facts import OperationFacts
 from .resource_directives import MAXCORE_RE, NPROCS_RE
 
 COORDS_BLOCK_RE = re.compile(r"^\s*%\s*coords\b", re.IGNORECASE)
@@ -103,28 +102,28 @@ def validate_supported_xyz_geometry_syntax(
         raise ValueError(f"{label} has an unterminated inline ORCA geometry block")
 
 
-def validate_supported_method_run_type(lines: list[str], *, label: str) -> None:
+def validate_supported_method_run_type(facts: OperationFacts, *, label: str) -> None:
     """Reject a ``%method RunTyp`` whose job orca_auto would verify as the wrong kind.
 
     Request an optimization with a route keyword (``! Opt``) instead; that is
     the form completion, reports and the execution binding classify.
     """
 
-    for value in method_run_type_values(lines):
-        if value is None or value.quoted:
+    for run_type in facts.method_run_types:
+        if run_type.value is None or run_type.quoted:
             raise ValueError(f"{label} has an unreadable %method RunTyp value")
-        if value.value.lower() not in SUPPORTED_METHOD_RUN_TYPES:
+        if run_type.value.lower() not in SUPPORTED_METHOD_RUN_TYPES:
             raise ValueError(
-                f"{label} uses unsupported %method RunTyp {value.value}; request an "
+                f"{label} uses unsupported %method RunTyp {run_type.value}; request an "
                 "optimization or other job type with a route keyword such as ! Opt"
             )
 
 
-def validate_consistent_operation(lines: list[str], *, label: str) -> None:
+def validate_consistent_operation(facts: OperationFacts, *, label: str) -> None:
     """Reject a block setting that changes the job the route keywords request.
 
     Completion, the geometry scope and the execution binding classify a job
-    from its route keywords (:func:`.completion_rules.route_facts`), but ORCA
+    from its route keywords (``facts.route``), but ORCA
     reads ``%`` blocks after the route, so a block can change the job:
 
     - ``%geom TS_search`` turns a route optimization (``Opt``, ``TightOpt``, ...)
@@ -139,13 +138,13 @@ def validate_consistent_operation(lines: list[str], *, label: str) -> None:
     single-point route, a separate frequency request) it is accepted.
     """
 
-    route = route_facts(Path(label), lines=lines)
-    if _has_ts_search_key(lines) and route.is_opt and not route.is_ts:
+    route = facts.route
+    if facts.declares_ts_search and route.is_opt and not route.is_ts:
         raise ValueError(
             f"{label} uses %geom TS_search on a non-TS optimization route; request "
             "the TS search with a route keyword such as ! OptTS"
         )
-    run_types = [value.value for value in method_run_type_values(lines) if value is not None]
+    run_types = [run_type.value for run_type in facts.method_run_types if run_type.value]
     route_operation = next(
         (
             name
@@ -164,16 +163,6 @@ def validate_consistent_operation(lines: list[str], *, label: str) -> None:
             f"{label} sets %method RunTyp {run_types[-1]}, which overrides the route's "
             f"{route_operation}; keep only one of the two declarations"
         )
-
-
-def _has_ts_search_key(lines: list[str]) -> bool:
-    """Whether a ``%geom`` body carries an unquoted ``TS_search`` key, whatever its value."""
-    return any(
-        not token.quoted and token.value.lower() == "ts_search"
-        for block in iter_blocks(lines, "geom")
-        for row in block.rows
-        for token in row.tokens
-    )
 
 
 def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> None:

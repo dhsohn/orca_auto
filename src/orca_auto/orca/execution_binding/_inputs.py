@@ -9,39 +9,9 @@ from pathlib import Path
 
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS
 
-from ..completion_rules import (
-    IRC_ROUTE_RE,
-    OPT_ROUTE_RE,
-    PARTIAL_OPT_ROUTE_RE,
-    TS_ROUTE_RE,
-    is_optimization_route,
-    requests_frequency,
-)
-from ..input_blocks import find_geometry_block, iter_blocks, method_run_type_values
-from ..input_syntax import orca_route_line, orca_route_tokens, value_token_index
+from ..input_blocks import find_geometry_block
+from ..operation_facts import OperationFacts
 from ._models import _RouteOutputs
-
-_NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
-# ORCA 6.1 %neb spellings of the end-point preoptimization switch (default off)
-# and the boolean values it reads as off.
-_NEB_PREOPT_KEYS = frozenset({"preopt", "preopt_ends", "preopt_endpoints", "preopt_minima"})
-_ORCA_FALSE_VALUES = frozenset({"false", "no", "off", "0"})
-# GOAT global optimizations rewrite <basename>.xyz and <basename>.engrad.
-_GOAT_ROUTE_RE = re.compile(
-    r"\bGOAT(?:-(?:ENTROPY|EXPLORE|REACT|DIVERSITY|TS|COARSE))?\b", re.IGNORECASE
-)
-
-
-_ENGRAD_EXACT_ROUTE_KEYWORDS = frozenset(
-    {
-        "engrad",
-        "energygrad",
-        "numgrad",
-        "optts",
-        "optts(gmf)",
-    }
-)
-
 
 _XYZ_ATOM_LABEL_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_:+().{}\[\]-]*\Z")
 
@@ -67,71 +37,31 @@ def _inline_geometry_atom_count(selected_text: str) -> int | None:
     return atom_count
 
 
-def _neb_preoptimizes_end_points(lines: list[str]) -> bool:
-    """Whether ``%neb`` enables end-point preoptimization; an unreadable value counts as on."""
-
-    for block in iter_blocks(lines, "neb"):
-        tokens = [token for row in block.rows for token in row.tokens]
-        for index, token in enumerate(tokens):
-            if token.quoted:
-                continue
-            word = token.value.lower()
-            # iter_blocks closes %neb at the Monitor_Internals sub-block's end
-            # (the brace may be attached to the keyword), so switches after it
-            # are unreadable.
-            if word.startswith("monitor_internals"):
-                return True
-            if word not in _NEB_PREOPT_KEYS:
-                continue
-            value_index = value_token_index(tokens, index)
-            if (
-                value_index >= len(tokens)
-                or tokens[value_index].quoted
-                or tokens[value_index].value.lower() not in _ORCA_FALSE_VALUES
-            ):
-                return True
-    return False
-
-
 # ``%method RunTyp`` values that write <basename>.engrad, as their route
 # keywords (EnGrad, NumGrad) do.
 _ENGRAD_RUN_TYPES = frozenset({"gradient", "engrad", "energygrad", "numgrad"})
 
 
-def _route_writes_engrad(lines: list[str]) -> bool:
-    if any(
-        value is not None and not value.quoted and value.value.lower() in _ENGRAD_RUN_TYPES
-        for value in method_run_type_values(lines)
-    ):
-        return True
-    for line in lines:
-        for token in orca_route_tokens(line):
-            if token.quoted:
-                continue
-            # Whole keywords only: InterpOpt, RigidBodyOpt and the MD-driven
-            # MD-L-Opt/MD-L-OptH emit no engrad file.
-            if token.value.casefold() in _ENGRAD_EXACT_ROUTE_KEYWORDS or any(
-                pattern.fullmatch(token.value) is not None
-                for pattern in (OPT_ROUTE_RE, PARTIAL_OPT_ROUTE_RE, IRC_ROUTE_RE, _GOAT_ROUTE_RE)
-            ):
-                return True
-    return False
+def _runtime_outputs(facts: OperationFacts) -> _RouteOutputs:
+    """The runtime outputs one input's operation writes; build and verify both read it here."""
 
-
-def _route_outputs(lines: list[str]) -> _RouteOutputs:
-    """The runtime outputs one input's routes request; build and verify both read it here."""
-
-    route_text = " ".join(route for line in lines if (route := orca_route_line(line)) is not None)
+    route = facts.route
     return _RouteOutputs(
-        engrad_is_output=_route_writes_engrad(lines),
-        hessian_requested=requests_frequency(lines),
-        neb_requested=bool(_NEB_ROUTE_RE.search(route_text)),
-        neb_preopt_ends=_neb_preoptimizes_end_points(lines),
-        same_stem_xyz_is_output=is_optimization_route(route_text)
+        engrad_is_output=facts.route_writes_engrad
         or any(
-            pattern.search(route_text) is not None
-            for pattern in (TS_ROUTE_RE, IRC_ROUTE_RE, _NEB_ROUTE_RE, _GOAT_ROUTE_RE)
+            not run_type.quoted
+            and run_type.value is not None
+            and run_type.value.lower() in _ENGRAD_RUN_TYPES
+            for run_type in facts.method_run_types
         ),
+        hessian_requested=route.requests_frequency,
+        neb_requested=facts.neb_route,
+        neb_preopt_ends=facts.neb_preopt_ends,
+        same_stem_xyz_is_output=route.is_opt
+        or route.is_ts
+        or route.is_irc
+        or facts.neb_route
+        or facts.goat_route,
     )
 
 

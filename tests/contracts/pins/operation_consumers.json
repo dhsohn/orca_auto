@@ -1,0 +1,470 @@
+{
+  "sp-method-only": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "sp",
+    "job_type": "other"
+  },
+  "sp-keyword": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "sp",
+    "job_type": "sp"
+  },
+  "commented-opt": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "sp",
+    "job_type": "other"
+  },
+  "freq-route": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": true,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": true,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "freq",
+    "job_type": "freq"
+  },
+  "freq-block": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": true,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": true,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unsupported",
+    "job_type": "other"
+  },
+  "freq-block-false": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "sp",
+    "job_type": "other"
+  },
+  "opt": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "opt",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "full"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "opt",
+    "job_type": "opt"
+  },
+  "opt-freq": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "opt",
+      "require_frequency": true,
+      "require_irc": false,
+      "geometry_scope": "full"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": true,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "opt+freq",
+    "job_type": "opt"
+  },
+  "tightopt-second-route-line": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "opt",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "full"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "opt",
+    "job_type": "opt"
+  },
+  "opth-freq": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "opt",
+      "require_frequency": true,
+      "require_irc": false,
+      "geometry_scope": "partial"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": true,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "opt+freq",
+    "job_type": "opt"
+  },
+  "opt-constrained": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "opt",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "partial"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "opt",
+    "job_type": "opt"
+  },
+  "relaxed-scan": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "opt",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "path"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unsupported",
+    "job_type": "opt"
+  },
+  "optts": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "ts",
+      "require_frequency": true,
+      "require_irc": false,
+      "geometry_scope": "transition_state"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "ts",
+    "job_type": "ts"
+  },
+  "optts-freq": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "ts",
+      "require_frequency": true,
+      "require_irc": false,
+      "geometry_scope": "transition_state"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": true,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "ts+freq",
+    "job_type": "ts"
+  },
+  "optts-ts-search": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "ts",
+      "require_frequency": true,
+      "require_irc": false,
+      "geometry_scope": "transition_state"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": true,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unsupported",
+    "job_type": "ts"
+  },
+  "opt-ts-search": {
+    "submission": "rejected: uses %geom TS_search on a non-TS optimization route; request the TS search with a route keyword such as ! OptTS",
+    "completion": {
+      "kind": "opt",
+      "require_frequency": true,
+      "require_irc": false,
+      "geometry_scope": "full"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": true,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unsupported",
+    "job_type": "opt"
+  },
+  "sp-ts-search": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unsupported",
+    "job_type": "other"
+  },
+  "irc": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": true,
+      "geometry_scope": "path"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "irc",
+    "job_type": "other"
+  },
+  "md": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "path"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unsupported",
+    "job_type": "other"
+  },
+  "engrad-route": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unsupported",
+    "job_type": "other"
+  },
+  "runtyp-gradient": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unsupported",
+    "job_type": "other"
+  },
+  "runtyp-energy-sp": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unknown",
+    "job_type": "sp"
+  },
+  "runtyp-energy-block-first": {
+    "submission": "admitted",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unknown",
+    "job_type": "other"
+  },
+  "runtyp-energy-with-opt": {
+    "submission": "rejected: sets %method RunTyp Energy, which overrides the route's optimization; keep only one of the two declarations",
+    "completion": {
+      "kind": "opt",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "full"
+    },
+    "binding_outputs": {
+      "engrad": true,
+      "hess": false,
+      "same_stem_xyz": true,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unknown",
+    "job_type": "opt"
+  },
+  "runtyp-opt": {
+    "submission": "rejected: uses unsupported %method RunTyp Opt; request an optimization or other job type with a route keyword such as ! Opt",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unknown",
+    "job_type": "other"
+  },
+  "runtyp-quoted": {
+    "submission": "rejected: has an unreadable %method RunTyp value",
+    "completion": {
+      "kind": "sp",
+      "require_frequency": false,
+      "require_irc": false,
+      "geometry_scope": "single_point"
+    },
+    "binding_outputs": {
+      "engrad": false,
+      "hess": false,
+      "same_stem_xyz": false,
+      "neb": false,
+      "neb_preopt_ends": false
+    },
+    "detail_kind": "unknown",
+    "job_type": "other"
+  }
+}
