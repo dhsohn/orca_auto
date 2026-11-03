@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from orca_auto.core.admission import (
@@ -168,8 +168,8 @@ class OrcaQueueWorker(QueueWorkerLoop):
         self.replay_state = OrcaWorkerReplayState()
         self._worker_state_last_reconcile: float | None = None
         self._snapshot_intent_last_reconcile: float | None = None
-        # Both kept current by ``_admit_next`` before every claim; ``_skip_entry``
-        # reads them inside that claim.
+        # Both kept current by ``_admit_next`` before every candidate selection;
+        # ``_skip_entry`` reads them when the candidate is selected.
         self._admission_withheld_keys: frozenset[str] = frozenset()
         self._publication_withheld_ids: frozenset[str] = frozenset()
         # True once this fill pass has repaired every queued publication.
@@ -383,8 +383,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
         Withheld directories, publication repair, queued notification, capacity,
         preview, slot reservation, claim by id, and slot release when the claim
         is lost. The full publication repair, which validates every pending
-        row, runs on the first admission of a fill pass; later admissions in
-        the same pass revalidate only the row they are about to claim.
+        row, runs on the first admission of a fill pass; after that each
+        candidate is validated on its own before it is claimed, including the
+        next candidate after a lost claim.
         """
         # Pending publication retains its replay snapshot and durable queue marker.
         # Until it is replayed, no new generation may start in that reaction
@@ -408,14 +409,19 @@ class OrcaQueueWorker(QueueWorkerLoop):
             else:
                 logger.info("ORCA admission is no longer withheld for any reaction dir")
             self._admission_withheld_keys = withheld
-        revalidate_preview = self._fill_pass_repaired
+        # Rows the full repair just found claimable, as they were listed then.
+        # Only the first candidate of this call may rely on that check, and
+        # only if it is still the same row; every other candidate is checked
+        # on its own before it is claimed.
+        validated: Mapping[str, QueueEntry] = {}
         if not self._fill_pass_repaired:
-            publication_withheld_ids = publication_repair.repair_queue_publications(self.cfg)
-            if publication_withheld_ids is None:
+            repair_pass = publication_repair.repair_queue_publications(self.cfg)
+            if repair_pass is None:
                 logger.warning("Queue admission paused: ORCA queue could not be inspected")
                 return "blocked", None
-            self._publication_withheld_ids = publication_withheld_ids
+            self._publication_withheld_ids = repair_pass.withheld_ids
             self._fill_pass_repaired = True
+            validated = repair_pass.eligible
         # Load-bearing, not a duplicate of the poll-sleep call: a row the repair
         # above just published and the claim below takes in this same pass is
         # never pending at a later sleep, so it would never be notified.
@@ -424,45 +430,57 @@ class OrcaQueueWorker(QueueWorkerLoop):
         # lock-free admission read, and an empty queue is a queue listing, while
         # an admission reservation is a durable write to the shared slot file that
         # an idle worker must not pay (twice, with the release) on every poll. The
-        # slot still comes before the dequeue so a claimed row always holds
-        # capacity; a preview that loses the race simply releases the slot again.
+        # slot still comes before the claim so a claimed row always holds
+        # capacity; a candidate that loses the race simply releases the slot.
         if not admission_has_capacity(self.admission_root, self.max_concurrent):
             return "blocked", None
-        preview = roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
-        # Later in a pass the full repair is not repeated, so the row about to be
-        # claimed is revalidated alone (its path, inode and publication state may
-        # have changed since the pass began). A row that fails joins the
-        # withheld set and the next candidate is previewed.
-        while revalidate_preview and preview is not None:
-            if publication_repair.repair_queue_publication(
-                self.cfg, roots.queue_root(self.cfg), preview
-            ):
-                break
-            self._publication_withheld_ids = self._publication_withheld_ids | {preview.queue_id}
-            preview = roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
-        if preview is None:
-            return "idle", None
-        admission_token = _try_reserve_admission_slot(
-            self.admission_root, self.max_concurrent, owned=self._owns_slot
-        )
-        if admission_token is None:
-            return "blocked", None
+        # select -> validate -> claim, and on any refusal back to select. The
+        # claim takes exactly the validated row; a row passed over here (not
+        # claimable, withheld, or lost to a concurrent change) is not offered
+        # again in this call, so the loop ends.
+        passed_over: set[str] = set()
+
+        def skip(entry: QueueEntry) -> bool:
+            return entry.queue_id in passed_over or self._skip_entry(entry)
+
+        admission_token: str | None = None
         try:
-            # The claim takes the previewed row without listing the queue
-            # again, and previews afresh only when that row was lost.
-            dequeued = roots.dequeue_next_entry(
-                self.cfg, skip_entry_fn=self._skip_entry, preview=preview
-            )
+            while True:
+                candidate = roots.peek_next_entry(self.cfg, skip_entry_fn=skip)
+                if candidate is None:
+                    break
+                if validated.get(candidate.queue_id) != candidate:
+                    verdict = publication_repair.check_queue_publication(
+                        self.cfg, self.queue_root, candidate
+                    )
+                    if verdict is not publication_repair.PublicationVerdict.ELIGIBLE:
+                        passed_over.add(candidate.queue_id)
+                        if verdict is publication_repair.PublicationVerdict.WITHHELD:
+                            self._publication_withheld_ids = self._publication_withheld_ids | {
+                                candidate.queue_id
+                            }
+                        continue
+                validated = {}
+                if admission_token is None:
+                    admission_token = _try_reserve_admission_slot(
+                        self.admission_root, self.max_concurrent, owned=self._owns_slot
+                    )
+                    if admission_token is None:
+                        return "blocked", None
+                claimed = roots.claim_entry(self.cfg, candidate)
+                if claimed is not None:
+                    queue_root, entry = claimed
+                    return "processed", ReservedQueueEntry(
+                        queue_root=queue_root, entry=entry, admission_token=admission_token
+                    )
+                passed_over.add(candidate.queue_id)
         except Exception:
-            self._release_admission_slot(admission_token)
+            if admission_token is not None:
+                self._release_admission_slot(admission_token)
             raise
-        if dequeued is None:
+        if admission_token is not None:
             self._release_admission_slot(admission_token)
-            return "idle", None
-        queue_root, entry = dequeued
-        return "processed", ReservedQueueEntry(
-            queue_root=queue_root, entry=entry, admission_token=admission_token
-        )
+        return "idle", None
 
     def _unresolved_terminal_reaction_keys(self) -> frozenset[str] | None:
         """Reaction directories whose last generation has unpublished terminal state.

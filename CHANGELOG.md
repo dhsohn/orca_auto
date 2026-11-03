@@ -10,6 +10,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Worker admission now validates every candidate it claims. When the row it
+  had checked could not be claimed (it was fenced, cancelled or replaced
+  meanwhile), the claim used to take the next pending row in its place without
+  checking that row's job directory or publication, so a row whose job
+  directory had been replaced could be started. The claim now takes only the
+  row it was given, and admission selects, checks and claims the next
+  candidate itself. A candidate whose check is withheld stays pending and is
+  skipped for the rest of that admission.
 - The SP and IRC HTML reports now say when their frequencies come from an
   earlier attempt and not from the final output (`from attempt N, not the
   final output`), as the Opt report already did. Before, an SP/Freq job that
