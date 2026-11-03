@@ -101,6 +101,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Each version of an ORCA input is now tokenized once and shared by every
+  reader of that version (`input_blocks.ParsedInput`). The operation facts,
+  the resource reader, the binding's checks and the queue Detail used to
+  re-tokenize the same lines for each block, route and declaration they
+  read: for a 1,005-line input, `parse_operation_facts` tokenized lines
+  9,046 times and `queue_detail_kind` 15,102 times, now 1,005 and 2,010 (the
+  Detail reads a presentation version too). The route facts moved from
+  `completion_rules` to `route_rules`, below the completion policy that reads
+  them. Verdicts, the queue Detail and every pinned consumer answer are
+  unchanged.
 - Filling several worker slots in one pass repairs and validates every pending
   queue publication once, then revalidates only the row each later admission
   is about to claim, rather than repeating the full pass for every slot. With

@@ -12,7 +12,6 @@ import pytest
 from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca import input_blocks, input_references
-from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.execution_binding import (
     retire_snapshot_intent_for_row,
     verify_orca_execution_snapshot,
@@ -20,7 +19,9 @@ from orca_auto.orca.execution_binding import (
 from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count, _runtime_outputs
 from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
+from orca_auto.orca.input_blocks import parse_input
 from orca_auto.orca.operation_facts import parse_operation_facts
+from orca_auto.orca.route_rules import route_facts
 from tests.conftest import build_submitted_snapshot, write_fake_orca
 
 
@@ -2324,7 +2325,7 @@ def test_orca_frequency_snapshot_ignores_comment_lines_inside_inline_geometry(
 
     assert snapshot["source_selected_inp"] == str(selected.resolve())
     assert (
-        _inline_geometry_atom_count(selected.read_text(encoding="utf-8"))
+        _inline_geometry_atom_count(parse_input(selected.read_text(encoding="utf-8").splitlines()))
         == MAX_HESSIAN_ADMISSION_ATOMS
     )
 

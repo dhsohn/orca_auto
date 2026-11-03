@@ -48,7 +48,7 @@ from .execution_binding import (
     same_directory_identity,
 )
 from .input_artifacts import OrcaSelectedInputArtifacts, xyzfile_input_path
-from .input_syntax import orca_route_lines
+from .input_blocks import parse_input
 from .job_type import job_type_from_routes
 from .molecule_key import molecule_key_from_text
 from .queue import adapter as queue_adapter
@@ -266,13 +266,14 @@ def _prepare_submission_inputs(
     source_payload = read_stable_regular_file(selected_inp)
     text = source_payload.decode("utf-8", errors="ignore")
     lines = text.splitlines()
+    parsed = parse_input(lines)
     inp_path = selected_inp.expanduser().resolve()
     artifacts = OrcaSelectedInputArtifacts(
         selected_inp=str(selected_inp),
         selected_input_xyz=xyzfile_input_path(lines, inp_path.parent),
     )
-    job_type = job_type_from_routes(orca_route_lines(lines))
-    detail_kind = queue_detail_kind(inp_path, lines)
+    job_type = job_type_from_routes(list(parsed.route_lines))
+    detail_kind = queue_detail_kind(inp_path, parsed)
     molecule_key = molecule_key_from_text(text, inp_path).key
     prepared_input = prepare_submission_resource_request(
         selected_inp,

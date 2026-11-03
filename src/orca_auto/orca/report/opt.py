@@ -7,9 +7,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..completion_rules import RouteFacts, is_constrained_ts_search
+from ..completion_rules import is_constrained_ts_search
 from ..evidence import CONSTRAINED_TS_SEARCH_NOTE, final_out_path, parsed_final_output
 from ..frequencies import FrequencyAnalysis, ModeSummary, mode_summaries
+from ..route_rules import RouteFacts
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,

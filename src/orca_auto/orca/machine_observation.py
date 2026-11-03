@@ -38,8 +38,9 @@ from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils import normalize_text
 
-from .completion_rules import completion_mode, geometry_scope, route_facts
+from .completion_rules import completion_mode, geometry_scope
 from .out_analyzer import analyze_output
+from .route_rules import route_facts
 from .state_reading import normalized_text
 from .statuses import ACTIVE_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
 

@@ -15,12 +15,16 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from functools import cached_property
+from typing import TypeAlias
 
 from .input_syntax import (
     OrcaLineToken,
     active_orca_directive_text,
-    active_orca_line_text,
+    active_text_from_tokens,
     orca_line_tokens,
+    route_line_from_tokens,
+    route_tokens_from,
     value_token_index,
 )
 
@@ -73,29 +77,42 @@ def xyzfile_reference_token(tokens: Sequence[OrcaLineToken]) -> OrcaLineToken | 
     return tokens[4]
 
 
-def geometry_header_match(line: str) -> re.Match[str] | None:
-    """Match ``GEOM_HEADER_RE`` against the active (comment-free) text of ``line``."""
+def geometry_header_match(
+    line: str, tokens: Sequence[OrcaLineToken] | None = None
+) -> re.Match[str] | None:
+    """Match ``GEOM_HEADER_RE`` against the active (comment-free) text of ``line``.
 
-    return GEOM_HEADER_RE.match(active_orca_line_text(line))
+    ``tokens`` are the line's tokens when the caller has already read them.
+    """
+
+    return GEOM_HEADER_RE.match(
+        active_text_from_tokens(line, orca_line_tokens(line) if tokens is None else tokens)
+    )
 
 
-def find_geometry_block(lines: Sequence[str]) -> OrcaGeometryBlock | None:
+def find_geometry_block(lines: InputSource) -> OrcaGeometryBlock | None:
     """Locate the first geometry header and, for ``xyz``, its atom rows."""
 
+    return parse_input(lines).geometry
+
+
+def _find_geometry_block(
+    lines: Sequence[str], tokens: Sequence[Sequence[OrcaLineToken]]
+) -> OrcaGeometryBlock | None:
     for header_index, line in enumerate(lines):
-        match = geometry_header_match(line)
+        match = geometry_header_match(line, tokens[header_index])
         if match is None:
             continue
         kind = match.group(1).lower()
         charge = int(match.group(2))
         multiplicity = int(match.group(3))
         if kind == "xyzfile":
-            file_token = xyzfile_reference_token(orca_line_tokens(line))
+            file_token = xyzfile_reference_token(tokens[header_index])
             reference = file_token.value if file_token is not None else None
             return OrcaGeometryBlock(header_index, kind, charge, multiplicity, reference, (), None)
         atom_rows: list[tuple[int, str]] = []
         for index in range(header_index + 1, len(lines)):
-            text = active_orca_line_text(lines[index]).strip()
+            text = active_text_from_tokens(lines[index], tokens[index]).strip()
             if not text:
                 continue
             if text == "*":
@@ -109,7 +126,7 @@ def find_geometry_block(lines: Sequence[str]) -> OrcaGeometryBlock | None:
     return None
 
 
-def find_geometry_start(lines: list[str]) -> int | None:
+def find_geometry_start(lines: InputSource) -> int | None:
     block = find_geometry_block(lines)
     return None if block is None else block.header_index
 
@@ -158,7 +175,7 @@ class OrcaBlock:
         return not self.closed
 
 
-def percent_directive_header(tokens: list[OrcaLineToken]) -> tuple[str, int] | None:
+def percent_directive_header(tokens: Sequence[OrcaLineToken]) -> tuple[str, int] | None:
     """``(block name, body start index)`` for a ``%name`` / ``% name`` line, else ``None``."""
 
     if not tokens or tokens[0].quoted:
@@ -190,21 +207,21 @@ def _closing_end_index(
 
 
 def _scan_block(
-    lines: Sequence[str],
+    tokens_by_line: Sequence[Sequence[OrcaLineToken]],
     *,
     name: str,
     start: int,
-    header_tokens: list[OrcaLineToken],
     body_start: int,
 ) -> OrcaBlock:
+    header_tokens = tokens_by_line[start]
     rows: list[OrcaBlockRow] = []
     end_index, nested_depth = _closing_end_index(header_tokens, body_start, 0)
     if header_tokens[body_start:end_index]:
         rows.append(OrcaBlockRow(start, tuple(header_tokens[body_start:end_index])))
     if end_index < len(header_tokens):
         return OrcaBlock(name, start, start, True, tuple(rows))
-    for index in range(start + 1, len(lines)):
-        tokens = orca_line_tokens(lines[index])
+    for index in range(start + 1, len(tokens_by_line)):
+        tokens = tokens_by_line[index]
         if not tokens:
             continue
         first = tokens[0]
@@ -217,29 +234,34 @@ def _scan_block(
             rows.append(OrcaBlockRow(index, tuple(tokens[:end_index])))
         if end_index < len(tokens):
             return OrcaBlock(name, start, index, True, tuple(rows))
-    return OrcaBlock(name, start, len(lines), False, tuple(rows))
+    return OrcaBlock(name, start, len(tokens_by_line), False, tuple(rows))
 
 
-def iter_blocks(lines: Sequence[str], block_name: str) -> Iterator[OrcaBlock]:
-    """Yield every ``%block_name`` block of ``lines`` in order (see :class:`OrcaBlock`)."""
+def _scan_blocks(tokens_by_line: Sequence[Sequence[OrcaLineToken]]) -> tuple[OrcaBlock, ...]:
+    """Every ``%name`` block in input order, in one pass (see :class:`OrcaBlock`).
 
-    name = block_name.lower()
+    A block's body never holds another ``%`` header (one cuts the block), so
+    one pass over all headers yields, per name, exactly the blocks a walk for
+    that name alone would find.
+    """
+
+    blocks: list[OrcaBlock] = []
     index = 0
-    while index < len(lines):
-        tokens = orca_line_tokens(lines[index])
-        header = percent_directive_header(tokens)
-        if header is None or header[0] != name:
+    while index < len(tokens_by_line):
+        header = percent_directive_header(tokens_by_line[index])
+        if header is None:
             index += 1
             continue
-        block = _scan_block(
-            lines,
-            name=name,
-            start=index,
-            header_tokens=tokens,
-            body_start=header[1],
-        )
-        yield block
+        block = _scan_block(tokens_by_line, name=header[0], start=index, body_start=header[1])
+        blocks.append(block)
         index = block.end + 1 if block.closed else max(block.end, index + 1)
+    return tuple(blocks)
+
+
+def iter_blocks(lines: InputSource, block_name: str) -> Iterator[OrcaBlock]:
+    """Yield every ``%block_name`` block of ``lines`` in order (see :class:`OrcaBlock`)."""
+
+    return iter(parse_input(lines).blocks_named(block_name))
 
 
 # The block keys that declare an operation: the %freq frequency switches, the
@@ -277,7 +299,7 @@ class BlockDeclaration:
     block_closed: bool
 
 
-def block_operation_declarations(lines: Sequence[str]) -> tuple[BlockDeclaration, ...]:
+def block_operation_declarations(lines: InputSource) -> tuple[BlockDeclaration, ...]:
     """Every operation key of every ``%freq``/``%geom``/``%method`` body, in input order per block.
 
     Blocks of one name come in input order and keys in body order, so a reader
@@ -285,9 +307,13 @@ def block_operation_declarations(lines: Sequence[str]) -> tuple[BlockDeclaration
     a block's closing ``end`` are not body tokens.
     """
 
+    return parse_input(lines).operation_declarations
+
+
+def _block_operation_declarations(parsed: ParsedInput) -> tuple[BlockDeclaration, ...]:
     declarations: list[BlockDeclaration] = []
     for name, keys in OPERATION_BLOCK_KEYS.items():
-        for block in iter_blocks(lines, name):
+        for block in parsed.blocks_named(name):
             located = [(row.line_index, token) for row in block.rows for token in row.tokens]
             tokens = [token for _line_index, token in located]
             for index, (line_index, token) in enumerate(located):
@@ -309,7 +335,7 @@ def block_operation_declarations(lines: Sequence[str]) -> tuple[BlockDeclaration
     return tuple(declarations)
 
 
-def find_block(lines: Sequence[str], block_name: str) -> OrcaBlock | None:
+def find_block(lines: InputSource, block_name: str) -> OrcaBlock | None:
     """Return the first ``%block_name`` block, or ``None``."""
 
     return next(iter_blocks(lines, block_name), None)
@@ -324,7 +350,7 @@ def find_block_range(lines: list[str], block_name: str) -> tuple[int, int, bool]
     return block.start, block.end, block.needs_close
 
 
-def scan_coordinate_rows(lines: Sequence[str]) -> list[str] | None:
+def scan_coordinate_rows(lines: InputSource) -> list[str] | None:
     """Coordinate texts of the ``%geom`` ``Scan`` sub-blocks; ``None`` when there is none.
 
     A ``Scan`` sub-block counts even when no coordinate in it can be read.
@@ -333,10 +359,17 @@ def scan_coordinate_rows(lines: Sequence[str]) -> list[str] | None:
     rule may not know every ORCA sub-block. ``Scan`` may share its row with a
     coordinate or its ``end``.
     """
+    rows = parse_input(lines).scan_coordinate_rows
+    return None if rows is None else list(rows)
+
+
+def _scan_coordinate_rows(
+    tokens_by_line: Sequence[Sequence[OrcaLineToken]],
+) -> tuple[str, ...] | None:
     rows: list[str] = []
     found = in_geom = in_scan = False
-    for line in lines:
-        tokens = orca_line_tokens(line)
+    for line_tokens in tokens_by_line:
+        tokens = line_tokens
         if not tokens:
             continue
         header = percent_directive_header(tokens)
@@ -360,7 +393,7 @@ def scan_coordinate_rows(lines: Sequence[str]) -> list[str] | None:
             tokens = tokens[:end_index]
         if tokens:
             rows.append(" ".join(token.value for token in tokens))
-    return rows if found else None
+    return tuple(rows) if found else None
 
 
 def _unquoted_word_index(tokens: Sequence[OrcaLineToken], word: str) -> int | None:
@@ -372,6 +405,73 @@ def _unquoted_word_index(tokens: Sequence[OrcaLineToken], word: str) -> int | No
         ),
         None,
     )
+
+
+@dataclass(frozen=True, eq=False)
+class ParsedInput:
+    """One version of an ORCA input, tokenized once.
+
+    ``lines`` are the input's lines as read and ``tokens`` the
+    :func:`~.input_syntax.orca_line_tokens` of each line, with their source
+    spans. The structural readings (route tokens and lines, ``%`` blocks,
+    the geometry section, the operation declarations, the ``Scan``
+    coordinates) are derived from those tokens on first use and kept, so every
+    reader of one input version shares one reading and keeps the source
+    positions it needs for diagnostics. A rewritten input is a new version:
+    parse it again, never patch this one.
+    """
+
+    lines: tuple[str, ...]
+    tokens: tuple[tuple[OrcaLineToken, ...], ...]
+
+    @cached_property
+    def route_tokens(self) -> tuple[tuple[OrcaLineToken, ...], ...]:
+        """Per line, the tokens after its ``!`` route marker (none for other lines)."""
+        return tuple(tuple(route_tokens_from(tokens)) for tokens in self.tokens)
+
+    @cached_property
+    def route_lines(self) -> tuple[str, ...]:
+        """Every canonical active route line (``orca_route_lines``)."""
+        return tuple(
+            route for tokens in self.tokens if (route := route_line_from_tokens(tokens)) is not None
+        )
+
+    @cached_property
+    def blocks(self) -> tuple[OrcaBlock, ...]:
+        """Every ``%name`` block in input order."""
+        return _scan_blocks(self.tokens)
+
+    def blocks_named(self, block_name: str) -> tuple[OrcaBlock, ...]:
+        name = block_name.lower()
+        return tuple(block for block in self.blocks if block.name == name)
+
+    @cached_property
+    def geometry(self) -> OrcaGeometryBlock | None:
+        return _find_geometry_block(self.lines, self.tokens)
+
+    @cached_property
+    def operation_declarations(self) -> tuple[BlockDeclaration, ...]:
+        return _block_operation_declarations(self)
+
+    @cached_property
+    def scan_coordinate_rows(self) -> tuple[str, ...] | None:
+        return _scan_coordinate_rows(self.tokens)
+
+    def scan_coordinate_rows_between(self, start: int, stop: int) -> tuple[str, ...] | None:
+        """:func:`scan_coordinate_rows` of the lines ``start`` to ``stop`` only."""
+        return _scan_coordinate_rows(self.tokens[start:stop])
+
+
+InputSource: TypeAlias = "Sequence[str] | ParsedInput"
+
+
+def parse_input(lines: InputSource) -> ParsedInput:
+    """Tokenize ``lines`` once; a :class:`ParsedInput` is returned unchanged."""
+
+    if isinstance(lines, ParsedInput):
+        return lines
+    source = tuple(lines)
+    return ParsedInput(source, tuple(tuple(orca_line_tokens(line)) for line in source))
 
 
 def set_block_key_value(lines: list[str], block_name: str, key: str, value: str) -> bool:

@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..completion_rules import RouteFacts
 from ..frequencies import ModeSummary, mode_summaries
 from ..parser import KCAL_PER_HARTREE
 from ..relaxed_scan import (
@@ -17,6 +16,7 @@ from ..relaxed_scan import (
     parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
 )
+from ..route_rules import RouteFacts
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,

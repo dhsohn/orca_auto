@@ -11,6 +11,7 @@ from orca_auto.core.confined_io import read_stable_regular_file, require_confine
 
 from .. import input_references
 from ..file_identity import file_content_identity
+from ..input_blocks import parse_input
 from ..input_validation import validate_supported_xyz_geometry_syntax
 from ..operation_facts import parse_operation_facts
 from ._confinement import (
@@ -267,9 +268,11 @@ def _verify_bound_snapshot_content(
     except UnicodeError as exc:
         raise ValueError("Queued ORCA bound selected input must be UTF-8 text") from exc
     selected_lines = selected_text.splitlines()
-    validate_supported_xyz_geometry_syntax(selected_lines, label="Queued ORCA bound input")
-    bound_references = input_references.scan_orca_file_references(selected_lines)
-    routes = _runtime_outputs(parse_operation_facts(selected_lines, inp_path=selected))
+    # The bound input is its own version: parsed once here, for both checks.
+    parsed_selected = parse_input(selected_lines)
+    validate_supported_xyz_geometry_syntax(parsed_selected, label="Queued ORCA bound input")
+    bound_references = input_references.scan_orca_file_references(parsed_selected)
+    routes = _runtime_outputs(parse_operation_facts(parsed_selected, inp_path=selected))
     for role, _descriptor, source_path in verified.verified_dependencies:
         if role == verified.recovery_checkpoint_role:
             continue
@@ -298,7 +301,7 @@ def _verify_bound_snapshot_content(
     ):
         raise ValueError("Queued ORCA dependency roles are not in canonical source path order")
     if verified.mutable_roles and (
-        _inline_geometry_atom_count(selected_text) is None
+        _inline_geometry_atom_count(parsed_selected) is None
         or any(reference.kind == "geometry" for reference in bound_references)
     ):
         raise ValueError("Queued ORCA mutable same-stem XYZ is not bound as inline geometry")

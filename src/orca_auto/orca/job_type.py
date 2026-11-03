@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .completion_rules import FREQ_ROUTE_RE, TS_ROUTE_RE, is_optimization_route
 from .input_syntax import file_route_lines
+from .route_rules import FREQ_ROUTE_RE, TS_ROUTE_RE, is_optimization_route
 
 SP_RE = re.compile(r"\b(SP|Energy)\b", re.IGNORECASE)
 FREQ_RE = FREQ_ROUTE_RE

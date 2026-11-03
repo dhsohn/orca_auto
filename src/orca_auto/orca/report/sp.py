@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import RouteFacts
 from ..evidence import (
     OrcaEvidenceError,
     collect_structure_evidence,
@@ -24,6 +23,7 @@ from ..evidence import (
 )
 from ..frequencies import FrequencyAnalysis, ModeSummary, mode_summaries
 from ..parser import OrcaResult
+from ..route_rules import RouteFacts
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,

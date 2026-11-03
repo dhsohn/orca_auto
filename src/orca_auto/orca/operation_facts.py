@@ -14,6 +14,9 @@ Consumers turn these facts into their own decisions:
   :func:`.completion_rules.geometry_scope`), the queue Detail and the coarse
   ``job_type`` keep their own policies over the same route facts.
 
+Every fact reads one :class:`~.input_blocks.ParsedInput` of the input version
+it is given, so the input is tokenized once per call.
+
 A requested frequency (``route.requests_frequency``) and frequency evidence
 that completion requires (a TS search always needs it) are deliberately
 separate: the first is a fact here, the second is completion policy.
@@ -24,19 +27,12 @@ the same inputs.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .completion_rules import (
-    IRC_ROUTE_RE,
-    OPT_ROUTE_RE,
-    PARTIAL_OPT_ROUTE_RE,
-    RouteFacts,
-    route_facts,
-)
-from .input_blocks import block_operation_declarations, iter_blocks
-from .input_syntax import orca_route_tokens, value_token_index
+from .input_blocks import InputSource, ParsedInput, parse_input
+from .input_syntax import value_token_index
+from .route_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, PARTIAL_OPT_ROUTE_RE, RouteFacts, route_facts
 
 NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
 # GOAT global optimizations rewrite <basename>.xyz and <basename>.engrad.
@@ -73,20 +69,19 @@ class OperationFacts:
     neb_preopt_ends: bool  # %neb preoptimizes the end points (unreadable counts as on)
 
 
-def parse_operation_facts(lines: Sequence[str], *, inp_path: Path) -> OperationFacts:
+def parse_operation_facts(lines: InputSource, *, inp_path: Path) -> OperationFacts:
     """Read the operation facts of the input ``lines`` read from ``inp_path``.
 
-    ``inp_path`` only names the input in :class:`RouteFacts`; nothing is read
-    from it.
+    ``lines`` may be the input's lines or its :class:`~.input_blocks.ParsedInput`;
+    every fact here reads that one parse. ``inp_path`` only names the input in
+    :class:`RouteFacts`; nothing is read from it.
     """
 
-    lines = list(lines)
-    route = route_facts(inp_path, lines=lines)
+    parsed = parse_input(lines)
+    route = route_facts(inp_path, lines=parsed)
     routes = " ".join(route.route_lines)
     declarations = [
-        declaration
-        for declaration in block_operation_declarations(lines)
-        if not declaration.key_quoted
+        declaration for declaration in parsed.operation_declarations if not declaration.key_quoted
     ]
     return OperationFacts(
         route=route,
@@ -98,16 +93,16 @@ def parse_operation_facts(lines: Sequence[str], *, inp_path: Path) -> OperationF
             if declaration.block == "method"
         ),
         declares_ts_search=any(declaration.block == "geom" for declaration in declarations),
-        route_writes_engrad=_route_writes_engrad(lines),
+        route_writes_engrad=_route_writes_engrad(parsed),
         neb_route=NEB_ROUTE_RE.search(routes) is not None,
         goat_route=GOAT_ROUTE_RE.search(routes) is not None,
-        neb_preopt_ends=_neb_preoptimizes_end_points(lines),
+        neb_preopt_ends=_neb_preoptimizes_end_points(parsed),
     )
 
 
-def _route_writes_engrad(lines: list[str]) -> bool:
-    for line in lines:
-        for token in orca_route_tokens(line):
+def _route_writes_engrad(parsed: ParsedInput) -> bool:
+    for tokens in parsed.route_tokens:
+        for token in tokens:
             if token.quoted:
                 continue
             # Whole keywords only: InterpOpt, RigidBodyOpt and the MD-driven
@@ -120,10 +115,10 @@ def _route_writes_engrad(lines: list[str]) -> bool:
     return False
 
 
-def _neb_preoptimizes_end_points(lines: list[str]) -> bool:
+def _neb_preoptimizes_end_points(parsed: ParsedInput) -> bool:
     """Whether ``%neb`` enables end-point preoptimization; an unreadable value counts as on."""
 
-    for block in iter_blocks(lines, "neb"):
+    for block in parsed.blocks_named("neb"):
         tokens = [token for row in block.rows for token in row.tokens]
         for index, token in enumerate(tokens):
             if token.quoted:

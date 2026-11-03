@@ -9,7 +9,7 @@ from pathlib import Path
 
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS
 
-from ..input_blocks import GRADIENT_RUN_TYPES, find_geometry_block
+from ..input_blocks import GRADIENT_RUN_TYPES, ParsedInput, find_geometry_block
 from ..operation_facts import OperationFacts
 from ._models import _RouteOutputs
 
@@ -19,14 +19,14 @@ _XYZ_ATOM_LABEL_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_:+().{}\[\]-]*\Z")
 _XYZ_COORDINATE_RE = re.compile(r"\A[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?\Z")
 
 
-def _inline_geometry_atom_count(selected_text: str) -> int | None:
+def _inline_geometry_atom_count(selected: ParsedInput) -> int | None:
     """Atom rows of the inline ``* xyz`` block; ``None`` for ``xyzfile`` or no geometry.
 
     Rows come from the shared comment-aware geometry scanner, so a comment-only
     line inside the block is not an atom and cannot trip the admission limits.
     """
 
-    block = find_geometry_block(selected_text.splitlines())
+    block = selected.geometry
     if block is None or block.kind != "xyz":
         return None
     atom_count = len(block.atom_rows)

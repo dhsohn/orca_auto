@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import RouteFacts, is_constrained_ts_search
+from ..completion_rules import is_constrained_ts_search
 from ..evidence import (
     CONSTRAINED_TS_SEARCH_NOTE,
     final_out_path,
@@ -20,6 +20,7 @@ from ..frequencies import ModeSummary, mode_summaries
 from ..out_analyzer import IRC_PATH_FOUND_NEEDLES, IRC_PATH_SUMMARY_RE
 from ..output_status import is_execution_output_line, iter_output_lines
 from ..parser import OrcaResult
+from ..route_rules import RouteFacts
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,

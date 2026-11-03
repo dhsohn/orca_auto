@@ -22,7 +22,7 @@ from orca_auto.core.artifacts import EXECUTION_PROVENANCE_FILE, MAX_RUN_ARTIFACT
 from orca_auto.core.confined_io import read_confined_text, require_confined_regular_file
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import copy_dict_or_empty as _dict
-from orca_auto.orca.completion_rules import completion_mode, route_facts
+from orca_auto.orca.completion_rules import completion_mode
 from orca_auto.orca.generation_validation import is_retired_generation_marker
 from orca_auto.orca.machine_observation import (
     ARTIFACT_ROLES,
@@ -41,6 +41,7 @@ from orca_auto.orca.machine_observation import (
     report_result_fields,
 )
 from orca_auto.orca.out_analyzer import analyze_output
+from orca_auto.orca.route_rules import route_facts
 from orca_auto.orca.state_reading import (
     _execution_provenance,
     _selected_input_text,

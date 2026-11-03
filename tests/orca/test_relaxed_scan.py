@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.relaxed_scan import (
     ScanCoordinateSpec,
     first_scan_coordinate_spec,
     parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
 )
+from orca_auto.orca.route_rules import route_facts
 
 
 def test_parse_scan_actual_surface_skips_lines_without_two_floats(tmp_path: Path) -> None:

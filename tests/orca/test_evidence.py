@@ -11,11 +11,11 @@ from typing import Any, Self
 import pytest
 
 from orca_auto.orca import evidence
-from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.frequencies import parse_frequency_analysis_text
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
+from orca_auto.orca.route_rules import route_facts
 from tests.orca_output_helpers import MINIMAL_TS_FREQUENCIES
 
 _ENERGY = "FINAL SINGLE POINT ENERGY -1.0\n"

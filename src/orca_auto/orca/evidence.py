@@ -11,11 +11,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from .completion_rules import RouteFacts, geometry_scope
+from .completion_rules import geometry_scope
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis_text
 from .orca_opt_progress import OptProgress, parse_opt_progress_text
 from .parser import OrcaResult, parse_orca_output_text
 from .parser.io import read_orca_text
+from .route_rules import RouteFacts
 from .statuses import RunStatus
 
 
