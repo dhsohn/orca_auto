@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.orca.completion_rules import CompletionMode, detect_completion_mode, route_facts
+from orca_auto.orca.completion_rules import CompletionMode, detect_completion_mode
+from orca_auto.orca.route_rules import route_facts
 
 
 def _detect(tmp_path: Path, text: str) -> CompletionMode:

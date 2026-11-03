@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.evidence import (
     OrcaEvidenceError,
     OrcaStructureEvidence,
@@ -23,6 +22,7 @@ from orca_auto.orca.report.si import (
     si_block_path,
     write_si_block,
 )
+from orca_auto.orca.route_rules import route_facts
 from tests.engine_artifact_helpers import report_generation_target
 from tests.orca_output_helpers import frequency_section, si_out_text
 

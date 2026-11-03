@@ -103,7 +103,12 @@ def render_orca_input(lines: Sequence[str]) -> str:
 def active_orca_line_text(line: str) -> str:
     """Return active ORCA tokens with closed ``# ... #`` comments removed."""
 
-    tokens = orca_line_tokens(line)
+    return active_text_from_tokens(line, orca_line_tokens(line))
+
+
+def active_text_from_tokens(line: str, tokens: Sequence[OrcaLineToken]) -> str:
+    """:func:`active_orca_line_text` of ``line`` from its already-read ``tokens``."""
+
     if not tokens:
         return ""
     prefix = line[: tokens[0].start]
@@ -114,10 +119,16 @@ def active_orca_line_text(line: str) -> str:
 def active_orca_directive_text(line: str) -> str:
     """Return canonical active text for a percent-directive line."""
 
+    return active_directive_text_from_tokens(line, orca_line_tokens(line))
+
+
+def active_directive_text_from_tokens(line: str, tokens: Sequence[OrcaLineToken]) -> str:
+    """:func:`active_orca_directive_text` of ``line`` from its already-read ``tokens``."""
+
     return re.sub(
         r"\A(?P<indent>\s*)%\s+(?=[A-Za-z])",
         r"\g<indent>%",
-        active_orca_line_text(line),
+        active_text_from_tokens(line, tokens),
         count=1,
     )
 
@@ -125,20 +136,21 @@ def active_orca_directive_text(line: str) -> str:
 def orca_route_tokens(line: str) -> list[OrcaLineToken]:
     """Return tokens after the first active ORCA ``!`` route marker."""
 
-    return _route_tokens(orca_line_tokens(line))
+    return route_tokens_from(orca_line_tokens(line))
 
 
-def _route_tokens(tokens: list[OrcaLineToken]) -> list[OrcaLineToken]:
+def route_tokens_from(tokens: Sequence[OrcaLineToken]) -> list[OrcaLineToken]:
+    """:func:`orca_route_tokens` of a line from its already-read ``tokens``."""
     if not tokens:
         return []
     first = tokens[0]
     if first.value == "!":
-        return tokens[1:]
+        return list(tokens[1:])
     if not first.value.startswith("!"):
         return []
     compact_value = first.value[1:]
     if not compact_value:
-        return tokens[1:]
+        return list(tokens[1:])
     return [
         OrcaLineToken(
             compact_value,
@@ -153,10 +165,15 @@ def _route_tokens(tokens: list[OrcaLineToken]) -> list[OrcaLineToken]:
 def orca_route_line(line: str) -> str | None:
     """Return one canonical active route line, or ``None`` for a non-route line."""
 
-    tokens = orca_line_tokens(line)
+    return route_line_from_tokens(orca_line_tokens(line))
+
+
+def route_line_from_tokens(tokens: Sequence[OrcaLineToken]) -> str | None:
+    """:func:`orca_route_line` of a line from its already-read ``tokens``."""
+
     if not tokens or not tokens[0].value.startswith("!"):
         return None
-    suffix = " ".join(token.value for token in _route_tokens(tokens))
+    suffix = " ".join(token.value for token in route_tokens_from(tokens))
     return f"! {suffix}".rstrip()
 
 

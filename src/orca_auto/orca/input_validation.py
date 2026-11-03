@@ -14,11 +14,12 @@ import re
 from .input_blocks import (
     GRADIENT_RUN_TYPES,
     SINGLE_POINT_RUN_TYPES,
+    InputSource,
     geometry_header_match,
-    iter_blocks,
+    parse_input,
 )
 from .input_references import orca_moinp_references
-from .input_syntax import active_orca_directive_text, orca_line_tokens, orca_route_tokens
+from .input_syntax import active_directive_text_from_tokens
 from .operation_facts import OperationFacts
 from .resource_directives import MAXCORE_RE, NPROCS_RE
 
@@ -37,30 +38,29 @@ SUPPORTED_METHOD_RUN_TYPES = SINGLE_POINT_RUN_TYPES | GRADIENT_RUN_TYPES
 
 
 def validate_supported_xyz_geometry_syntax(
-    lines: list[str],
+    lines: InputSource,
     *,
     label: str,
 ) -> None:
     """Fail closed for geometry forms whose atom count and dependencies are not bound."""
 
-    validate_unambiguous_orca_directives(lines, label=label)
+    parsed = parse_input(lines)
+    validate_unambiguous_orca_directives(parsed, label=label)
     geometry_block_count = 0
     inline_geometry_open = False
-    for line in lines:
+    for line, tokens, route_tokens in zip(
+        parsed.lines, parsed.tokens, parsed.route_tokens, strict=True
+    ):
         stripped = line.strip()
-        tokens = orca_line_tokens(line)
         if not tokens:
             continue
         first_lower = tokens[0].value.lower()
-        if any(
-            not token.quoted and token.value.lower() == "scants"
-            for token in orca_route_tokens(line)
-        ):
+        if any(not token.quoted and token.value.lower() == "scants" for token in route_tokens):
             raise ValueError(f"{label} uses unsupported ORCA route keyword ScanTS")
         if any(
             token.value.lower() in {"compound", "compound_file"}
             or token.value.lower().startswith("%compound")
-            for token in orca_route_tokens(line)
+            for token in route_tokens
             if not token.quoted
         ):
             raise ValueError(f"{label} uses an unsupported multiple-job geometry construct")
@@ -93,7 +93,7 @@ def validate_supported_xyz_geometry_syntax(
             # as the binding that reads the geometry does. Its active text
             # drops quotes, so a quoted keyword, charge or multiplicity stays
             # refused here; a quoted xyzfile path is the fifth token.
-            match = geometry_header_match(line)
+            match = geometry_header_match(line, tokens)
             if (
                 match is None
                 or match.group(1).lower() not in {"xyz", "xyzfile"}
@@ -177,27 +177,30 @@ def validate_consistent_operation(facts: OperationFacts, *, label: str) -> None:
         )
 
 
-def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> None:
+def validate_unambiguous_orca_directives(lines: InputSource, *, label: str) -> None:
     """Reject duplicate resource/checkpoint directives with unclear ORCA precedence."""
 
+    parsed = parse_input(lines)
     maxcore_count = 0
-    moinp_count = len(orca_moinp_references(lines))
-    # ``iter_blocks`` owns the block-termination rule, so the ``nprocs`` count
-    # covers exactly the body rows that ``read_nprocs`` reads: tokens after a
-    # closing ``end`` (which ORCA does not parse as %pal content) are ignored,
-    # while duplicate blocks and duplicate ``nprocs`` rows stay rejected.
-    pal_blocks = list(iter_blocks(lines, "pal"))
+    moinp_count = len(orca_moinp_references(parsed))
+    # The shared block scan owns the block-termination rule, so the ``nprocs``
+    # count covers exactly the body rows that ``read_nprocs`` reads: tokens
+    # after a closing ``end`` (which ORCA does not parse as %pal content) are
+    # ignored, while duplicate blocks and duplicate ``nprocs`` rows stay rejected.
+    pal_blocks = parsed.blocks_named("pal")
     pal_block_count = len(pal_blocks)
     pal_nprocs_count = sum(
         len(NPROCS_RE.findall(row.text)) for block in pal_blocks for row in block.rows
     )
     pal_route_count = 0
-    for line in lines:
-        if MAXCORE_RE.match(active_orca_directive_text(line)):
+    for line, tokens, route_tokens in zip(
+        parsed.lines, parsed.tokens, parsed.route_tokens, strict=True
+    ):
+        if MAXCORE_RE.match(active_directive_text_from_tokens(line, tokens)):
             maxcore_count += 1
         pal_route_count += sum(
             1
-            for token in orca_route_tokens(line)
+            for token in route_tokens
             if not token.quoted and PAL_ROUTE_TOKEN_RE.fullmatch(token.value)
         )
 

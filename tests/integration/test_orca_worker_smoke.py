@@ -19,7 +19,6 @@ from orca_auto.core.engine_scratch._policy import (
 )
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
-from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.config import load_config
 from orca_auto.orca.evidence import collect_structure_evidence, parsed_frequency_analysis
 from orca_auto.orca.machine_observation import report_json_path
@@ -34,6 +33,7 @@ from orca_auto.orca.queue.entries import (
 )
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.report.composer import collect_html_report_parts
+from orca_auto.orca.route_rules import route_facts
 from orca_auto.orca.state_reading import load_state
 from tests.conftest import write_fake_orca
 from tests.contracts.report_verifier import load_report_json

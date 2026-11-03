@@ -220,6 +220,19 @@ forbidden_modules = [
     "orca_auto.orca.scratch",
 ]
 
+# What an input requests is read as facts below every policy over it: the route
+# facts (route_rules) and the operation facts built on them never import the
+# completion policy, the queue Detail or submission validation that consume them.
+[[tool.importlinter.contracts]]
+name = "ORCA input facts stay below completion, Detail and validation policy"
+type = "layers"
+layers = [
+    "orca_auto.orca.completion_rules | orca_auto.orca.queue_detail | orca_auto.orca.input_validation",
+    "orca_auto.orca.operation_facts",
+    "orca_auto.orca.route_rules",
+    "orca_auto.orca.input_blocks",
+]
+
 # The top-level CLI modules are the outermost layer: they compose the domain
 # packages, and no domain package may reach back up into them. Config discovery
 # lives in core.

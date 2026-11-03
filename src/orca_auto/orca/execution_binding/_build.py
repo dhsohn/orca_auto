@@ -16,6 +16,7 @@ from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMI
 
 from .. import input_references
 from ..file_identity import file_content_identity
+from ..input_blocks import parse_input
 from ..input_references import orca_input_requests_moread, orca_moinp_references
 from ..input_validation import (
     validate_consistent_operation,
@@ -94,16 +95,18 @@ def _load_selected_snapshot_input(
         selected_text = normalized_selected_payload.decode("utf-8", errors="strict")
     except UnicodeError as exc:
         raise ValueError("ORCA selected input must be UTF-8 text") from exc
-    inline_atom_count = _inline_geometry_atom_count(selected_text)
     lines = selected_text.splitlines()
-    if resource_request_from_lines(lines) != dict(resource_request):
+    # One parse of the normalized input serves every check of this version.
+    parsed = parse_input(lines)
+    inline_atom_count = _inline_geometry_atom_count(parsed)
+    if resource_request_from_lines(parsed) != dict(resource_request):
         raise ValueError("ORCA normalized selected input does not match its resource request")
-    validate_supported_xyz_geometry_syntax(lines, label="ORCA selected input")
-    operation = parse_operation_facts(lines, inp_path=source_selected)
+    validate_supported_xyz_geometry_syntax(parsed, label="ORCA selected input")
+    operation = parse_operation_facts(parsed, inp_path=source_selected)
     validate_supported_method_run_type(operation, label="ORCA selected input")
     validate_consistent_operation(operation, label="ORCA selected input")
-    requests_moread = orca_input_requests_moread(lines)
-    if requests_moread and not orca_moinp_references(lines):
+    requests_moread = orca_input_requests_moread(parsed)
+    if requests_moread and not orca_moinp_references(parsed):
         raise ValueError(
             "ORCA MORead requires an explicit MOInp file so the checkpoint can be "
             "bound into the execution snapshot"
@@ -122,7 +125,7 @@ def _load_selected_snapshot_input(
         source_inputs=source_inputs,
         selected_payload=selected_payload,
         lines=lines,
-        references=input_references.scan_orca_file_references(lines),
+        references=input_references.scan_orca_file_references(parsed),
         requests_moread=requests_moread,
         routes=routes,
         consumed_bytes=consumed_bytes,

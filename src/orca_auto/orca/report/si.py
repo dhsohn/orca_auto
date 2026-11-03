@@ -24,7 +24,6 @@ from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
 from orca_auto.core.confined_io import atomic_write_confined_bytes
 
 from .. import evidence
-from ..completion_rules import RouteFacts, route_facts
 from ..frequencies import ModeSummary, mode_summaries
 from ..machine_observation import (
     REPORT_GENERATION_FAILED,
@@ -33,6 +32,7 @@ from ..machine_observation import (
     record_report_generation,
 )
 from ..parser import OrcaResult
+from ..route_rules import RouteFacts, route_facts
 from ..statuses import RunStatus
 from .irc import parse_irc_output
 from .path import IrcPathPoint, path_endpoints, path_marker_point

@@ -18,8 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .input_blocks import (
+    InputSource,
+    ParsedInput,
     find_geometry_start,
-    iter_blocks,
+    parse_input,
     percent_directive_header,
     xyzfile_reference_token,
 )
@@ -27,8 +29,6 @@ from .input_syntax import (
     OrcaLineToken,
     active_orca_directive_text,
     format_relative_or_absolute,
-    orca_line_tokens,
-    orca_route_tokens,
     quote_orca_path,
     value_token_index,
 )
@@ -176,12 +176,12 @@ def checkpoint_file_looks_intact(path: Path) -> bool:
     return any(head)
 
 
-def _scf_body_token_rows(lines: list[str]) -> list[tuple[int, list[OrcaLineToken]]]:
+def _scf_body_token_rows(parsed: ParsedInput) -> list[tuple[int, list[OrcaLineToken]]]:
     """Return active ``%scf`` body tokens per row (see :func:`input_blocks.iter_blocks`)."""
 
     return [
         (row.line_index, list(row.tokens))
-        for block in iter_blocks(lines, "scf")
+        for block in parsed.blocks_named("scf")
         for row in block.rows
     ]
 
@@ -210,18 +210,20 @@ def _value_reference(
     )
 
 
-def orca_moinp_references(lines: list[str]) -> list[OrcaFileReference]:
+def orca_moinp_references(lines: InputSource) -> list[OrcaFileReference]:
     """Return every semantic top-level or ``%scf`` ``MOInp`` occurrence."""
 
+    parsed = parse_input(lines)
+    lines = parsed.lines
     references: list[OrcaFileReference] = []
-    for line_index, line in enumerate(lines):
-        tokens = orca_line_tokens(line)
+    for line_index, (line, line_tokens) in enumerate(zip(lines, parsed.tokens, strict=True)):
+        tokens = list(line_tokens)
         header = percent_directive_header(tokens)
         if header is None or header[0] != "moinp":
             continue
         value_index = value_token_index(tokens, header[1] - 1)
         references.append(_value_reference(line_index, line, tokens, value_index, "auxiliary"))
-    for line_index, body_tokens in _scf_body_token_rows(lines):
+    for line_index, body_tokens in _scf_body_token_rows(parsed):
         for token_index, token in enumerate(body_tokens):
             if token.quoted or token.value.lower() != "moinp":
                 continue
@@ -234,20 +236,21 @@ def orca_moinp_references(lines: list[str]) -> list[OrcaFileReference]:
     return sorted(references, key=lambda reference: (reference.line_index, reference.start))
 
 
-def orca_input_requests_moread(lines: list[str]) -> bool:
+def orca_input_requests_moread(lines: InputSource) -> bool:
     """Return whether active route or ``%scf`` semantics request orbital reuse."""
 
-    if orca_moinp_references(lines):
+    parsed = parse_input(lines)
+    if orca_moinp_references(parsed):
         return True
     if any(
         not token.quoted and token.value.lower() == "moread"
-        for line in lines
-        for token in orca_route_tokens(line)
+        for route_tokens in parsed.route_tokens
+        for token in route_tokens
     ):
         return True
     return any(
         not token.quoted and token.value.lower() == "moread"
-        for _line_index, tokens in _scf_body_token_rows(lines)
+        for _line_index, tokens in _scf_body_token_rows(parsed)
         for token in tokens
     )
 
@@ -327,7 +330,7 @@ def _require_output_basename(value: str, line: str) -> None:
         raise ValueError(f"ORCA output file name must be a plain basename: {line.strip()}")
 
 
-def _output_file_name_spans(lines: list[str]) -> set[tuple[int, int, int]]:
+def _output_file_name_spans(parsed: ParsedInput) -> set[tuple[int, int, int]]:
     """``(line, start, end)`` of quoted names ORCA writes into its working directory.
 
     Every quoted ``%plots`` value is a file argument (``MO("orb.cube",1,0);``,
@@ -336,8 +339,9 @@ def _output_file_name_spans(lines: list[str]) -> set[tuple[int, int, int]]:
     ORCA cannot write outside the generation directory.
     """
 
+    lines = parsed.lines
     spans: set[tuple[int, int, int]] = set()
-    for block in iter_blocks(lines, "plots"):
+    for block in parsed.blocks_named("plots"):
         for row in block.rows:
             line = lines[row.line_index]
             for token in row.tokens:
@@ -351,7 +355,7 @@ def _output_file_name_spans(lines: list[str]) -> set[tuple[int, int, int]]:
                     raise ValueError(
                         f"ORCA output file name must be a plain basename: {line.strip()}"
                     )
-    for block in iter_blocks(lines, "md"):
+    for block in parsed.blocks_named("md"):
         for row in block.rows:
             tokens = row.tokens
             for key_index, key in enumerate(tokens):
@@ -392,7 +396,7 @@ def _classify_token(
     return keyword, None
 
 
-def scan_orca_file_references(lines: list[str]) -> list[OrcaFileReference]:
+def scan_orca_file_references(lines: InputSource) -> list[OrcaFileReference]:
     """Every external file reference of an ORCA input, or a fail-closed error.
 
     Execution binding materializes each returned reference in the generation
@@ -408,15 +412,16 @@ def scan_orca_file_references(lines: list[str]) -> list[OrcaFileReference]:
     plain basenames, malformed references, and more than
     ``MAX_ORCA_INPUT_REFERENCES`` references.
     """
-    moinp_references = orca_moinp_references(lines)
-    output_name_spans = _output_file_name_spans(lines)
+    parsed = parse_input(lines)
+    moinp_references = orca_moinp_references(parsed)
+    output_name_spans = _output_file_name_spans(parsed)
     moinp_by_line: dict[int, list[OrcaFileReference]] = {}
     for reference in moinp_references:
         moinp_by_line.setdefault(reference.line_index, []).append(reference)
     references: list[OrcaFileReference] = []
     in_neb_block = False
-    for line_index, line in enumerate(lines):
-        tokens = orca_line_tokens(line)
+    for line_index, (line, line_tokens) in enumerate(zip(parsed.lines, parsed.tokens, strict=True)):
+        tokens = list(line_tokens)
         semantic_moinp_value_indices = {
             token_index
             for token_index, token in enumerate(tokens)

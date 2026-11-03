@@ -14,12 +14,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from orca_auto.orca.completion_rules import completion_mode, geometry_scope, route_facts
+from orca_auto.orca.completion_rules import completion_mode, geometry_scope
 from orca_auto.orca.execution_binding._inputs import _runtime_outputs
 from orca_auto.orca.input_syntax import orca_route_lines
 from orca_auto.orca.job_type import job_type_from_routes
 from orca_auto.orca.operation_facts import parse_operation_facts
 from orca_auto.orca.queue_detail import queue_detail_kind
+from orca_auto.orca.route_rules import route_facts
 from tests.conftest import build_submitted_snapshot, write_fake_orca
 from tests.contracts.normalize import assert_pin
 

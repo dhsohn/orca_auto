@@ -25,10 +25,10 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.evidence import collect_structure_evidence, parsed_final_output
 from orca_auto.orca.frequencies import mode_summaries
 from orca_auto.orca.report.si import render_si_block_md
+from orca_auto.orca.route_rules import route_facts
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "orca_6_1_1"
 

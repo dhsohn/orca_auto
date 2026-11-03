@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import RouteFacts, is_constrained_ts_search, route_facts
+from ..completion_rules import is_constrained_ts_search
 from ..evidence import CONSTRAINED_TS_SEARCH_NOTE, final_out_name, structure_kind
+from ..route_rules import RouteFacts, route_facts
 from .attempts import attempt_dicts, duration_text
 from .irc import IrcReportData, collect_irc_report_data, irc_report_component
 from .neb import NebReportData, collect_neb_report_data, neb_report_component
