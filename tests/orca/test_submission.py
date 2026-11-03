@@ -1250,3 +1250,46 @@ def test_the_molecule_key_is_one_value_from_submission_to_settlement_and_rebuild
         expected,
         expected,
     )
+
+
+def test_a_moved_job_keeps_its_directory_fallback_key_on_a_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The input's name differs from its directory's, and its formula cannot
+    # be read, so the key is the directory fallback. After the job moves, the
+    # recorded input path is gone; a rebuild from scratch still falls back to
+    # the original directory's name, never the input file's stem.
+    from orca_auto.core.indexing.store import JOB_LOCATION_INDEX_FILE_NAME
+    from orca_auto.orca.job_locations import (
+        list_job_location_records,
+        rebuild_job_location_records,
+    )
+    from orca_auto.orca.queue.job_records import upsert_terminal_job_record
+    from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
+
+    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    (reaction_dir / "rxn.inp").unlink()
+    (reaction_dir / "calc.inp").write_text(
+        "! SP\n* xyz 0 1\nH .0 .0 .0\nH .0 .0 .74\n*\n", encoding="utf-8"
+    )
+    cfg = load_config(args.config)
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    assert result.status == "submitted", result.stderr
+    [entry] = queue_adapter.list_queue(tmp_path)
+    record_cancelled_run_state(
+        reaction_dir, fallback_job_id=entry.task_id, selected_inp=entry.metadata["selected_inp"]
+    )
+    assert upsert_terminal_job_record(
+        cfg, str(reaction_dir), fallback_job_id=entry.task_id, expected_job_id=entry.task_id
+    )
+    moved = tmp_path / "archived_job"
+    reaction_dir.rename(moved)
+    (tmp_path / JOB_LOCATION_INDEX_FILE_NAME).unlink()
+
+    rebuild_job_location_records(tmp_path, apply=True)
+
+    [rebuilt] = list_job_location_records(tmp_path)
+    assert entry.metadata["molecule_key"] == "rxn"
+    assert rebuilt.original_run_dir == str(reaction_dir)
+    assert rebuilt.latest_known_path == str(moved)
+    assert rebuilt.molecule_key == "rxn"

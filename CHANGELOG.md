@@ -10,6 +10,22 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- A job keyed by its directory name keeps that key when it is moved and
+  the index is rebuilt from scratch. With its recorded input path gone, the
+  rebuild fell back to the input file's stem (`calc`) instead of the job
+  directory's name (`rxn`); it now uses the same directory fallback as
+  submission and settlement.
+- `queue.json`, `.admission/admission_slots.json` and `job_locations.json`
+  are now read as regular files only. A FIFO in their place made every
+  queue, admission and index read wait forever while holding that store's
+  lock; it is now refused at once. A dangling symlink was read as an empty
+  store; it is now that store's corrupt error (`queue_store_corrupt`, an
+  admission blocker, a corrupt index), as a non-UTF-8 file now is too. A
+  missing file is still an empty store.
+- A state save now refuses a dangling `job_state.json` symlink inside the
+  execution generation, as it already refused an unreadable generation
+  state. It took the link for "no state yet" and rewrote both the generation
+  and the root state.
 - A small `job_state.json` or `machine.json` holding an integer longer than
   Python's integer-parsing limit (4,300 digits) now reads as unusable.
   The parser's plain `ValueError` escaped the shared JSON reader and stopped

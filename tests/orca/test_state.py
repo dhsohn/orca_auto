@@ -776,6 +776,27 @@ def test_unreadable_generation_refuses_both_state_writes(tmp_path: Path) -> None
     assert generation_path.read_text() == "broken generation state"
 
 
+def test_a_dangling_generation_state_link_refuses_both_state_writes(tmp_path: Path) -> None:
+    # A dangling link does not exist(), but it is not an absent state: the
+    # writer cannot classify it, so neither the generation nor the root is
+    # written.
+    generation, state = _bound_state(tmp_path, token="execution-state-owner-0015")
+    save_state(tmp_path, state)
+    root_path = tmp_path / "job_state.json"
+    before = root_path.read_bytes()
+    generation_path = generation / "job_state.json"
+    generation_path.unlink()
+    generation_path.symlink_to(generation / "gone.json")
+    state["status"] = "running"
+
+    with pytest.raises(ValueError, match="unreadable ORCA generation state"):
+        save_state(tmp_path, state)
+
+    assert root_path.read_bytes() == before
+    assert generation_path.is_symlink()
+    assert os.readlink(generation_path) == str(generation / "gone.json")
+
+
 def test_historical_generation_notification_fields_are_not_rewritten(tmp_path: Path) -> None:
     generation, state = _bound_state(tmp_path, token="execution-state-owner-0006")
     state_module.finalize_state(

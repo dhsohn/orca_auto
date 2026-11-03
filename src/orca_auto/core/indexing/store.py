@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from ..utils.coercion import normalize_text, safe_int
+from ..utils.json_artifacts import load_json_list_file
 from ..utils.lock import file_lock
 from ..utils.persistence import (
     atomic_write_json,
-    load_json_list_file,
     resolve_root_path,
 )
 from .location import JobLocationRecord
