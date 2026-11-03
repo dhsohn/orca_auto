@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -127,6 +128,41 @@ def test_mutate_entries_compensates_row_when_post_commit_contract_rejects(
     assert error_info.value.compensation_succeeded is True
     assert error_info.value.compensation_error is None
     assert store.list_queue(tmp_path) == []
+
+
+@pytest.mark.parametrize("change", ["flat_value", "nested_value_through_shallow_copy"])
+def test_post_commit_rejection_restores_nested_metadata_changed_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    change: str,
+) -> None:
+    # A mutator that copies a row's metadata shallowly and edits a nested dict
+    # changes the loaded original too; "restored" must still mean the saved
+    # rows equal the rows before the mutation.
+    _install_deterministic_helpers(monkeypatch)
+    nested = {"admission_deferral": {"reason": "original", "until": "2026-01-01T00:00:00Z"}}
+    seeded = persistence.entry_from_dict(_entry("q-1", task_id="task-1"))
+    seeded = replace(seeded, metadata={**seeded.metadata, **nested, "flat": "original"})
+    persistence.save_entries(tmp_path, [seeded])
+    before = store.list_queue(tmp_path)
+
+    def edit(entries: list[QueueEntry]) -> tuple[None, bool]:
+        metadata = dict(entries[0].metadata)
+        if change == "flat_value":
+            metadata["flat"] = "modified"
+        else:
+            metadata["admission_deferral"]["reason"] = "modified"
+        entries[0] = replace(entries[0], metadata=metadata)
+        return None, True
+
+    def reject_after_commit() -> None:
+        raise RuntimeError("publication target moved")
+
+    with pytest.raises(store.QueueAfterCommitError) as error_info:
+        store.mutate_entries(tmp_path, edit, after_commit_fn=reject_after_commit)
+
+    assert error_info.value.compensation_outcome == "restored"
+    assert store.list_queue(tmp_path) == before
 
 
 def test_after_commit_error_reports_unrestored_compensation(

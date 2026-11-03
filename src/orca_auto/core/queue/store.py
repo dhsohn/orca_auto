@@ -10,6 +10,7 @@ terminal marks), builds on them.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -178,14 +179,18 @@ def mutate_entries(
     ``mutator`` returns its result and whether it changed the rows; unchanged
     rows are not saved. ``after_save_fn`` runs right after the save under the
     same lock and is not compensated: when it raises, the saved rows stay.
-    When ``after_commit_fn`` rejects the saved rows, the original rows are
-    written back under the same lock and the rejection is raised as
+    When ``after_commit_fn`` rejects the saved rows, the original rows,
+    nested metadata included, are written back under the same lock and the rejection is raised as
     :class:`QueueAfterCommitError` with the compensation outcome.
     """
     resolved_root = resolve_root_path(root)
     with queue_lock(resolved_root):
         entries = load_entries(resolved_root)
-        original_entries = list(entries)
+        # The rows to write back if ``after_commit_fn`` rejects the save. A
+        # mutator may change a row's nested metadata in place (the dataclass
+        # is frozen, its dicts are not), so only a deep copy is the original.
+        # Calls without ``after_commit_fn`` never restore and skip the copy.
+        original_entries = copy.deepcopy(entries) if after_commit_fn is not None else []
         result, changed = mutator(entries)
         if changed:
             save_entries(resolved_root, entries)

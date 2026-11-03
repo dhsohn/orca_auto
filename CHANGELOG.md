@@ -10,6 +10,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The report parse cache now keys an output by its full file version (device,
+  inode, size, mtime and ctime) rather than path, size and mtime. Before, an
+  output replaced with the same length and mtime could be rendered from the
+  facts of the file it replaced. For example, a report publication retried in
+  the same process after `machine.json` failed rendered the old energy in HTML
+  and SI, while `machine.json` re-read the new bytes. An output that changes
+  while it is read is now parsed for that call only and never cached.
+
+### Fixed
+
 - Submission now rejects block settings that change the job the route
   keywords request, because completion classifies a job from its route alone:
   - `%geom TS_search` on a non-TS optimization route (`! Opt` plus
