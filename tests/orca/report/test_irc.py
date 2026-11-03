@@ -150,7 +150,7 @@ def test_irc_report_with_monitored_internals_renders_path_profile(tmp_path: Path
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -281,7 +281,7 @@ def test_irc_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -298,7 +298,7 @@ def test_irc_report_html_renders_path_profile(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
@@ -320,7 +320,7 @@ def test_irc_report_does_not_publish_unverified_electronic_state(tmp_path: Path)
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -335,7 +335,7 @@ def test_combined_optts_freq_irc_route_renders_composite_sections(tmp_path: Path
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -366,7 +366,7 @@ def test_irc_frequencies_from_an_earlier_attempt_name_their_source(tmp_path: Pat
     assert data.frequency_source_note == "from attempt 1, not the final output"
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
     assert path is not None
     assert "from attempt 1, not the final output" in path.read_text(encoding="utf-8")
 
@@ -393,7 +393,7 @@ def test_irc_report_with_missing_path_summary_has_fallback(tmp_path: Path) -> No
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -413,7 +413,7 @@ def test_multiline_route_classifies_ts_correctly(tmp_path: Path) -> None:
     assert data.ts_route
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
     assert path is not None
     text = path.read_text(encoding="utf-8")
     assert "TS optimization convergence" in text

@@ -7,9 +7,9 @@ coordinates — as plain fixed-width text that pastes cleanly into Word or a
 LaTeX source. Lint warnings (``⚠`` lines) flag what a reviewer would: a
 minimum with imaginary modes, a TS without exactly one, a constrained TS
 search whose saddle is unverified, missing thermochemistry. Non-stationary relaxed scans still get no block; IRC gets a
-summary-only validation block with no coordinates, also rendered here. Like the
-HTML report, generation must never break run finalization: every error is
-logged and swallowed.
+summary-only validation block with no coordinates, also rendered here. This
+module only renders; the publisher writes the block and records its outcome,
+and like the HTML report a failure never breaks run finalization.
 """
 
 from __future__ import annotations
@@ -21,16 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
-from orca_auto.core.confined_io import atomic_write_confined_bytes
 
 from .. import evidence
 from ..frequencies import ModeSummary, mode_summaries
-from ..machine_observation import (
-    REPORT_GENERATION_FAILED,
-    REPORT_NOT_APPLICABLE,
-    REPORT_PRODUCED,
-    record_report_generation,
-)
 from ..parser import OrcaResult
 from ..route_rules import RouteFacts, route_facts
 from ..statuses import RunStatus
@@ -225,68 +218,26 @@ def si_block_path(reaction_dir: Path) -> Path:
     return reaction_dir / SI_BLOCK_MD_FILE
 
 
-def write_si_block(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-    *,
-    generation_target: tuple[Path, tuple[int, int]],
-    report_generation: dict[str, str] | None = None,
-) -> Path | None:
-    """Write ``si_block.md``; ``None`` when the job has no SI block or it failed.
+def render_si_block(
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts | None = None
+) -> str | None:
+    """The ``si_block.md`` text of the job; ``None`` when the job has no SI block.
 
-    Mirrors ``write_job_html_report``: the block lands inside the verified
-    execution generation; a job type without a block removes any stale file
-    there, while an unexpected error leaves the last valid block in place.
-    ``report_generation``, when given, receives this block's fixed outcome
-    (``machine_observation.record_report_generation``), never the error text.
+    ``route`` is the publication's route facts of ``state["selected_inp"]``;
+    without it they are read here. Writing the block, removing a stale one and
+    recording the outcome are the publisher's
+    (``report.publication.write_si_block``).
     """
-    artifact_id = "supporting-information"
-    path = si_block_path(generation_target[0])
-
-    def _publish(markdown: str) -> None:
-        atomic_write_confined_bytes(
-            generation_target[0],
-            path,
-            markdown.encode("utf-8"),
-            label="ORCA generation artifact",
-            mode=0o600,
-            expected_parent_identity=generation_target[1],
-        )
-
-    def _remove_stale() -> None:
-        path.unlink(missing_ok=True)
-
-    def _not_applicable() -> None:
-        _remove_stale()
-        record_report_generation(report_generation, artifact_id, REPORT_NOT_APPLICABLE)
-
-    def _produced(markdown: str) -> Path:
-        _publish(markdown)
-        record_report_generation(report_generation, artifact_id, REPORT_PRODUCED)
-        return path
-
-    try:
-        selected_raw = str(state.get("selected_inp") or "").strip()
-        if not selected_raw:
-            _not_applicable()
-            return None
-        route = route_facts(Path(selected_raw))
-        if route.is_irc:
-            irc_block = collect_irc_si_block(reaction_dir, state, route)
-            if irc_block is None:
-                _not_applicable()
-                return None
-            return _produced(render_irc_si_block_md(irc_block))
-
-        block = evidence.collect_structure_evidence(reaction_dir, state, route)
-        if block is None:
-            _not_applicable()
-            return None
-        return _produced(render_si_block_md(block))
-    except Exception:  # noqa: BLE001
-        logger.warning("SI block generation failed for %s", reaction_dir, exc_info=True)
-        record_report_generation(report_generation, artifact_id, REPORT_GENERATION_FAILED)
+    selected_raw = str(state.get("selected_inp") or "").strip()
+    if not selected_raw:
         return None
+    if route is None:
+        route = route_facts(Path(selected_raw))
+    if route.is_irc:
+        irc_block = collect_irc_si_block(reaction_dir, state, route)
+        return None if irc_block is None else render_irc_si_block_md(irc_block)
+    block = evidence.collect_structure_evidence(reaction_dir, state, route)
+    return None if block is None else render_si_block_md(block)
 
 
 __all__ = [
@@ -294,7 +245,7 @@ __all__ = [
     "IrcSiBlock",
     "collect_irc_si_block",
     "render_irc_si_block_md",
+    "render_si_block",
     "render_si_block_md",
     "si_block_path",
-    "write_si_block",
 ]

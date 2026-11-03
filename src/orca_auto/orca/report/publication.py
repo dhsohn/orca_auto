@@ -1,15 +1,23 @@
 """Write a generation's HTML report, SI block and ``machine.json``.
 
-``machine_observation.build_machine_observation`` assembles ``machine.json``;
-this module writes it into the verified generation once and refuses to change a
-terminal observation or the artifacts it pins.
+One publication collects its evidence once (:class:`PublicationEvidence`: the
+job state in both forms, the verified generation and the route facts of the
+selected input). The HTML and SI renderers read that evidence and return text;
+this module writes every file, removes a stale optional report and turns each
+optional report into an :class:`~..machine_observation.ArtifactResult`
+(produced, not applicable or failed). ``machine.json`` is built last from the
+evidence and those explicit results
+(``machine_observation.build_machine_observation``), written into the
+verified generation once, and a terminal observation or the artifacts it pins
+are never changed.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,45 +33,73 @@ from orca_auto.core.utils import copy_dict_or_empty as _dict
 from .. import state_reading as _state_reading
 from ..evidence import output_publication_scope
 from ..machine_observation import (
-    REPORT_GENERATION_FAILED,
-    REPORT_NOT_APPLICABLE,
-    REPORT_PRODUCED,
+    ArtifactResult,
     build_machine_observation,
     machine_json_bytes,
     machine_lifecycle,
-    record_report_generation,
     report_json_path,
 )
+from ..route_rules import RouteFacts, route_facts
 from ..state import normalized_payload_from_state, retired_generation, write_generation_bytes
 from .composer import compose_job_report_html
-from .si import write_si_block
+from .si import render_si_block, si_block_path
 
 logger = logging.getLogger(__name__)
 
 
-def write_job_html_report(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-    *,
-    generation_target: tuple[Path, tuple[int, int]],
-    report_generation: dict[str, str] | None = None,
-) -> Path | None:
-    """Write ``job_report.html``; ``None`` when the job type has no HTML report or it failed.
+GenerationTarget = tuple[Path, tuple[int, int]]
 
-    The report lands inside the verified execution generation. When the current
-    job type has no HTML report, a stale ``job_report.html`` in that generation
-    is removed so links cannot surface an obsolete report. The exception path deliberately does NOT remove it: a
-    transient parse error must not destroy the last valid report.
-    ``report_generation``, when given, receives the report's fixed outcome
-    (``machine_observation.record_report_generation``), never the error text.
+
+@dataclass(frozen=True)
+class PublicationEvidence:
+    """What one publication reads, collected once by the publisher.
+
+    ``state`` is the flat run state the HTML and SI renderers read and
+    ``report_payload`` its normalized envelope that ``machine.json`` reads.
+    ``route`` is the route facts of ``state["selected_inp"]``, read once for
+    both renderers; ``None`` when there is no selected input or they could not
+    be read here (each renderer then reads them itself, inside its own failure
+    boundary). ``machine.json`` derives its scientific verdict from the
+    receipted input bytes it digests, not from ``route``.
     """
-    path = generation_target[0] / RUN_REPORT_HTML_FILE
+
+    reaction_dir: Path
+    state: Mapping[str, Any]
+    report_payload: dict[str, Any]
+    generation_target: GenerationTarget
+    route: RouteFacts | None
+
+
+def _selected_route(state: Mapping[str, Any]) -> RouteFacts | None:
+    selected_raw = str(state.get("selected_inp") or "").strip()
+    if not selected_raw:
+        return None
     try:
-        rendered = compose_job_report_html(reaction_dir, state)
+        return route_facts(Path(selected_raw))
+    except Exception:  # noqa: BLE001 -- each renderer re-reads and records its own failure
+        return None
+
+
+def _publish_optional_report(
+    reaction_dir: Path,
+    generation_target: GenerationTarget,
+    *,
+    artifact_id: str,
+    path: Path,
+    render: Callable[[], str | None],
+) -> ArtifactResult:
+    """Render one optional report and write it; the result says which of the three happened.
+
+    A report the job type does not have removes a stale file of that name, so
+    links cannot surface an obsolete report. A failure deliberately does not
+    remove it: a transient error must not destroy the last valid report, and
+    the observation receipts only what this publication produced.
+    """
+    try:
+        rendered = render()
         if rendered is None:
             path.unlink(missing_ok=True)
-            record_report_generation(report_generation, "human-report", REPORT_NOT_APPLICABLE)
-            return None
+            return ArtifactResult.not_applicable(artifact_id)
         atomic_write_confined_bytes(
             generation_target[0],
             path,
@@ -72,12 +108,44 @@ def write_job_html_report(
             mode=0o600,
             expected_parent_identity=generation_target[1],
         )
-        record_report_generation(report_generation, "human-report", REPORT_PRODUCED)
-        return path
+        return ArtifactResult.produced(artifact_id, path)
     except Exception:  # noqa: BLE001
-        logger.warning("Job HTML report generation failed for %s", reaction_dir, exc_info=True)
-        record_report_generation(report_generation, "human-report", REPORT_GENERATION_FAILED)
-        return None
+        logger.warning("%s generation failed for %s", artifact_id, reaction_dir, exc_info=True)
+        return ArtifactResult.failed(artifact_id)
+
+
+def write_job_html_report(
+    reaction_dir: Path,
+    state: Mapping[str, Any],
+    *,
+    generation_target: GenerationTarget,
+    route: RouteFacts | None = None,
+) -> ArtifactResult:
+    """Write ``job_report.html`` into the verified generation (see :func:`_publish_optional_report`)."""
+    return _publish_optional_report(
+        reaction_dir,
+        generation_target,
+        artifact_id="human-report",
+        path=generation_target[0] / RUN_REPORT_HTML_FILE,
+        render=lambda: compose_job_report_html(reaction_dir, state, route),
+    )
+
+
+def write_si_block(
+    reaction_dir: Path,
+    state: Mapping[str, Any],
+    *,
+    generation_target: GenerationTarget,
+    route: RouteFacts | None = None,
+) -> ArtifactResult:
+    """Write ``si_block.md`` into the verified generation (see :func:`_publish_optional_report`)."""
+    return _publish_optional_report(
+        reaction_dir,
+        generation_target,
+        artifact_id="supporting-information",
+        path=si_block_path(generation_target[0]),
+        render=lambda: render_si_block(reaction_dir, state, route),
+    )
 
 
 def _published_terminal_observation(
@@ -126,16 +194,13 @@ def write_report_json(
     reaction_dir: Path,
     report_payload: dict[str, Any],
     *,
-    generation_target: tuple[Path, tuple[int, int]] | None = None,
-    html_path: Path | None = None,
-    si_path: Path | None = None,
-    report_generation: dict[str, str] | None = None,
+    generation_target: GenerationTarget | None = None,
+    reports: Sequence[ArtifactResult] = (),
     before_write: Callable[[], None] | None = None,
 ) -> Path | None:
     """Write ``machine.json`` (and ``execution_provenance.json``) into the verified generation.
 
-    ``html_path`` and ``si_path`` are the reports already published there and
-    ``report_generation`` their outcomes in this publication. A terminal
+    ``reports`` are this publication's optional report results. A terminal
     observation is written once; writing different bytes over it raises.
     ``before_write`` runs after the observation is built and before it is
     written; when it raises, nothing is written.
@@ -167,13 +232,7 @@ def write_report_json(
             != provenance_bytes
         ):
             raise RuntimeError(f"terminal execution provenance is immutable: {provenance_path}")
-    observation = build_machine_observation(
-        generation_target[0],
-        payload,
-        html_path=html_path,
-        si_path=si_path,
-        report_generation=report_generation,
-    )
+    observation = build_machine_observation(generation_target[0], payload, reports=reports)
     if before_write is not None:
         before_write()
     path = report_json_path(generation_target[0])
@@ -262,31 +321,36 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
         return existing_reports
     if retired_generation(generation_target[0]):
         return {}
-    # This publication's optional report outcomes; never persisted elsewhere.
-    report_generation: dict[str, str] = {}
+    evidence = PublicationEvidence(
+        reaction_dir=reaction_dir,
+        state=state,
+        report_payload=report_payload,
+        generation_target=generation_target,
+        route=_selected_route(state),
+    )
     # HTML, SI and machine.json must describe one version of each output: an
     # output that changes during the publication abandons it before
     # machine.json is written, and the next publication starts over.
     with output_publication_scope() as verify_outputs_unchanged:
-        html_path = write_job_html_report(
-            reaction_dir,
-            state,
-            generation_target=generation_target,
-            report_generation=report_generation,
-        )
-        si_path = write_si_block(
-            reaction_dir,
-            state,
-            generation_target=generation_target,
-            report_generation=report_generation,
+        optional_reports = (
+            write_job_html_report(
+                evidence.reaction_dir,
+                evidence.state,
+                generation_target=evidence.generation_target,
+                route=evidence.route,
+            ),
+            write_si_block(
+                evidence.reaction_dir,
+                evidence.state,
+                generation_target=evidence.generation_target,
+                route=evidence.route,
+            ),
         )
         json_path = write_report_json(
-            reaction_dir,
-            report_payload,
-            generation_target=generation_target,
-            html_path=html_path,
-            si_path=si_path,
-            report_generation=report_generation,
+            evidence.reaction_dir,
+            evidence.report_payload,
+            generation_target=evidence.generation_target,
+            reports=optional_reports,
             before_write=verify_outputs_unchanged,
         )
     # List the reports as the observation just published receipts them, so

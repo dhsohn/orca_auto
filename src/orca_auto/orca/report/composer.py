@@ -34,8 +34,15 @@ class HtmlReportParts:
     constrained_ts_search: bool = False
 
 
-def compose_job_report_html(reaction_dir: Path, state: Mapping[str, Any]) -> str | None:
-    parts = collect_html_report_parts(reaction_dir, state)
+def compose_job_report_html(
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts | None = None
+) -> str | None:
+    """The ``job_report.html`` text; ``None`` when the job type has no HTML report.
+
+    ``route`` is the publication's route facts of ``state["selected_inp"]``;
+    without it they are read here.
+    """
+    parts = collect_html_report_parts(reaction_dir, state, route)
     if parts is None:
         return None
     primary, components = _report_components(parts)
@@ -75,11 +82,13 @@ def _last_output_footer_html(last_out_name: str) -> str:
 def collect_html_report_parts(
     reaction_dir: Path,
     state: Mapping[str, Any],
+    route: RouteFacts | None = None,
 ) -> HtmlReportParts | None:
     selected_raw = str(state.get("selected_inp") or "").strip()
     if not selected_raw:
         return None
-    route = route_facts(Path(selected_raw))
+    if route is None:
+        route = route_facts(Path(selected_raw))
     header = _report_header(reaction_dir, state, route)
 
     neb = collect_neb_report_data(state, header) if route.is_neb_ts else None

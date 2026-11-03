@@ -87,7 +87,7 @@ def test_sp_report_html_renders_energy_and_embedded_si_block(tmp_path: Path) -> 
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
@@ -112,7 +112,7 @@ def test_sp_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -131,7 +131,7 @@ def test_sp_report_does_not_publish_unverified_electronic_state(tmp_path: Path) 
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -149,7 +149,7 @@ def test_bare_freq_report_includes_vibrational_summary_and_thermo(tmp_path: Path
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -166,7 +166,7 @@ def test_failed_sp_report_keeps_attempt_chain_without_si_block(tmp_path: Path) -
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -325,7 +325,7 @@ def test_frequency_fallback_source_is_shown_in_the_sp_report(tmp_path: Path) -> 
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -355,7 +355,7 @@ def test_gradient_report_is_not_labeled_energy_only_sp(tmp_path: Path, keyword: 
     )
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
     assert path is not None
     text = path.read_text(encoding="utf-8")
     assert "EnGrad report" in text

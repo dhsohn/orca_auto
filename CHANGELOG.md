@@ -109,6 +109,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- One report publication now collects its evidence once (the job state, the
+  verified generation and the selected input's route facts, read once for the
+  HTML report and the SI block) and receives each optional report as an
+  explicit result: produced with its path, not applicable, or failed. The
+  renderers return text; the publisher alone writes files, removes a stale
+  report and passes the results to `machine.json`, instead of the renderers
+  writing and filling a shared outcome map. `machine.json`, the reports and
+  their receipts are unchanged.
 - Each version of an ORCA input is now tokenized once and shared by every
   reader of that version (`input_blocks.ParsedInput`). The operation facts,
   the resource reader, the binding's checks and the queue Detail used to

@@ -17,11 +17,8 @@ from orca_auto.orca.evidence import (
     parsed_frequency_analysis,
     structure_kind,
 )
-from orca_auto.orca.report.si import (
-    render_si_block_md,
-    si_block_path,
-    write_si_block,
-)
+from orca_auto.orca.report.publication import write_si_block
+from orca_auto.orca.report.si import render_si_block_md, si_block_path
 from orca_auto.orca.route_rules import route_facts
 from tests.engine_artifact_helpers import report_generation_target
 from tests.orca_output_helpers import frequency_section, si_out_text
@@ -358,7 +355,7 @@ Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
     assert structure_kind(route_facts(Path(state["selected_inp"]))) is None
     assert _evidence(reaction_dir, state) is None
     generation, identity = report_generation_target(reaction_dir)
-    path = write_si_block(reaction_dir, state, generation_target=(generation, identity))
+    path = write_si_block(reaction_dir, state, generation_target=(generation, identity)).path
 
     assert path == generation / "si_block.md"
     rendered = path.read_text(encoding="utf-8")
@@ -414,11 +411,11 @@ def test_write_si_block_removes_stale_file_for_blockless_job(tmp_path: Path) -> 
 
     generation, identity = report_generation_target(reaction_dir)
     target = (generation, identity)
-    path = write_si_block(reaction_dir, state, generation_target=target)
+    path = write_si_block(reaction_dir, state, generation_target=target).path
     assert path is not None and path.exists()
 
     (reaction_dir / "job.inp").write_text(_SCAN_INP, encoding="utf-8")
-    assert write_si_block(reaction_dir, state, generation_target=target) is None
+    assert write_si_block(reaction_dir, state, generation_target=target).path is None
     assert not si_block_path(generation).exists()
 
 
@@ -635,5 +632,7 @@ def test_si_block_fails_closed_on_stale_or_partial_final_coordinates(
         _evidence(reaction_dir, state)
 
     generation, identity = report_generation_target(reaction_dir)
-    assert write_si_block(reaction_dir, state, generation_target=(generation, identity)) is None
+    assert (
+        write_si_block(reaction_dir, state, generation_target=(generation, identity)).path is None
+    )
     assert not si_block_path(generation).exists()

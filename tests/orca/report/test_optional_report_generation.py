@@ -246,12 +246,12 @@ def test_invalid_optional_receipt_stays_optional_and_nonblocking(
     job_dir, generation, state = _job(tmp_path, "sp_invalid_receipt", _SP_INP)
     real_writer = publication_module.write_job_html_report
 
-    def hardlinked_report(*args: Any, **kwargs: Any) -> Path | None:
-        path = real_writer(*args, **kwargs)
-        assert path is not None
+    def hardlinked_report(*args: Any, **kwargs: Any) -> Any:
+        result = real_writer(*args, **kwargs)
+        assert result.path is not None
         # A second link makes the receipt writer reject the file as invalid.
-        os.link(path, tmp_path / "extra-link.html")
-        return path
+        os.link(result.path, tmp_path / "extra-link.html")
+        return result
 
     monkeypatch.setattr(publication_module, "write_job_html_report", hardlinked_report)
 
