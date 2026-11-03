@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -184,6 +185,48 @@ def test_write_report_files_emits_html_and_si_for_sp(tmp_path: Path) -> None:
     assert reports["si_block"] == str(generation / "si_block.md")
     assert (generation / "job_report.html").exists()
     assert (generation / "si_block.md").exists()
+
+
+def test_report_retry_reads_an_output_replaced_with_the_same_size_and_mtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # HTML and SI were written, machine.json failed, and the output was then
+    # replaced keeping its byte length and mtime. The retry in the same process
+    # must render the replacement, which machine.json science always re-reads
+    # byte by byte, never the cached facts of the file that is gone.
+    from orca_auto.orca.report import publication
+
+    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=sp_out_text(energy=-1234.5))
+    generation = bind_report_generation(tmp_path, state)
+    out = tmp_path / "rxn.out"
+    original = out.stat()
+    real_write_report_json = publication.write_report_json
+
+    def failing_write_report_json(*args: Any, **kwargs: Any) -> Path:
+        raise OSError("machine.json write interrupted")
+
+    monkeypatch.setattr(publication, "write_report_json", failing_write_report_json)
+    with pytest.raises(OSError, match="interrupted"):
+        write_report_files(tmp_path, state)
+    assert "-1234.5" in (generation / "si_block.md").read_text(encoding="utf-8")
+
+    replacement = tmp_path / "rxn.out.new"
+    replacement.write_text(sp_out_text(energy=-4321.5), encoding="utf-8")
+    replacement.replace(out)
+    os.utime(out, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert (out.stat().st_size, out.stat().st_mtime_ns) == (
+        original.st_size,
+        original.st_mtime_ns,
+    )
+    monkeypatch.setattr(publication, "write_report_json", real_write_report_json)
+
+    write_report_files(tmp_path, state)
+
+    assert (generation / "machine.json").exists()
+    for report in ("job_report.html", "si_block.md"):
+        published = (generation / report).read_text(encoding="utf-8")
+        assert "-4321.5" in published, report
+        assert "-1234.5" not in published, report
 
 
 def test_vibrational_summary_prefers_the_final_output(tmp_path: Path) -> None:

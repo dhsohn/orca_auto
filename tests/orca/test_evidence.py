@@ -110,6 +110,64 @@ def test_cached_output_invalidates_each_file_identity_component(
     assert len(reads) == 2
 
 
+@pytest.mark.parametrize("how", ["renamed_over", "rewritten_in_place"])
+def test_cached_output_detects_a_replacement_that_keeps_size_and_mtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    out = tmp_path / "final.out"
+    out.write_text(_ENERGY, encoding="utf-8")
+    os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+    reads = _record_output_reads(monkeypatch)
+    first = evidence.parsed_final_output(out)
+    replacement = _ENERGY.replace("-1.0", "-2.0")
+    assert len(replacement) == len(_ENERGY)
+    if how == "renamed_over":
+        staged = tmp_path / "final.out.new"
+        staged.write_text(replacement, encoding="utf-8")
+        staged.replace(out)
+    else:
+        out.write_text(replacement, encoding="utf-8")
+    # Size and mtime are those of the first version again; inode or ctime differ.
+    os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+
+    second = evidence.parsed_final_output(out)
+
+    assert first[0].energy_hartree == -1.0
+    assert second[0].energy_hartree == -2.0
+    assert evidence.parsed_final_output(out) is second
+    assert len(reads) == 2
+
+
+def test_output_changed_while_read_is_parsed_once_and_never_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "final.out"
+    out.write_text(_ENERGY, encoding="utf-8")
+    os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+    real_read = evidence.read_orca_text
+    rewritten: list[bool] = []
+
+    def read_then_rewrite(path: Any) -> str:
+        text = real_read(path)
+        if not rewritten:
+            # Same length and mtime: only the inode/ctime part of the version moves.
+            rewritten.append(True)
+            out.write_text(_ENERGY.replace("-1.0", "-2.0"), encoding="utf-8")
+            os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+        return text
+
+    monkeypatch.setattr(evidence, "read_orca_text", read_then_rewrite)
+
+    first = evidence.parsed_final_output(out)
+    second = evidence.parsed_final_output(out)
+
+    # The first parse belongs to a version that no longer exists: it is not
+    # cached, so the next call reads the rewritten file instead of reusing it.
+    assert first[0].energy_hartree == -1.0
+    assert second[0].energy_hartree == -2.0
+    assert evidence.parsed_final_output(out) is second
+
+
 def test_cached_output_retains_the_32_most_recent_file_versions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

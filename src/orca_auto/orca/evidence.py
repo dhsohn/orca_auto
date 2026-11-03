@@ -108,8 +108,38 @@ class _ParsedOutput:
     derived: dict[Callable[[str], object], object] = field(default_factory=dict)
 
 
+# One version of one output file: path, device, inode, size, mtime_ns, ctime_ns.
+# Size and mtime alone can survive a replacement (a rewrite that keeps the
+# length, then ``os.utime`` back); the inode and ctime cannot be set that way.
+_OutputVersion = tuple[str, int, int, int, int, int]
+
+
+def _output_version(out_path: Path) -> _OutputVersion:
+    stat = out_path.stat()
+    return (
+        str(out_path),
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )
+
+
+def _read_output_version(out_path: Path) -> tuple[_OutputVersion | None, str]:
+    """Decoded output and the file version it was read from.
+
+    The version is ``None`` when the file changed while it was read (its
+    version before and after differ), so the text is used once but never
+    cached under either version.
+    """
+    before = _output_version(out_path)
+    text = read_orca_text(before[0])
+    return (before if _output_version(out_path) == before else None), text
+
+
 class _ParsedOutputCache:
-    """Bounded LRU keyed by ``(path, mtime_ns, size)``.
+    """Bounded LRU keyed by the output file version (:data:`_OutputVersion`).
 
     A hand-rolled LRU rather than ``functools.lru_cache`` because a derived
     parser requested on a cache miss must run on the same decoded text as the
@@ -118,17 +148,17 @@ class _ParsedOutputCache:
 
     def __init__(self, maxsize: int) -> None:
         self._maxsize = maxsize
-        self._entries: OrderedDict[tuple[str, int, int], _ParsedOutput] = OrderedDict()
+        self._entries: OrderedDict[_OutputVersion, _ParsedOutput] = OrderedDict()
         self._lock = threading.Lock()
 
-    def get(self, key: tuple[str, int, int]) -> _ParsedOutput | None:
+    def get(self, key: _OutputVersion) -> _ParsedOutput | None:
         with self._lock:
             entry = self._entries.get(key)
             if entry is not None:
                 self._entries.move_to_end(key)
             return entry
 
-    def put(self, key: tuple[str, int, int], entry: _ParsedOutput) -> _ParsedOutput:
+    def put(self, key: _OutputVersion, entry: _ParsedOutput) -> _ParsedOutput:
         """Store ``entry`` unless a concurrent reader stored one first; return the kept one."""
         with self._lock:
             existing = self._entries.get(key)
@@ -164,7 +194,7 @@ def _parse_output_text(
 
 
 def parsed_final_output(out_path: Path) -> tuple[OrcaResult, FrequencyAnalysis | None]:
-    """Parsed (result, frequency analysis), cached per (path, mtime, size).
+    """Parsed (result, frequency analysis), cached per output file version.
 
     Report sections reuse the same final output facts. Callers must treat both
     returned objects as read-only because they are shared across cache hits.
@@ -173,14 +203,26 @@ def parsed_final_output(out_path: Path) -> tuple[OrcaResult, FrequencyAnalysis |
 
 
 def _parsed_output(out_path: Path, derive: Callable[[str], object] | None = None) -> _ParsedOutput:
-    stat = out_path.stat()
-    key = (str(out_path), stat.st_mtime_ns, stat.st_size)
-    snapshot = _parsed_output_cache.get(key)
-    if snapshot is None:
-        snapshot = _parsed_output_cache.put(
-            key, _parse_output_text(read_orca_text(key[0]), key[0], derive)
-        )
-    return snapshot
+    return _versioned_parsed_output(out_path, derive)[1]
+
+
+def _versioned_parsed_output(
+    out_path: Path, derive: Callable[[str], object] | None = None
+) -> tuple[_OutputVersion | None, _ParsedOutput]:
+    """The parsed facts of the current file version, and that version.
+
+    A version that changed while it was read is parsed for this call only and
+    reported as ``None``, so no later call reuses facts of a file that is gone.
+    """
+    current = _output_version(out_path)
+    snapshot = _parsed_output_cache.get(current)
+    if snapshot is not None:
+        return current, snapshot
+    version, text = _read_output_version(out_path)
+    parsed = _parse_output_text(text, str(out_path), derive)
+    if version is None:
+        return None, parsed
+    return version, _parsed_output_cache.put(version, parsed)
 
 
 def parsed_optimization_progress(out_path: Path) -> OptProgress:
@@ -206,11 +248,16 @@ def parsed_output_facts(out_path: Path, parse_text: Callable[[str], T]) -> T:
     treat it as read-only. A snapshot cached before this parser was asked for
     decodes the text once more and remembers the result.
     """
-    snapshot = _parsed_output(out_path, derive=parse_text)
+    version, snapshot = _versioned_parsed_output(out_path, derive=parse_text)
     try:
         return cast(T, snapshot.derived[parse_text])
     except KeyError:
-        facts = parse_text(read_orca_text(str(out_path)))
+        read_version, text = _read_output_version(out_path)
+        facts = parse_text(text)
+        if version is None or read_version != version:
+            # The file changed since its base facts were cached: these facts
+            # belong to another version and must not be attached to that one.
+            return facts
         return cast(T, snapshot.derived.setdefault(parse_text, facts))
 
 
