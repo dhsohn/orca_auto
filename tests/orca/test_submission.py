@@ -1293,3 +1293,42 @@ def test_a_moved_job_keeps_its_directory_fallback_key_on_a_rebuild(
     assert rebuilt.original_run_dir == str(reaction_dir)
     assert rebuilt.latest_known_path == str(moved)
     assert rebuilt.molecule_key == "rxn"
+
+
+def test_a_rebuild_from_scratch_restores_the_submitted_resource_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The state envelope's resources stay empty; the submitted request lives
+    # in the execution provenance, and a rebuild with no index row to refine
+    # recovers it from there.
+    from orca_auto.core.indexing.store import JOB_LOCATION_INDEX_FILE_NAME
+    from orca_auto.orca.execution_binding import orca_execution_provenance
+    from orca_auto.orca.job_locations import (
+        list_job_location_records,
+        rebuild_job_location_records,
+    )
+    from orca_auto.orca.queue.job_records import upsert_terminal_job_record
+    from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
+
+    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    cfg = load_config(args.config)
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    assert result.status == "submitted", result.stderr
+    [entry] = queue_adapter.list_queue(tmp_path)
+    submitted_request = entry.metadata["resource_request"]
+    record_cancelled_run_state(
+        reaction_dir,
+        fallback_job_id=entry.task_id,
+        selected_inp=entry.metadata["selected_inp"],
+        execution_provenance=orca_execution_provenance(entry.metadata["execution_snapshot"]),
+    )
+    assert upsert_terminal_job_record(
+        cfg, str(reaction_dir), fallback_job_id=entry.task_id, expected_job_id=entry.task_id
+    )
+    (tmp_path / JOB_LOCATION_INDEX_FILE_NAME).unlink()
+
+    rebuild_job_location_records(tmp_path, apply=True)
+
+    [rebuilt] = list_job_location_records(tmp_path)
+    assert submitted_request == {"max_cores": 2, "max_memory_gb": 4}
+    assert rebuilt.resource_request == submitted_request

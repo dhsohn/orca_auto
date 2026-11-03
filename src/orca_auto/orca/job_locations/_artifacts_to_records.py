@@ -12,6 +12,7 @@ to what the selected input implies, and builds the row with
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -157,9 +158,27 @@ def run_state_index_source(decoded: DecodedRunState) -> dict[str, Any]:
         "selected_inp": state.get("selected_inp", ""),
         "selected_input_xyz": decoded.selected_xyz_path,
         "original_run_dir": state.get("reaction_dir", ""),
-        "resource_request": dict(decoded.resource_request),
+        "resource_request": dict(decoded.resource_request) or _captured_resource_request(state),
         "resource_actual": dict(decoded.resource_actual),
     }
+
+
+def _captured_resource_request(state: Mapping[str, Any]) -> dict[str, int]:
+    """The request the execution snapshot captured at submission, when the envelope has none.
+
+    The state writer leaves the envelope's ``resources`` empty and keeps the
+    submitted request in ``execution_provenance``, so a rebuild with no
+    index row to refine still recovers it. A malformed one is ignored; no
+    current configuration default stands in for a past job's request.
+    """
+    provenance = state.get("execution_provenance")
+    request = provenance.get("resource_request") if isinstance(provenance, Mapping) else None
+    if not isinstance(request, Mapping):
+        return {}
+    try:
+        return _index_resources("resource_request", dict(request))
+    except UnreadableReportError:
+        return {}
 
 
 def first_artifact_value(sources: tuple[dict[str, Any], ...], *keys: str) -> Any:

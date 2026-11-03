@@ -10,6 +10,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `index rebuild` from scratch restores a job's requested resources. The
+  state envelope's `resources.request` is empty by design; the rebuild now
+  falls back to the request the execution snapshot captured at submission
+  (`execution_provenance.resource_request`) instead of indexing `{}`.
 - A run whose bound input is larger than one source input's 64 MiB limit
   (an inlined geometry can push it there; binding accepts it up to the
   256 MiB generation budget) is verified against its real completion
