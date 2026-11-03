@@ -170,6 +170,74 @@ def test_output_changed_while_read_is_parsed_once_and_never_cached(
     assert evidence.parsed_final_output(out) is second
 
 
+def _replace_keeping_size_and_mtime(out: Path, text: str) -> None:
+    staged = out.with_name(out.name + ".new")
+    staged.write_text(text, encoding="utf-8")
+    staged.replace(out)
+    os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+
+
+def test_publication_scope_accepts_one_unchanged_version(tmp_path: Path) -> None:
+    out = tmp_path / "final.out"
+    out.write_text(_ENERGY, encoding="utf-8")
+
+    with evidence.output_publication_scope() as verify:
+        evidence.parsed_final_output(out)
+        evidence.parsed_optimization_progress(out)
+        verify()
+
+
+def test_publication_scope_rejects_a_second_version_read(tmp_path: Path) -> None:
+    out = tmp_path / "final.out"
+    out.write_text(_ENERGY, encoding="utf-8")
+    os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+
+    with evidence.output_publication_scope() as verify:
+        assert evidence.parsed_final_output(out)[0].energy_hartree == -1.0
+        _replace_keeping_size_and_mtime(out, _ENERGY.replace("-1.0", "-2.0"))
+        # A later read in the same publication sees another version.
+        assert evidence.parsed_final_output(out)[0].energy_hartree == -2.0
+        _replace_keeping_size_and_mtime(out, _ENERGY)
+        with pytest.raises(evidence.OutputChangedDuringPublication, match="final.out"):
+            verify()
+
+
+def test_publication_scope_rejects_an_output_replaced_after_its_last_read(
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "final.out"
+    out.write_text(_ENERGY, encoding="utf-8")
+    os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+
+    with evidence.output_publication_scope() as verify:
+        evidence.parsed_final_output(out)
+        _replace_keeping_size_and_mtime(out, _ENERGY.replace("-1.0", "-2.0"))
+        with pytest.raises(evidence.OutputChangedDuringPublication):
+            verify()
+
+
+def test_publication_scope_rejects_a_removed_output(tmp_path: Path) -> None:
+    out = tmp_path / "final.out"
+    out.write_text(_ENERGY, encoding="utf-8")
+
+    with evidence.output_publication_scope() as verify:
+        evidence.parsed_final_output(out)
+        out.unlink()
+        with pytest.raises(evidence.OutputChangedDuringPublication):
+            verify()
+
+
+def test_reads_outside_a_publication_scope_pin_nothing(tmp_path: Path) -> None:
+    out = tmp_path / "final.out"
+    out.write_text(_ENERGY, encoding="utf-8")
+    evidence.parsed_final_output(out)
+    _replace_keeping_size_and_mtime(out, _ENERGY.replace("-1.0", "-2.0"))
+
+    with evidence.output_publication_scope() as verify:
+        assert evidence.parsed_final_output(out)[0].energy_hartree == -2.0
+        verify()
+
+
 def test_cached_output_retains_the_32_most_recent_file_versions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

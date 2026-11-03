@@ -229,6 +229,44 @@ def test_report_retry_reads_an_output_replaced_with_the_same_size_and_mtime(
         assert "-1234.5" not in published, report
 
 
+def test_output_replaced_during_publication_abandons_it_before_machine_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The output is replaced (same size and mtime) after the HTML report read
+    # it and before the SI block does: HTML and SI would describe different
+    # outputs, so the publication stops before machine.json, and the next one
+    # publishes all three from the replacement.
+    from orca_auto.orca.evidence import OutputChangedDuringPublication
+    from orca_auto.orca.report import publication
+
+    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=sp_out_text(energy=-1234.5))
+    generation = bind_report_generation(tmp_path, state)
+    out = tmp_path / "rxn.out"
+    original = out.stat()
+    real_write_si_block = publication.write_si_block
+
+    def replace_then_write_si(*args: Any, **kwargs: Any) -> Any:
+        replacement = tmp_path / "rxn.out.new"
+        replacement.write_text(sp_out_text(energy=-4321.5), encoding="utf-8")
+        replacement.replace(out)
+        os.utime(out, ns=(original.st_atime_ns, original.st_mtime_ns))
+        return real_write_si_block(*args, **kwargs)
+
+    monkeypatch.setattr(publication, "write_si_block", replace_then_write_si)
+    with pytest.raises(OutputChangedDuringPublication, match="rxn.out"):
+        write_report_files(tmp_path, state)
+    assert not (generation / "machine.json").exists()
+
+    monkeypatch.setattr(publication, "write_si_block", real_write_si_block)
+    write_report_files(tmp_path, state)
+
+    assert (generation / "machine.json").exists()
+    for report in ("job_report.html", "si_block.md"):
+        published = (generation / report).read_text(encoding="utf-8")
+        assert "-4321.5" in published, report
+        assert "-1234.5" not in published, report
+
+
 def test_vibrational_summary_prefers_the_final_output(tmp_path: Path) -> None:
     # The metric cards must agree with the embedded SI block, which is built
     # from the final output only; the attempt chain is just the fallback.

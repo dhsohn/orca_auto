@@ -17,9 +17,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   the same process after `machine.json` failed rendered the old energy in HTML
   and SI, while `machine.json` re-read the new bytes. An output that changes
   while it is read is now parsed for that call only and never cached.
-
-### Fixed
-
 - Submission now rejects block settings that change the job the route
   keywords request, because completion classifies a job from its route alone:
   - `%geom TS_search` on a non-TS optimization route (`! Opt` plus
@@ -32,9 +29,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
     evidence.
   Request a TS search with `! OptTS`, and keep only one of a `RunTyp` and a
   route operation. Rows queued before the upgrade are not re-checked.
-
-### Fixed
-
 - Submission now rejects a `%method RunTyp` value the runtime cannot classify,
   including the optimization spellings `Opt`, `Geom`, `Geometry` and
   `GeometryOpt`, as well as missing or quoted values. Such inputs were admitted
@@ -57,9 +51,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   current directory, and could import a different `orca_auto` than the
   supervisor had verified. A parent started without `-I`, such as a
   development run with `PYTHONPATH=src`, starts its children unchanged.
-
-### Fixed
-
 - Submission now applies the 1,000-atom Hessian limit to frequency requests
   made only through an active `%freq AnFreq true` or `%freq NumFreq true`
   block, for inline and external XYZ geometries alike, and reserves the
@@ -77,6 +68,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - A worker admission claims the row it previewed instead of listing the queue
   a second time; it lists again only when that row was cancelled, replaced or
   claimed meanwhile.
+- A report publication now reads one version of each output. If an output is
+  replaced or rewritten while HTML, SI and `machine.json` are built from it,
+  the publication stops before `machine.json` is written
+  (`OutputChangedDuringPublication`) and the next attempt republishes all
+  three from the current output. Before, a change between the HTML and SI
+  writes could publish reports that describe different outputs.
 
 ## [10.2.3] - 2026-10-24
 
