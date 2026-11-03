@@ -12,6 +12,22 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Crash recovery of a job whose input has no `%pal`/`%maxcore` no longer
+  fails after the configuration defaults change. Recovery re-normalized the
+  source with the current defaults and refused the job as diverged from its
+  queued request; it now fills missing directives from the request resolved
+  at submission, as the ordinary run already did (#440).
+- RAM scratch now stages a bound input larger than one source input's
+  64 MiB limit under the generation budget, as binding, claim and completion
+  already accept it; each dependency keeps the source limit and the whole
+  closure the generation budget (#439).
+- Crash recovery reads the submitted source through the stable regular-file
+  reader. A FIFO source made the recovery child wait in `open()` while holding
+  the job's `run.lock`; it is now refused at once and the lock is released
+  (#439).
+- A terminal record written with no existing index row now restores the
+  submitted resource request, as `index rebuild` does from the same state;
+  both use one state-to-index conversion (#439).
 - `index rebuild` from scratch restores a job's requested resources. The
   state envelope's `resources.request` is empty by design; the rebuild now
   falls back to the request the execution snapshot captured at submission
