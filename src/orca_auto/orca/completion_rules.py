@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import iter_blocks, scan_coordinate_rows
+from .input_blocks import block_operation_declarations, iter_blocks, scan_coordinate_rows
 from .input_syntax import input_file_lines, orca_route_lines, orca_route_tokens, value_token_index
 
 # Only real ORCA TS keywords. No bare `TS` token: ORCA has no `! TS`, so it
@@ -101,17 +101,12 @@ def _has_geometry_constraints(lines: list[str]) -> bool:
 def _has_frequency_block_request(lines: list[str]) -> bool:
     """Read AnFreq/NumFreq switches from %freq bodies, using their last boolean value."""
     settings: dict[str, bool] = {}
-    for block in iter_blocks(lines, "freq"):
-        tokens = [token for row in block.rows for token in row.tokens]
-        for index, token in enumerate(tokens):
-            if token.quoted or token.value.lower() not in {"anfreq", "numfreq"}:
-                continue
-            value_index = value_token_index(tokens, index)
-            if value_index >= len(tokens):
-                continue
-            value = tokens[value_index]
-            if not value.quoted and value.value.lower() in {"true", "false"}:
-                settings[token.value.lower()] = value.value.lower() == "true"
+    for declaration in block_operation_declarations(lines):
+        value = declaration.value
+        if declaration.block != "freq" or declaration.key_quoted or value is None:
+            continue
+        if not value.quoted and value.value.lower() in {"true", "false"}:
+            settings[declaration.key] = value.value.lower() == "true"
     return any(settings.values())
 
 

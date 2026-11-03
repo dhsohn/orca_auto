@@ -35,7 +35,7 @@ from .completion_rules import (
     RouteFacts,
     route_facts,
 )
-from .input_blocks import iter_blocks, method_run_type_values
+from .input_blocks import block_operation_declarations, iter_blocks
 from .input_syntax import orca_route_tokens, value_token_index
 
 NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
@@ -83,29 +83,25 @@ def parse_operation_facts(lines: Sequence[str], *, inp_path: Path) -> OperationF
     lines = list(lines)
     route = route_facts(inp_path, lines=lines)
     routes = " ".join(route.route_lines)
+    declarations = [
+        declaration
+        for declaration in block_operation_declarations(lines)
+        if not declaration.key_quoted
+    ]
     return OperationFacts(
         route=route,
         method_run_types=tuple(
             MethodRunType(value=None)
-            if token is None
-            else MethodRunType(value=token.value, quoted=token.quoted)
-            for token in method_run_type_values(lines)
+            if declaration.value is None
+            else MethodRunType(value=declaration.value.value, quoted=declaration.value.quoted)
+            for declaration in declarations
+            if declaration.block == "method"
         ),
-        declares_ts_search=_declares_ts_search(lines),
+        declares_ts_search=any(declaration.block == "geom" for declaration in declarations),
         route_writes_engrad=_route_writes_engrad(lines),
         neb_route=NEB_ROUTE_RE.search(routes) is not None,
         goat_route=GOAT_ROUTE_RE.search(routes) is not None,
         neb_preopt_ends=_neb_preoptimizes_end_points(lines),
-    )
-
-
-def _declares_ts_search(lines: list[str]) -> bool:
-    """Whether a ``%geom`` body carries an unquoted ``TS_search`` key, whatever its value."""
-    return any(
-        not token.quoted and token.value.lower() == "ts_search"
-        for block in iter_blocks(lines, "geom")
-        for row in block.rows
-        for token in row.tokens
     )
 
 
