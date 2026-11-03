@@ -10,7 +10,7 @@ projection share it.
 
 from __future__ import annotations
 
-import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from orca_auto.core.indexing import (
@@ -24,12 +24,12 @@ from orca_auto.core.utils import normalize_text
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME
 
 from ..config import AppConfig
+from ..input_artifacts import xyzfile_input_path
 from ..input_blocks import parse_input
+from ..input_syntax import read_input_text
 from ..job_type import job_type_from_routes
-from ..molecule_key import directory_fallback_key, molecule_key_from_text, resolve_molecule_key
+from ..molecule_key import directory_fallback_key, molecule_key_from_text
 from ._utils import normalize_path_text
-
-_MOLECULE_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def index_root_for_cfg(cfg: AppConfig) -> Path:
@@ -43,25 +43,61 @@ def job_type_identifier(job_type: str) -> str:
     return f"orca_{normalized or 'other'}"
 
 
-def normalize_molecule_key(value: str) -> str:
-    collapsed = _MOLECULE_KEY_RE.sub("_", normalize_text(value)).strip("._-")
-    return collapsed or "unknown"
+@dataclass(frozen=True)
+class InputMetadata:
+    """What a selected input implies for a job-location row; ``""`` for a field not asked for."""
+
+    selected_input_xyz: str = ""
+    job_type: str = ""
+    molecule_key: str = ""
 
 
-def molecule_key_from_selected_inp(selected_inp: str, job_dir: Path) -> str:
+def derive_input_metadata(
+    selected_inp: str,
+    job_dir: Path,
+    *,
+    need_selected_input_xyz: bool = False,
+    need_job_type: bool = True,
+    need_molecule_key: bool = True,
+) -> InputMetadata:
+    """The metadata a selected input implies, from at most one read of it.
+
+    Only the requested fields are derived, so a caller whose artifacts
+    already carry them never opens the input. Otherwise the input is read
+    once, through the stable reader (a FIFO, a non-regular file or one
+    changed while read is no input), and one parse serves the ``xyzfile``
+    path, the route type and the molecule key. The geometry file is read only
+    when the key needs its formula. An unusable or missing input gives the
+    fallbacks: no geometry path, the ``other`` type, and the directory key
+    of ``job_dir``, the job's own directory, as submission recorded it.
+    """
+    if not (need_selected_input_xyz or need_job_type or need_molecule_key):
+        return InputMetadata()
     raw = normalize_text(selected_inp)
+    resolved: Path | None = None
     if raw:
         try:
-            candidate = Path(raw).expanduser()
-            resolved = candidate.resolve()
-        except OSError:
+            resolved = Path(raw).expanduser().resolve()
+        except (OSError, RuntimeError):
             resolved = None
-        if resolved is not None and resolved.exists():
-            return resolve_molecule_key(resolved).key
-        stem = Path(raw).stem.strip()
-        if stem:
-            return normalize_molecule_key(stem)
-    return normalize_molecule_key(job_dir.name)
+    text = read_input_text(resolved) if resolved is not None else None
+    if resolved is None or text is None:
+        return InputMetadata(
+            job_type="other" if need_job_type else "",
+            molecule_key=directory_fallback_key(job_dir) if need_molecule_key else "",
+        )
+    parsed = parse_input(text.splitlines())
+    return InputMetadata(
+        selected_input_xyz=(
+            xyzfile_input_path(parsed, resolved.parent) if need_selected_input_xyz else ""
+        ),
+        job_type=job_type_from_routes(list(parsed.route_lines)) if need_job_type else "",
+        molecule_key=(
+            molecule_key_from_text(text, resolved, parsed=parsed, fallback_dir=job_dir).key
+            if need_molecule_key
+            else ""
+        ),
+    )
 
 
 def resolve_job_metadata(
@@ -71,45 +107,14 @@ def resolve_job_metadata(
     need_job_type: bool = True,
     need_molecule_key: bool = True,
 ) -> tuple[str, str]:
-    """The job type and molecule key a selected input implies; ``""`` for one not needed.
-
-    Only the requested fields are derived, so a caller whose artifacts
-    already carry a field never opens the input for it. When both are
-    needed, the input is read once and one parse serves both. The molecule
-    key's directory fallback is ``job_dir``'s name, the job's own directory,
-    never the directory of a bound copy in a generation, so it matches the
-    key submission recorded.
-    """
-    if not (need_job_type or need_molecule_key):
-        return "", ""
-    raw = normalize_text(selected_inp)
-    resolved: Path | None = None
-    if raw:
-        try:
-            resolved = Path(raw).expanduser().resolve()
-        except OSError:
-            resolved = None
-        if resolved is not None and not resolved.exists():
-            resolved = None
-    if resolved is None:
-        # No readable input (a moved job's recorded path is gone): the route
-        # type is unknown, and the key is the same directory fallback
-        # submission used, not the input file's stem.
-        job_type = "other" if need_job_type else ""
-        molecule_key = directory_fallback_key(job_dir) if need_molecule_key else ""
-        return job_type, molecule_key
-    try:
-        text = resolved.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        text = ""
-    parsed = parse_input(text.splitlines())
-    job_type = job_type_from_routes(list(parsed.route_lines)) if need_job_type else ""
-    molecule_key = (
-        molecule_key_from_text(text, resolved, parsed=parsed, fallback_dir=job_dir).key
-        if need_molecule_key
-        else ""
+    """The job type and molecule key a selected input implies (:func:`derive_input_metadata`)."""
+    metadata = derive_input_metadata(
+        selected_inp,
+        job_dir,
+        need_job_type=need_job_type,
+        need_molecule_key=need_molecule_key,
     )
-    return job_type, molecule_key
+    return metadata.job_type, metadata.molecule_key
 
 
 def resource_dict(max_cores: int, max_memory_gb: int) -> dict[str, int]:
@@ -148,7 +153,9 @@ def build_job_location_record(
 
     The original run directory is the existing row's, else ``job_dir``;
     ``latest_known_path`` is always ``job_dir``. An empty molecule key falls
-    back to the existing row's, then to the one the selected input implies.
+    back to the existing row's, then to the run directory's name. Assembly
+    reads no file; callers derive input metadata first
+    (:func:`derive_input_metadata`).
     """
     resolved_job_dir = job_dir.expanduser().resolve()
     existing_run_dir = _existing_text(existing, "original_run_dir")
@@ -162,9 +169,9 @@ def build_job_location_record(
         existing, "molecule_key"
     )
     if not molecule_key_text:
-        molecule_key_text = molecule_key_from_selected_inp(
-            selected_input_xyz_text, original_run_dir
-        )
+        # Assembly reads no file: a row given no key and holding none falls
+        # back to its run directory's name, the directory fallback rule.
+        molecule_key_text = directory_fallback_key(original_run_dir)
     resource_request_payload = _existing_resources(resource_request, existing, "resource_request")
     resource_actual_payload = (
         _existing_resources(resource_actual, existing, "resource_actual")

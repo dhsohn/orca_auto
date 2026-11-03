@@ -16,6 +16,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
+from orca_auto.core.utils.stable_fs import StableFsError, read_stable_regular_file_at
+
 _SAFE_UNQUOTED_ORCA_PATH_RE = re.compile(r"^[A-Za-z0-9._/+\-]+$")
 
 
@@ -196,12 +199,26 @@ def orca_route_lines(lines: list[str]) -> list[str]:
     return [route for line in lines if (route := orca_route_line(line)) is not None]
 
 
+def read_input_text(path: Path, *, max_bytes: int = MAX_INPUT_SNAPSHOT_BYTES) -> str | None:
+    """The text of an input or geometry file read once, or ``None`` when it cannot be used.
+
+    Read through the stable regular-file reader: no final-symlink follow, no
+    blocking on a FIFO, regular files only, within ``max_bytes``, and only if
+    unchanged while read. A caller deriving metadata from an optional input
+    (the job index, the molecule key) falls back on ``None`` instead of
+    waiting on, or misreading, a file that is not a usable input.
+    """
+    try:
+        payload, _status = read_stable_regular_file_at(path, max_bytes=max_bytes)
+    except (OSError, StableFsError):
+        return None
+    return payload.decode("utf-8", errors="ignore")
+
+
 def input_file_lines(inp_path: Path) -> list[str]:
     """Lines of an input file as the route and ``%geom`` readers see them; ``[]`` when unreadable."""
-    try:
-        return inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return []
+    text = read_input_text(inp_path)
+    return [] if text is None else text.splitlines()
 
 
 def file_route_lines(inp_path: Path) -> list[str]:

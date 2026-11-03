@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .input_blocks import InputSource, OrcaGeometryBlock, ParsedInput, find_geometry_block
+from .input_syntax import read_input_text
 from .orca_chemistry import build_formula
 
 logger = logging.getLogger(__name__)
@@ -23,11 +24,8 @@ class MoleculeKeyResolution:
 
 
 def resolve_molecule_key(inp_path: Path) -> MoleculeKeyResolution:
-    try:
-        text = inp_path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        text = ""
-    return molecule_key_from_text(text, inp_path)
+    text = read_input_text(inp_path)
+    return molecule_key_from_text("" if text is None else text, inp_path)
 
 
 def molecule_key_from_text(
@@ -112,11 +110,12 @@ def _parse_inline_xyz(block: OrcaGeometryBlock) -> list[str]:
 
 
 def _parse_xyz_file(xyz_path: Path) -> list[str]:
-    try:
-        lines = xyz_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
+    # A FIFO, a non-regular file or one changed while read is no geometry.
+    text = read_input_text(xyz_path)
+    if text is None:
         logger.warning("Cannot read xyz file: %s", xyz_path)
         return []
+    lines = text.splitlines()
 
     # Standard XYZ format: line 1 = atom count, line 2 = comment, line 3+ =
     # exactly that many atom lines. A truncated or corrupt file must yield no
