@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .input_blocks import find_geometry_block
+from .input_blocks import InputSource, find_geometry_block
 
 
 @dataclass(frozen=True)
@@ -30,8 +30,8 @@ def derive_selected_input_xyz(selected_inp: str | Path | None) -> str:
     return xyzfile_input_path(text.splitlines(), inp_path.parent)
 
 
-def xyzfile_input_path(lines: list[str], inp_dir: Path) -> str:
-    """The resolved ``* xyzfile`` geometry path an input's ``lines`` name, or ``""``."""
+def xyzfile_input_path(lines: InputSource, inp_dir: Path) -> str:
+    """The resolved ``* xyzfile`` geometry path an input's ``lines`` (or its parse) name, or ``""``."""
     block = find_geometry_block(lines)
     if block is None or not block.reference:
         return ""

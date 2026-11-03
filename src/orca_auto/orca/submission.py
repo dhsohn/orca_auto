@@ -270,16 +270,19 @@ def _prepare_submission_inputs(
     inp_path = selected_inp.expanduser().resolve()
     artifacts = OrcaSelectedInputArtifacts(
         selected_inp=str(selected_inp),
-        selected_input_xyz=xyzfile_input_path(lines, inp_path.parent),
+        selected_input_xyz=xyzfile_input_path(parsed, inp_path.parent),
     )
     job_type = job_type_from_routes(list(parsed.route_lines))
     detail_kind = queue_detail_kind(inp_path, parsed)
-    molecule_key = molecule_key_from_text(text, inp_path).key
+    molecule_key = molecule_key_from_text(text, inp_path, parsed=parsed).key
+    # The resource step decodes strictly; it reuses this parse only when its
+    # lines are identical, and re-parses each version it rewrites.
     prepared_input = prepare_submission_resource_request(
         selected_inp,
         source_payload,
         default_max_cores=int(cfg.resources.max_cores_per_task),
         default_max_memory_gb=int(cfg.resources.max_memory_gb_per_task),
+        parsed=parsed,
     )
     if prepared_input.actions:
         logger.info(
