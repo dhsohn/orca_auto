@@ -1174,3 +1174,29 @@ def test_the_fallback_key_is_the_job_directory_not_the_generation(
     )
 
     assert metadata["molecule_key"] == "rxn"
+
+
+def test_the_molecule_formula_is_read_once_from_the_captured_geometry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.orca import molecule_key as molecule_key_mod
+
+    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    (reaction_dir / "rxn.inp").write_text("! SP\n* xyzfile 0 1 geom.xyz\n", encoding="utf-8")
+    (reaction_dir / "geom.xyz").write_text(_H2_XYZ, encoding="utf-8")
+    reads: list[Path] = []
+    real_parse = molecule_key_mod._parse_xyz_file
+
+    def recorded(path: Path) -> list[str]:
+        reads.append(Path(path))
+        return real_parse(path)
+
+    monkeypatch.setattr(molecule_key_mod, "_parse_xyz_file", recorded)
+
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+
+    assert result.status == "submitted", result.stderr
+    [entry] = queue_adapter.list_queue(tmp_path)
+    execution_dir = Path(entry.metadata["execution_snapshot"]["execution_dir"]).resolve()
+    assert entry.metadata["molecule_key"] == "H2"
+    assert [path.resolve().parent for path in reads] == [execution_dir]
