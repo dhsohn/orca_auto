@@ -520,3 +520,86 @@ def test_rebuild_sees_a_terminal_row_written_between_its_plan_and_its_merge(
     assert interleaved == ["worker"]
     assert _row(root, "K").status == "completed"
     assert result.conflicts == ()
+
+
+def _job_with_input_and_geometry(root: Path, report: dict[str, Any]) -> Path:
+    from orca_auto.orca.statuses import RunStatus
+    from tests.conftest import write_run_state
+
+    job_dir = root / "job"
+    write_run_state(job_dir, status=RunStatus.COMPLETED, job_id="job-1")
+    (job_dir / "calc.inp").write_text("! HF Opt\n* xyzfile 0 1 geom.xyz\n", encoding="utf-8")
+    (job_dir / "geom.xyz").write_text("2\nH2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    report_json_path(job_dir).write_text(
+        json.dumps(
+            {
+                "job_id": "job-1",
+                "selected_inp": str(job_dir / "calc.inp"),
+                "selected_input_xyz": str(job_dir / "geom.xyz"),
+                **report,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return job_dir
+
+
+def _record_input_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    from orca_auto.orca import molecule_key as molecule_key_mod
+
+    reads: list[str] = []
+    real_read_text = Path.read_text
+    real_parse_xyz = molecule_key_mod._parse_xyz_file
+
+    def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self.suffix == ".inp":
+            reads.append(self.name)
+        return real_read_text(self, *args, **kwargs)
+
+    def parse_xyz(path: Path) -> list[str]:
+        reads.append(Path(path).name)
+        return real_parse_xyz(path)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(molecule_key_mod, "_parse_xyz_file", parse_xyz)
+    return reads
+
+
+def test_rebuild_never_opens_the_input_when_the_artifacts_carry_the_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "runs"
+    _job_with_input_and_geometry(root, {"job_type": "orca_opt", "molecule_key": "C2H6"})
+    reads = _record_input_reads(monkeypatch)
+
+    [row] = rebuild_job_location_records(root, apply=False).added
+
+    assert (row.job_type, row.molecule_key) == ("orca_opt", "C2H6")
+    assert reads == []
+
+
+def test_rebuild_derives_only_the_missing_field_from_one_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "runs"
+    _job_with_input_and_geometry(root, {"molecule_key": "C2H6"})
+    reads = _record_input_reads(monkeypatch)
+
+    [row] = rebuild_job_location_records(root, apply=False).added
+
+    # The job type comes from one read of the input; the geometry is untouched.
+    assert (row.job_type, row.molecule_key) == ("orca_opt", "C2H6")
+    assert reads == ["calc.inp"]
+
+
+def test_rebuild_derives_both_fields_from_one_read_of_the_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "runs"
+    _job_with_input_and_geometry(root, {})
+    reads = _record_input_reads(monkeypatch)
+
+    [row] = rebuild_job_location_records(root, apply=False).added
+
+    assert (row.job_type, row.molecule_key) == ("orca_opt", "H2")
+    assert reads == ["calc.inp", "geom.xyz"]

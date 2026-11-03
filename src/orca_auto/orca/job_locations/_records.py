@@ -24,8 +24,9 @@ from orca_auto.core.utils import normalize_text
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME
 
 from ..config import AppConfig
-from ..job_type import detect_job_type
-from ..molecule_key import resolve_molecule_key
+from ..input_blocks import parse_input
+from ..job_type import job_type_from_routes
+from ..molecule_key import molecule_key_from_text, resolve_molecule_key
 from ._utils import normalize_path_text
 
 _MOLECULE_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -63,18 +64,44 @@ def molecule_key_from_selected_inp(selected_inp: str, job_dir: Path) -> str:
     return normalize_molecule_key(job_dir.name)
 
 
-def resolve_job_metadata(selected_inp: str, job_dir: Path) -> tuple[str, str]:
-    job_type = "other"
+def resolve_job_metadata(
+    selected_inp: str,
+    job_dir: Path,
+    *,
+    need_job_type: bool = True,
+    need_molecule_key: bool = True,
+) -> tuple[str, str]:
+    """The job type and molecule key a selected input implies; ``""`` for one not needed.
+
+    Only the requested fields are derived, so a caller whose artifacts
+    already carry a field never opens the input for it. When both are
+    needed, the input is read once and one parse serves both.
+    """
+    if not (need_job_type or need_molecule_key):
+        return "", ""
     raw = normalize_text(selected_inp)
+    resolved: Path | None = None
     if raw:
         try:
-            candidate = Path(raw).expanduser()
-            resolved = candidate.resolve()
+            resolved = Path(raw).expanduser().resolve()
         except OSError:
             resolved = None
-        if resolved is not None and resolved.exists():
-            job_type = detect_job_type(resolved)
-    molecule_key = molecule_key_from_selected_inp(raw, job_dir)
+        if resolved is not None and not resolved.exists():
+            resolved = None
+    if resolved is None:
+        # No readable input: the route type is unknown and the key comes from names.
+        job_type = "other" if need_job_type else ""
+        molecule_key = molecule_key_from_selected_inp(raw, job_dir) if need_molecule_key else ""
+        return job_type, molecule_key
+    try:
+        text = resolved.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        text = ""
+    parsed = parse_input(text.splitlines())
+    job_type = job_type_from_routes(list(parsed.route_lines)) if need_job_type else ""
+    molecule_key = (
+        molecule_key_from_text(text, resolved, parsed=parsed).key if need_molecule_key else ""
+    )
     return job_type, molecule_key
 
 

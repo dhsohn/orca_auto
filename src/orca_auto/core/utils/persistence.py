@@ -82,20 +82,6 @@ def load_json_list_file(
     return raw
 
 
-def load_json_file(path: Path) -> Any | None:
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except JSON_LOAD_EXCEPTIONS:
-        return None
-
-
-def load_json_mapping_file(path: Path) -> dict[str, Any] | None:
-    raw = load_json_file(path)
-    return raw if isinstance(raw, dict) else None
-
-
 def open_pinned_readonly(path: str | Path, *, dir_fd: int | None = None) -> int:
     """Acquire a non-inheritable read-only fd without following the final symlink.
 

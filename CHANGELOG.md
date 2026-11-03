@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `queue list`, `index rebuild` and every run-state read no longer hang
+  when a `job_state.json` or `machine.json` is a FIFO. Both are now opened
+  without blocking, as regular files only, within the artifact size limit,
+  and only if unchanged while read. A FIFO, a directory, a symlink or an
+  oversized file reads as a corrupt state (or an ignored report), and the
+  other directories are listed and indexed as before.
 - `index rebuild` now sets aside a report whose index fields cannot be used
   (an input path with a NUL byte or an unknown `~user`, a non-finite or
   non-integer resource value, a non-text identifier), as it already did for
@@ -144,6 +150,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- `index rebuild` derives a row's job type or molecule key from the selected
+  input only when the artifacts do not already carry it. When both are
+  missing it reads the input once and shares one parse between them. Before,
+  it read the input twice and the geometry once for every row, even when the
+  report supplied both values. The resulting rows are unchanged.
 - Submission now reads the selected input through one parse for its job
   type, Detail, `* xyzfile` geometry path, molecule key and resource request.
   For a 1,005-line input the stage tokenized lines 5,025 times and now 2,010

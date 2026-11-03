@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import RUN_STATE_FILE
+from orca_auto.core.artifacts import MAX_RUN_ARTIFACT_JSON_BYTES, RUN_STATE_FILE
 from orca_auto.core.indexing import JobLocationRecord, merge_job_locations
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
@@ -22,7 +22,7 @@ from orca_auto.core.paths import (
 )
 from orca_auto.core.statuses import TERMINAL_STATUSES
 from orca_auto.core.utils import normalize_text
-from orca_auto.core.utils.persistence import load_json_mapping_file
+from orca_auto.core.utils.json_artifacts import read_json_artifact
 
 from ..machine_observation import report_json_path
 from ..state_reading import CorruptRunStateError, decode_run_state
@@ -136,9 +136,16 @@ class _DiscoveredState:
 def _discover_state(job_dir: Path) -> _DiscoveredState | None:
     """Read ``job_dir``'s artifacts; ``None`` when there is no usable ORCA state."""
     state_file = job_dir / RUN_STATE_FILE
-    payload = load_json_mapping_file(state_file)
-    if payload is None:
+    read = read_json_artifact(state_file, max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES)
+    if read.kind == "missing":
         return None
+    if read.kind == "invalid" or not isinstance(read.value, dict):
+        # A FIFO is refused without blocking; this directory keeps its rows.
+        logger.warning(
+            "Skipping unreadable ORCA run state in %s: %s", job_dir, read.reason or "not an object"
+        )
+        return None
+    payload = read.value
     try:
         decoded = decode_run_state(payload)
     except CorruptRunStateError as exc:
@@ -168,11 +175,16 @@ def _discover_state(job_dir: Path) -> _DiscoveredState | None:
 
 def _readable_report(job_dir: Path) -> dict[str, Any] | None:
     """``job_dir``'s report, or ``None`` when absent or unreadable (logged)."""
-    report = load_json_mapping_file(report_json_path(job_dir))
-    if report is None:
+    read = read_json_artifact(report_json_path(job_dir), max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES)
+    if read.kind == "missing":
+        return None
+    if read.kind == "invalid":
+        logger.warning("Ignoring unreadable ORCA report in %s: %s", job_dir, read.reason)
+        return None
+    if not isinstance(read.value, dict):
         return None
     try:
-        return decode_report(report)
+        return decode_report(read.value)
     except UnreadableReportError as exc:
         # The decoded job_state.json still indexes this directory.
         logger.warning("Ignoring unreadable ORCA report in %s: %s", job_dir, exc)
