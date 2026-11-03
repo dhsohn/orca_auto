@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `index rebuild` no longer hangs, holding the index lock, when a job's
+  selected `.inp` or its `* xyzfile` geometry is a FIFO. Inputs and geometry
+  files read for index metadata (and for route facts and molecule keys) now
+  go through the stable regular-file reader; an unusable file gives the
+  usual fallbacks (`other` type, directory key), and the other jobs are
+  indexed as before.
 - A job keyed by its directory name keeps that key when it is moved and
   the index is rebuilt from scratch. With its recorded input path gone, the
   rebuild fell back to the input file's stem (`calc`) instead of the job
@@ -182,6 +188,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- `index rebuild` derives a row's geometry path, job type and molecule key
+  from one read of the selected input (it read the input twice before), and
+  the row builder reads no file: a row with no key falls back to its run
+  directory's name. The input-stem fallback helper is removed.
 - `index rebuild` derives a row's job type or molecule key from the selected
   input only when the artifacts do not already carry it. When both are
   missing it reads the input once and shares one parse between them. Before,

@@ -545,23 +545,18 @@ def _job_with_input_and_geometry(root: Path, report: dict[str, Any]) -> Path:
 
 
 def _record_input_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    from orca_auto.orca import molecule_key as molecule_key_mod
+    """Names of the input and geometry files read through the stable input reader."""
+    from orca_auto.orca import input_syntax
 
     reads: list[str] = []
-    real_read_text = Path.read_text
-    real_parse_xyz = molecule_key_mod._parse_xyz_file
+    real_read = input_syntax.read_stable_regular_file_at
 
-    def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
-        if self.suffix == ".inp":
-            reads.append(self.name)
-        return real_read_text(self, *args, **kwargs)
+    def read(path: Any, **kwargs: Any) -> Any:
+        if Path(path).suffix in {".inp", ".xyz"}:
+            reads.append(Path(path).name)
+        return real_read(path, **kwargs)
 
-    def parse_xyz(path: Path) -> list[str]:
-        reads.append(Path(path).name)
-        return real_parse_xyz(path)
-
-    monkeypatch.setattr(Path, "read_text", read_text)
-    monkeypatch.setattr(molecule_key_mod, "_parse_xyz_file", parse_xyz)
+    monkeypatch.setattr(input_syntax, "read_stable_regular_file_at", read)
     return reads
 
 
@@ -602,4 +597,93 @@ def test_rebuild_derives_both_fields_from_one_read_of_the_input(
     [row] = rebuild_job_location_records(root, apply=False).added
 
     assert (row.job_type, row.molecule_key) == ("orca_opt", "H2")
+    assert reads == ["calc.inp", "geom.xyz"]
+
+
+def _fifo_input_runs(root: Path, fifo_name: str) -> Path:
+    """Two completed jobs; ``fifo``'s input (or its geometry) is a FIFO."""
+    from orca_auto.orca.statuses import RunStatus
+    from tests.conftest import write_run_state
+
+    for name in ("good", "fifo"):
+        job_dir = root / name
+        job_dir.mkdir(parents=True)
+        (job_dir / "calc.inp").write_text("! HF Opt\n* xyzfile 0 1 geom.xyz\n", encoding="utf-8")
+        (job_dir / "geom.xyz").write_text("2\nH2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+        write_run_state(
+            job_dir,
+            status=RunStatus.COMPLETED,
+            job_id=f"job-{name}",
+            selected_inp=job_dir / "calc.inp",
+        )
+    target = root / "fifo" / fifo_name
+    target.unlink()
+    os.mkfifo(target)
+    return root
+
+
+@pytest.mark.parametrize(
+    ("fifo_name", "fifo_key"),
+    [
+        # The input cannot be read: the type is unknown and the key is the
+        # directory fallback.
+        ("calc.inp", ("orca_other", "fifo")),
+        # The input reads, its geometry does not: the type is known and the
+        # key falls back to the directory.
+        ("geom.xyz", ("orca_opt", "fifo")),
+    ],
+)
+def test_a_fifo_input_never_blocks_the_rebuild_or_holds_its_lock(
+    tmp_path: Path, fifo_name: str, fifo_key: tuple[str, str]
+) -> None:
+    import subprocess
+    import sys
+    import textwrap
+
+    root = _fifo_input_runs(tmp_path / "runs", fifo_name)
+    code = f"""
+        import json
+        from pathlib import Path
+        from orca_auto.core.indexing import list_job_locations
+        from orca_auto.orca.job_locations import rebuild_job_location_records
+        preview = rebuild_job_location_records(Path({str(root)!r}), apply=False)
+        # The preview released the index lock: a locked read returns at once.
+        list_job_locations(Path({str(root)!r}))
+        print(json.dumps({{r.job_id: [r.job_type, r.molecule_key] for r in preview.added}}))
+        """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(code)],
+        cwd=Path(__file__).resolve().parents[3],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=True,
+    )
+
+    rows = json.loads(result.stdout.strip().splitlines()[-1])
+    assert rows == {"job-good": ["orca_opt", "H2"], "job-fifo": list(fifo_key)}
+
+
+def test_rebuild_reads_the_input_once_for_all_three_derived_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.orca.statuses import RunStatus
+    from tests.conftest import write_run_state
+
+    # The state names only the input: the geometry path, the type and the
+    # key all come from one read of it, and the formula from the geometry.
+    root = tmp_path / "runs"
+    job_dir = root / "job"
+    job_dir.mkdir(parents=True)
+    (job_dir / "calc.inp").write_text("! HF Opt\n* xyzfile 0 1 geom.xyz\n", encoding="utf-8")
+    (job_dir / "geom.xyz").write_text("2\nH2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    write_run_state(
+        job_dir, status=RunStatus.COMPLETED, job_id="job-1", selected_inp=job_dir / "calc.inp"
+    )
+    reads = _record_input_reads(monkeypatch)
+
+    [row] = rebuild_job_location_records(root, apply=False).added
+
+    assert (row.job_type, row.molecule_key) == ("orca_opt", "H2")
+    assert row.selected_input_xyz == str(job_dir / "geom.xyz")
     assert reads == ["calc.inp", "geom.xyz"]

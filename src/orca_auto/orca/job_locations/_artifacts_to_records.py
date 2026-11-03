@@ -19,9 +19,8 @@ from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.indexing.store import normalize_index_text
 from orca_auto.core.utils import copy_dict_or_empty, normalize_text
 
-from ..input_artifacts import derive_selected_input_xyz
 from ..state_reading import DecodedRunState
-from ._records import build_job_location_record, resolve_job_metadata
+from ._records import build_job_location_record, derive_input_metadata
 from ._utils import normalize_path_text, resource_dict_from_any
 
 
@@ -210,12 +209,7 @@ def record_from_artifacts(
     )
     status = first_artifact_text(sources, "status") or "unknown"
     selected_inp = normalize_path_text(first_artifact_value(sources, "selected_inp"))
-    selected_input_xyz = normalize_path_text(first_artifact_value(sources, "selected_input_xyz"))
-    if not selected_input_xyz.lower().endswith(".xyz"):
-        selected_input_xyz = derive_selected_input_xyz(selected_inp)
-    selected_input_xyz = (
-        selected_input_xyz or selected_inp or (existing.selected_input_xyz if existing else "")
-    )
+    supplied_input_xyz = normalize_path_text(first_artifact_value(sources, "selected_input_xyz"))
     if not job_id:
         return None
 
@@ -230,19 +224,27 @@ def record_from_artifacts(
         or normalize_text(existing.original_run_dir if existing else "")
         or str(job_dir)
     )
-    # The directory fallback is the job's own run directory, as submission
-    # recorded it, wherever the job lives now.
-    derived_job_type, derived_molecule_key = resolve_job_metadata(
+    # One derivation, at most one read of the input, for every field the
+    # artifacts lack. The directory fallback is the job's own run directory,
+    # as submission recorded it, wherever the job lives now.
+    need_input_xyz = not supplied_input_xyz.lower().endswith(".xyz")
+    derived = derive_input_metadata(
         selected_inp,
         Path(original_run_dir),
+        need_selected_input_xyz=need_input_xyz,
         need_job_type=not supplied_job_type,
         need_molecule_key=not supplied_molecule_key,
     )
+    selected_input_xyz = (
+        (derived.selected_input_xyz if need_input_xyz else supplied_input_xyz)
+        or selected_inp
+        or (existing.selected_input_xyz if existing else "")
+    )
     job_type = (
-        normalize_text(supplied_job_type or derived_job_type or default_job_type)
+        normalize_text(supplied_job_type or derived.job_type or default_job_type)
         or default_job_type
     )
-    molecule_key = normalize_text(supplied_molecule_key or derived_molecule_key)
+    molecule_key = normalize_text(supplied_molecule_key or derived.molecule_key)
     resource_request = _first_resources(sources, "resource_request", existing)
     resource_actual = _first_resources(sources, "resource_actual", existing)
     return build_job_location_record(
