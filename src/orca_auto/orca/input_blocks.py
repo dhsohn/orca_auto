@@ -249,6 +249,13 @@ OPERATION_BLOCK_KEYS: dict[str, frozenset[str]] = {
     "geom": frozenset({"ts_search"}),
     "method": frozenset({"runtyp"}),
 }
+# The ``%method RunTyp`` spellings of the two single-point jobs, lower case: a
+# plain energy, and an energy with a gradient (which writes <basename>.engrad,
+# as the EnGrad and NumGrad route keywords do). Submission admits exactly
+# these, the binding reserves the gradient output and the queue Detail names
+# the gradient run types; adding an alias here reaches all three.
+SINGLE_POINT_RUN_TYPES = frozenset({"energy", "sp"})
+GRADIENT_RUN_TYPES = frozenset({"gradient", "engrad", "energygrad", "numgrad"})
 
 
 @dataclass(frozen=True)
