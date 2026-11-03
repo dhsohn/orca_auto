@@ -25,8 +25,12 @@ from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from ..machine_observation import report_json_path
-from ..state_reading import CorruptRunStateError, state_from_normalized_payload
-from ._artifacts_to_records import first_artifact_text, record_from_artifacts
+from ..state_reading import CorruptRunStateError, decode_run_state
+from ._artifacts_to_records import (
+    first_artifact_text,
+    record_from_artifacts,
+    run_state_index_source,
+)
 from ._records import build_job_location_record
 
 logger = logging.getLogger(__name__)
@@ -107,7 +111,10 @@ def _iter_state_dirs(root: Path) -> list[Path]:
 
 @dataclass(frozen=True)
 class _DiscoveredState:
-    """One directory's ``job_state.json`` (plus ``report.json``) as read from disk."""
+    """One directory's decoded ``job_state.json`` (plus ``machine.json``) as read from disk.
+
+    ``state`` is :func:`run_state_index_source` of the decoded state.
+    """
 
     job_dir: Path
     state: dict[str, Any]
@@ -126,16 +133,20 @@ class _DiscoveredState:
 def _discover_state(job_dir: Path) -> _DiscoveredState | None:
     """Read ``job_dir``'s artifacts; ``None`` when there is no usable ORCA state."""
     state_file = job_dir / RUN_STATE_FILE
-    state = load_json_mapping_file(state_file)
-    if state is None:
+    payload = load_json_mapping_file(state_file)
+    if payload is None:
         return None
     try:
-        if state_from_normalized_payload(state) is None:
-            return None
+        decoded = decode_run_state(payload)
     except CorruptRunStateError as exc:
         # The rebuild reports every other directory; this one keeps its rows.
         logger.warning("Skipping corrupt ORCA run state in %s: %s", job_dir, exc)
         return None
+    if decoded is None:
+        return None
+    # The row is projected from what the decoder read, not from the raw
+    # envelope again: every reader then names the same job for this file.
+    state = run_state_index_source(decoded)
     try:
         mtime_ns = state_file.stat().st_mtime_ns
     except OSError:

@@ -16,6 +16,7 @@ import pytest
 from orca_auto.cli import main as cli_main
 from orca_auto.core.queue import persistence as queue_persistence
 from orca_auto.orca.attempt.resume import load_or_create_state
+from orca_auto.orca.job_locations import rebuild_job_location_records
 from orca_auto.orca.run_snapshot import collect_run_snapshots
 from orca_auto.orca.state_reading import (
     CorruptRunStateError,
@@ -174,3 +175,70 @@ def test_a_run_still_replaces_a_legacy_state(tmp_path: Path) -> None:
     assert resumed is False
     assert read_run_state(tmp_path).kind == "valid"
     assert state["selected_inp"] == str(inp)
+
+
+# A copy of an identity field elsewhere in the envelope that disagrees with
+# the canonical field. The writer never writes one; every reader must refuse
+# the file instead of each choosing a different job.
+_CONFLICTING_COPIES = {
+    "engine-job-id": (("engine_payload", "job_id"), "legacy-engine-job"),
+    "top-level-job-id": (("job_id",), "flat-job"),
+    "job-task-id": (("job", "task_id"), "other-task"),
+    "engine-queue-id": (("engine_payload", "queue_id"), "q-other"),
+    "engine-job-dir": (("engine_payload", "job_dir"), "/elsewhere"),
+    "engine-status": (("engine_payload", "status"), "running"),
+    "engine-selected-inp": (("engine_payload", "selected_inp"), "/elsewhere/rxn.inp"),
+    "top-level-run-id": (("run_id",), "run-other"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_CONFLICTING_COPIES))
+def test_a_conflicting_identity_copy_makes_the_state_corrupt(tmp_path: Path, case: str) -> None:
+    path, value = _CONFLICTING_COPIES[case]
+    write_run_state(tmp_path, status=RunStatus.COMPLETED, job_id="canonical-job", run_id="run-1")
+    payload = json.loads(state_path(tmp_path).read_text(encoding="utf-8"))
+    target = payload
+    for key in path[:-1]:
+        target = target.setdefault(key, {})
+    target[path[-1]] = value
+    state_path(tmp_path).write_text(json.dumps(payload), encoding="utf-8")
+
+    read = read_run_state(tmp_path)
+
+    assert read.kind == "corrupt"
+    assert "conflicts with" in read.reason
+
+
+def test_an_agreeing_identity_copy_is_still_valid(tmp_path: Path) -> None:
+    write_run_state(tmp_path, status=RunStatus.COMPLETED, job_id="canonical-job")
+    payload = json.loads(state_path(tmp_path).read_text(encoding="utf-8"))
+    payload["engine_payload"]["job_id"] = "canonical-job"
+    payload["job_id"] = "canonical-job"
+    state_path(tmp_path).write_text(json.dumps(payload), encoding="utf-8")
+
+    read = read_run_state(tmp_path)
+
+    assert read.kind == "valid"
+    assert read.state is not None
+    assert read.state["job_id"] == "canonical-job"
+
+
+def test_the_reader_and_the_index_rebuild_name_the_same_job(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    valid = runs / "valid"
+    write_run_state(valid, status=RunStatus.COMPLETED, job_id="job-valid")
+    conflicting = runs / "conflicting"
+    write_run_state(conflicting, status=RunStatus.COMPLETED, job_id="canonical-job")
+    payload = json.loads(state_path(conflicting).read_text(encoding="utf-8"))
+    payload["engine_payload"]["job_id"] = "legacy-engine-job"
+    state_path(conflicting).write_text(json.dumps(payload), encoding="utf-8")
+
+    preview = rebuild_job_location_records(runs, apply=False)
+
+    read = read_run_state(valid)
+    assert read.state is not None
+    assert [row.job_id for row in preview.added] == [read.state["job_id"]]
+    # The conflicting state is corrupt for the reader and skipped by the
+    # rebuild; neither names ``legacy-engine-job``.
+    assert read_run_state(conflicting).kind == "corrupt"
+    assert preview.skipped == (str(conflicting),)

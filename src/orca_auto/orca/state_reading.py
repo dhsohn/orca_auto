@@ -190,8 +190,78 @@ def _text_field(payload: Mapping[str, Any], key: str, *, where: str) -> str:
     raise CorruptRunStateError(f"{where}{key} is not text")
 
 
+# Fields the envelope holds once, and the other places a reader could find a
+# copy of each: a top-level flat key, another ``job`` key or an
+# ``engine_payload`` key. The writer never writes a disagreeing copy; a state
+# whose non-empty copy differs from the canonical field (an empty canonical
+# field included) names two jobs (or two runs, directories, inputs or
+# statuses) and is corrupt for every reader, so no reader picks one of them.
+_COPIED_IDENTITY_FIELDS: tuple[tuple[tuple[str, str], tuple[tuple[str, str], ...]], ...] = (
+    (
+        ("job", "id"),
+        (("", "job_id"), ("job", "task_id"), ("engine_payload", "job_id")),
+    ),
+    (("job", "queue_id"), (("", "queue_id"), ("engine_payload", "queue_id"))),
+    (
+        ("job", "dir"),
+        (
+            ("", "reaction_dir"),
+            ("engine_payload", "job_dir"),
+            ("engine_payload", "reaction_dir"),
+            ("engine_payload", "original_run_dir"),
+        ),
+    ),
+    (("status", "state"), (("engine_payload", "status"),)),
+    (("input", "primary_path"), (("", "selected_inp"), ("engine_payload", "selected_inp"))),
+    (("engine_payload", "run_id"), (("", "run_id"),)),
+)
+
+
+def _refuse_conflicting_copies(payload: Mapping[str, Any]) -> None:
+    def section(name: str) -> Mapping[str, Any]:
+        return payload if not name else _mapping_field(payload, name, where="")
+
+    for (canonical_section, canonical_key), copies in _COPIED_IDENTITY_FIELDS:
+        canonical = _text_field(
+            section(canonical_section), canonical_key, where=f"{canonical_section}."
+        )
+        for copy_section, copy_key in copies:
+            holder = section(copy_section)
+            if copy_key not in holder:
+                continue
+            where = f"{copy_section}." if copy_section else ""
+            value = _text_field(holder, copy_key, where=where)
+            if value and value != canonical:
+                raise CorruptRunStateError(
+                    f"{where}{copy_key} {value!r} conflicts with "
+                    f"{canonical_section}.{canonical_key} {canonical!r}"
+                )
+
+
+@dataclass(frozen=True)
+class DecodedRunState:
+    """A validated schema-v1 ORCA state: the flat :class:`RunState` and the
+    envelope fields only the job index reads (``input.selected_xyz_path`` and
+    ``resources``)."""
+
+    state: RunState
+    selected_xyz_path: str
+    resource_request: Mapping[str, Any]
+    resource_actual: Mapping[str, Any]
+
+
 def state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
     """The schema-v1 ORCA state in ``payload``; ``None`` for a legacy or foreign state.
+
+    Raises:
+        CorruptRunStateError: as :func:`decode_run_state`.
+    """
+    decoded = decode_run_state(payload)
+    return None if decoded is None else decoded.state
+
+
+def decode_run_state(payload: dict[str, Any]) -> DecodedRunState | None:
+    """Decode the schema-v1 ORCA state in ``payload``; ``None`` for a legacy or foreign state.
 
     Raises:
         CorruptRunStateError: for a schema-v1 ORCA state whose fields have the
@@ -208,6 +278,7 @@ def state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
     input_payload = _mapping_field(payload, "input", where="")
     timestamps = _mapping_field(payload, "timestamps", where="")
     engine_payload = _mapping_field(payload, "engine_payload", where="")
+    _refuse_conflicting_copies(payload)
     final_result = engine_payload.get("final_result")
     if final_result is not None and not isinstance(final_result, Mapping):
         raise CorruptRunStateError("engine_payload.final_result is not an object")
@@ -232,7 +303,13 @@ def state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
             RunFinalResult | None, None if final_result is None else dict(final_result)
         ),
     }
-    return state
+    resources = _mapping_field(payload, "resources", where="")
+    return DecodedRunState(
+        state=state,
+        selected_xyz_path=_text_field(input_payload, "selected_xyz_path", where="input."),
+        resource_request=_mapping_field(resources, "request", where="resources."),
+        resource_actual=_mapping_field(resources, "actual", where="resources."),
+    )
 
 
 def read_run_state(reaction_dir: Path) -> RunStateRead:
@@ -327,7 +404,9 @@ def load_generation_state(
 
 __all__ = [
     "CorruptRunStateError",
+    "DecodedRunState",
     "RunStateRead",
+    "decode_run_state",
     "read_run_state",
     "get_run_id_from_state",
     "load_generation_state",
