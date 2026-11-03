@@ -8,20 +8,20 @@ descriptors, resource request or directory identity.
 
 from __future__ import annotations
 
-import hashlib
 import os
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.confined_io import read_stable_regular_file, require_confined_regular_file
+from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KEY
 
 from ..file_identity import file_content_identity, verify_executable_identity
 from ..generation_validation import is_retired_generation_marker
-from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES, ORCA_EXECUTION_SNAPSHOT_VERSION
+from . import _capture
+from ._constants import ORCA_EXECUTION_SNAPSHOT_VERSION
 
 # Crash recovery and its rebind refuse a crashed row whose snapshot is not current.
 STALE_RECOVERY_SNAPSHOT_ERROR = (
@@ -199,19 +199,14 @@ def _verified_identity_payload(
         Path(str(identity.get("path") or "")).expanduser(),
         label=f"Queued ORCA {label} snapshot",
     )
-    payload = read_stable_regular_file(
+    captured = _capture.capture(
         path,
         # The bound input may be larger than either source file after a
         # same-stem XYZ dependency is inlined. Construction already caps this
         # rewritten artifact against the aggregate snapshot budget.
-        max_bytes=MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES,
+        max_bytes=_capture.aggregate_limit(),
         require_single_link=True,
     )
-    current = {
-        "path": str(path),
-        "sha256": hashlib.sha256(payload).hexdigest(),
-        "size_bytes": len(payload),
-    }
-    if current != dict(identity):
+    if captured.identity() != dict(identity):
         raise ValueError(f"Queued ORCA {label} snapshot is corrupt")
-    return path, payload
+    return path, captured.payload

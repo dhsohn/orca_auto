@@ -16,8 +16,8 @@ from ..input_syntax import (
     unquoted_orca_path,
 )
 from ..input_validation import validate_unambiguous_orca_directives
+from . import _capture
 from ._confinement import _confined_reference_path, _write_private_input
-from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 from ._models import _MaterializedSnapshotInputs, _SelectedSnapshotInput
 
 
@@ -98,8 +98,7 @@ def _write_bound_selected_snapshot(
             label="ORCA recovery bound input",
         )
         bound_payload = render_orca_input(bound_lines).encode("utf-8")
-    if materialized.consumed_bytes + len(bound_payload) > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
-        raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
+    _capture.charge_aggregate(materialized.consumed_bytes, len(bound_payload))
     bound_selected = execution_dir / source_selected.name
     _write_private_input(
         execution_dir,

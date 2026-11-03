@@ -1,6 +1,7 @@
 """Bind one ORCA submission to a visible, immutable execution generation.
 
-The package is split by stage: input inspection (``_inputs``), confinement of
+The package is split by stage: the one reader of source bytes and its byte
+budgets (``_capture``), input inspection (``_inputs``), confinement of
 referenced files (``_confinement``), generation reservation and the retirement
 of its snapshot intent when the queue row starts (``_reservation``),
 crash-recovery seeding (``_recovery``), input rewriting (``_rewrite``),
@@ -12,8 +13,9 @@ generation. Runtime consumers import only the names exported here.
 from __future__ import annotations
 
 from ._build import build_orca_execution_snapshot
+from ._capture import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 from ._cleanup import cleanup_unowned_orca_execution_snapshot
-from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES, ORCA_EXECUTION_SNAPSHOT_VERSION
+from ._constants import ORCA_EXECUTION_SNAPSHOT_VERSION
 from ._recovery import recovery_checkpoint_private_name
 from ._reservation import retire_snapshot_intent_for_row
 from ._snapshot_identity import (

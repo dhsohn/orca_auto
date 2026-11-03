@@ -10,6 +10,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Claim-time verification of a queued job now parses the same bytes of the
+  bound input whose identity it checked. It used to hash the file once and
+  then read it again to parse it, so a file replaced between the two reads
+  was parsed without being verified; it now reads the bound input once,
+  under the aggregate snapshot budget (the bound input can outgrow one
+  source's budget once a geometry is inlined). Every binding stage now reads
+  source bytes and checks its byte budgets through one module,
+  `execution_binding._capture`.
 - `index rebuild` now reads each `job_state.json` through the same decoder
   as every other reader. It used to validate the state and then read the raw
   file again with its own rules, where an `engine_payload.job_id` took

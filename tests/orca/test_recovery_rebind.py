@@ -24,15 +24,11 @@ from orca_auto.orca import execution, worker_execution
 from orca_auto.orca import recovery_rebind as _rebind
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution_binding import (
-    _confinement,
-    _recovery,
+    _capture,
     _reservation,
-    _rewrite,
-    _snapshot_identity,
     orca_execution_started_evidence,
     verify_orca_execution_snapshot,
 )
-from orca_auto.orca.execution_binding import _verify as _verify_stage
 from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.state_reading import load_state
@@ -46,16 +42,12 @@ from tests.conftest import (
 
 _PRISTINE_XYZ = "2\nH2\nH 0 0 0\nH 0 0 0.74\n"
 _CRASHED_XYZ = "2\noptimizing\nH 0 0 0\nH 0 0 0.80\n"
-# Binding stages that read source bytes or enforce the byte budgets. Patching
-# every one keeps the former single-module monkeypatch semantics.
-_STABLE_READERS = (_confinement, _recovery, _snapshot_identity, _verify_stage)
-_INPUT_BUDGET_USERS = (_confinement, _recovery)
-_AGGREGATE_BUDGET_USERS = (_confinement, _recovery, _rewrite, _snapshot_identity)
+# Every binding stage reads source bytes and checks its byte budgets through
+# ``_capture``, so a read failure or a smaller budget is injected there alone.
 
 
 def _patch_stable_read(monkeypatch: pytest.MonkeyPatch, reader: Any) -> None:
-    for module in _STABLE_READERS:
-        monkeypatch.setattr(module, "read_stable_regular_file", reader)
+    monkeypatch.setattr(_capture, "read_stable_regular_file", reader)
 
 
 def _patch_budgets(
@@ -65,11 +57,9 @@ def _patch_budgets(
     aggregate_bytes: int | None = None,
 ) -> None:
     if input_bytes is not None:
-        for module in _INPUT_BUDGET_USERS:
-            monkeypatch.setattr(module, "MAX_INPUT_SNAPSHOT_BYTES", input_bytes)
+        monkeypatch.setattr(_capture, "MAX_INPUT_SNAPSHOT_BYTES", input_bytes)
     if aggregate_bytes is not None:
-        for module in _AGGREGATE_BUDGET_USERS:
-            monkeypatch.setattr(module, "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES", aggregate_bytes)
+        monkeypatch.setattr(_capture, "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES", aggregate_bytes)
 
 
 def _mutable_job(tmp_path: Path, job_name: str = "job") -> tuple[Path, Path, Path]:
@@ -256,7 +246,7 @@ def test_recovery_materializes_the_exact_validated_seed_bytes(
     crashed = _build(job_dir, selected, executable)
     generation = _crash_generation(crashed)
     seed_path = generation / "h2.xyz"
-    real_read = _confinement.read_stable_regular_file
+    real_read = _capture.read_stable_regular_file
     seed_reads = 0
 
     def substitute_on_second_seed_read(path: str | Path, **kwargs: Any) -> bytes:
@@ -286,7 +276,7 @@ def test_recovery_atom_guard_rejects_bytes_outside_bound_selected_identity(
     crashed = _build(job_dir, selected, executable)
     generation = _crash_generation(crashed)
     bound_selected = Path(crashed["bound_selected_identity"]["path"])
-    real_read = _confinement.read_stable_regular_file
+    real_read = _capture.read_stable_regular_file
 
     def substitute_bound_selected(path: str | Path, **kwargs: Any) -> bytes:
         if Path(path) == bound_selected:
