@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from .input_blocks import GEOM_HEADER_RE, iter_blocks
+from .input_blocks import geometry_header_match, iter_blocks
 from .input_references import orca_moinp_references
 from .input_syntax import active_orca_directive_text, orca_line_tokens, orca_route_tokens
 from .operation_facts import OperationFacts
@@ -85,8 +85,17 @@ def validate_supported_xyz_geometry_syntax(
         if first == "*" or first.startswith("*"):
             if inline_geometry_open:
                 raise ValueError(f"{label} has an unterminated inline ORCA geometry block")
-            match = GEOM_HEADER_RE.match(stripped)
-            if match is None or match.group(1).lower() not in {"xyz", "xyzfile"}:
+            # The shared reader decides what the header says, comments
+            # included (``# note # * xyz 0 1``, ``* xyz 0 # c # 1``), exactly
+            # as the binding that reads the geometry does. Its active text
+            # drops quotes, so a quoted keyword, charge or multiplicity stays
+            # refused here; a quoted xyzfile path is the fifth token.
+            match = geometry_header_match(line)
+            if (
+                match is None
+                or match.group(1).lower() not in {"xyz", "xyzfile"}
+                or any(token.quoted for token in tokens[:4])
+            ):
                 raise ValueError(f"{label} uses an unsupported ORCA geometry format")
             geometry_type = match.group(1).lower()
             expected_token_count = 5 if geometry_type == "xyzfile" else 4

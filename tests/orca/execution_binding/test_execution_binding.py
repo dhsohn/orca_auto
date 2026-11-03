@@ -11,7 +11,7 @@ import pytest
 
 from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.orca import input_references
+from orca_auto.orca import input_blocks, input_references
 from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.execution_binding import (
     retire_snapshot_intent_for_row,
@@ -2556,6 +2556,66 @@ def test_unsupported_method_run_type_rejected_before_generation_reservation(
             orca_executable=tmp_path / "never-executed",
         )
     assert sorted(path.name for path in job_dir.iterdir()) == ["calc.inp", "calc.xyz"]
+
+
+_HEADER_COMMENT_FORMS = {
+    "plain": "{header}",
+    "trailing": "{header} # singlet",
+    "leading": "# geometry # {header}",
+    "inner": "{inner}",
+}
+
+
+def _geometry_header(kind: str, form: str) -> str:
+    header = "* xyz 0 1" if kind == "xyz" else "* xyzfile 0 1 h2.xyz"
+    inner = "* xyz 0 # singlet # 1" if kind == "xyz" else "* xyzfile 0 # singlet # 1 h2.xyz"
+    return _HEADER_COMMENT_FORMS[form].format(header=header, inner=inner)
+
+
+def _build_with_header(tmp_path: Path, header: str) -> dict[str, Any]:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "h2.xyz").write_text("2\nh2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    selected = job_dir / "calc.inp"
+    body = "" if "xyzfile" in header else "H 0 0 0\nH 0 0 0.74\n*\n"
+    selected.write_text(f"! HF STO-3G\n{header}\n{body}", encoding="utf-8")
+    xyzfile = "xyzfile" in header
+    return build_submitted_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz=str(job_dir / "h2.xyz") if xyzfile else "",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+
+@pytest.mark.parametrize("form", sorted(_HEADER_COMMENT_FORMS))
+@pytest.mark.parametrize("kind", ["xyz", "xyzfile"])
+def test_geometry_header_comments_are_read_like_the_geometry_reader(
+    tmp_path: Path, kind: str, form: str
+) -> None:
+    # The shared geometry reader accepts closed comments before, inside and
+    # after a header; submission must not refuse what the binding then reads.
+    header = _geometry_header(kind, form)
+    block = input_blocks.find_geometry_block([header, "H 0 0 0", "*"])
+    assert block is not None and block.kind == kind
+
+    snapshot = _build_with_header(tmp_path, header)
+
+    assert snapshot["selected_inp"]
+
+
+@pytest.mark.parametrize(
+    "header",
+    ['* "xyz" 0 1', '* xyz "0" 1', '* xyz 0 "1"', '* xyzfile 0 "1" h2.xyz', '"*" xyz 0 1'],
+)
+def test_quoted_geometry_header_fields_stay_refused(tmp_path: Path, header: str) -> None:
+    with pytest.raises(ValueError, match="geometry"):
+        _build_with_header(tmp_path, header)
+
+
+def test_a_quoted_xyzfile_path_stays_accepted(tmp_path: Path) -> None:
+    assert _build_with_header(tmp_path, '* xyzfile 0 1 "h2.xyz"')["selected_inp"]
 
 
 def _build_inline_h2(tmp_path: Path, settings: str) -> dict[str, Any]:
