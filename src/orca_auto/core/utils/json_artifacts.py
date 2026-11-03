@@ -45,7 +45,10 @@ def read_json_artifact(
         return JsonArtifactRead("invalid", reason=f"unreadable ({exc.__class__.__name__})")
     try:
         value = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
+        # JSONDecodeError and UnicodeDecodeError are ValueErrors, and so is
+        # the parser's own refusal of an integer over the int-to-str digit
+        # limit: each is a file that exists but cannot be used.
         return JsonArtifactRead(
             "invalid", reason=f"unreadable JSON ({exc.__class__.__name__})", status=status
         )

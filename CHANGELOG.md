@@ -10,6 +10,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- A small `job_state.json` or `machine.json` holding an integer longer than
+  Python's integer-parsing limit (4,300 digits) now reads as unusable.
+  The parser's plain `ValueError` escaped the shared JSON reader and stopped
+  the state read, `queue list` and `index rebuild`.
 - A job whose molecule key falls back to its directory name (no `# TAG`
   and no readable formula) now keeps that key through terminal settlement
   and index rebuild. Both re-derived the key from the bound input inside the

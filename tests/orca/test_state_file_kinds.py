@@ -147,3 +147,34 @@ def test_a_missing_and_a_valid_artifact_read_as_before(tmp_path: Path) -> None:
 
     assert (read.kind, read.value) == ("valid", {"a": 1})
     assert read.status is not None and read.status.st_size == 8
+
+
+_OVERLONG_INTEGER = '{"unused":' + "9" * 4301 + "}"
+
+
+def test_an_integer_over_the_parser_limit_reads_as_invalid(tmp_path: Path) -> None:
+    # The parser raises a plain ValueError (not a JSONDecodeError) for an
+    # integer past Python's int-to-str digit limit.
+    (tmp_path / "big.json").write_text(_OVERLONG_INTEGER, encoding="utf-8")
+
+    read = read_json_artifact(tmp_path / "big.json", max_bytes=1 << 20)
+
+    assert read.kind == "invalid"
+    assert "ValueError" in read.reason
+
+
+def test_an_unparseable_state_beside_a_good_one_does_not_stop_the_readers(
+    tmp_path: Path,
+) -> None:
+    from orca_auto.orca.job_locations import rebuild_job_location_records
+    from orca_auto.orca.run_snapshot import collect_run_snapshots
+
+    runs = tmp_path / "runs"
+    write_run_state(runs / "good", status=RunStatus.COMPLETED, job_id="job-good")
+    (runs / "big").mkdir()
+    state_path(runs / "big").write_text(_OVERLONG_INTEGER, encoding="utf-8")
+
+    assert read_run_state(runs / "big").kind == "corrupt"
+    assert [snapshot.reaction_dir.name for snapshot in collect_run_snapshots(runs)] == ["good"]
+    preview = rebuild_job_location_records(runs, apply=False)
+    assert [row.job_id for row in preview.added] == ["job-good"]
