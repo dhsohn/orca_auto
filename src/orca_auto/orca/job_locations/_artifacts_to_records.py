@@ -40,17 +40,79 @@ def _schema_version(source: dict[str, Any]) -> int:
     raise UnreadableReportError(f"schema_version {value!r} is not an integer")
 
 
+# The fields a job-location row reads, by kind. ``decode_index_source`` checks
+# and normalizes exactly these, so nothing after it interprets a raw value.
+_INDEX_TEXT_KEYS = ("job_id", "run_id", "status", "job_type", "molecule_key")
+_INDEX_PATH_KEYS = ("selected_inp", "selected_input_xyz", "original_run_dir")
+_INDEX_RESOURCE_KEYS = ("resource_request", "resource_actual")
+
+
+def _index_text(key: str, value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise UnreadableReportError(f"{key} is not text")
+    return normalize_index_text(value)
+
+
+def _index_path(key: str, value: Any) -> str:
+    """``value`` as the index stores it, once it is known to resolve as a path."""
+    if not isinstance(value, str):
+        raise UnreadableReportError(f"{key} is not a path")
+    try:
+        normalized = normalize_path_text(value)
+        # The row builder resolves the run directory; refuse here what it cannot.
+        Path(normalized).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise UnreadableReportError(f"{key} is not a usable path: {exc}") from exc
+    # The run directory keeps its recorded text; input paths are stored resolved.
+    return normalize_index_text(value) if key == "original_run_dir" else normalized
+
+
+def _index_resources(key: str, value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise UnreadableReportError(f"{key} is not an object")
+    resources: dict[str, int] = {}
+    for name, raw in value.items():
+        name_text = normalize_text(name)
+        if not name_text:
+            continue
+        try:
+            resources[name_text] = int(raw)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise UnreadableReportError(f"{key}.{name_text} is not an integer") from exc
+    return resources
+
+
+def decode_index_source(view: dict[str, Any]) -> dict[str, Any]:
+    """The index fields of a flat artifact view, checked and normalized.
+
+    Empty (falsy) values are left out, as the row's fallbacks expect. A value of the
+    wrong kind, a path that cannot be resolved, or a resource that is not a
+    finite integer raises ``UnreadableReportError``.
+    """
+    source: dict[str, Any] = {}
+    for key in _INDEX_TEXT_KEYS:
+        if view.get(key):
+            source[key] = _index_text(key, view[key])
+    for key in _INDEX_PATH_KEYS:
+        if view.get(key):
+            source[key] = _index_path(key, view[key])
+    for key in _INDEX_RESOURCE_KEYS:
+        if view.get(key) is not None:
+            source[key] = _index_resources(key, view[key])
+    return source
+
+
 def decode_report(report: Any) -> dict[str, Any]:
-    """The report as the index reads it; ``UnreadableReportError`` when it cannot.
+    """The report's index fields (:func:`decode_index_source`); ``UnreadableReportError`` when unreadable.
 
     The rebuild decodes each directory's report here once, so a malformed
     report is set aside for that directory (its ``job_state.json`` still
-    indexes it) instead of failing the walk.
+    indexes it) instead of failing the walk, and the row reads only the
+    decoded fields.
     """
     if not isinstance(report, dict):
         raise UnreadableReportError("not a JSON object")
-    normalized_artifact_view(report)
-    return report
+    return decode_index_source(normalized_artifact_view(report))
 
 
 def normalized_artifact_view(source: dict[str, Any]) -> dict[str, Any]:

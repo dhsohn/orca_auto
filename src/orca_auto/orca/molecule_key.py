@@ -59,6 +59,11 @@ def molecule_key_from_text(
     )
 
 
+def molecule_tag_from_text(text: str) -> str | None:
+    """The sanitized user ``# TAG`` of an input's text, or ``None``; nothing else is read."""
+    return _find_user_tag(text)
+
+
 def _find_user_tag(text: str) -> str | None:
     # A tag line ends only where a text-mode read ends it ("\n", "\r\n" or
     # "\r"): a form feed or another str.splitlines() break stays in the tag.

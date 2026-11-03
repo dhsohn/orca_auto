@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `index rebuild` now sets aside a report whose index fields cannot be used
+  (an input path with a NUL byte or an unknown `~user`, a non-finite or
+  non-integer resource value, a non-text identifier), as it already did for
+  a malformed `schema_version`. These raised out of the rebuild and stopped
+  it for every directory. The report's fields are checked and normalized
+  once when it is read; the directory is indexed from its `job_state.json`.
 - The queue row's and index's `molecule_key` now describe the geometry the
   execution generation captured. It was computed from the external
   `* xyzfile` geometry as read before binding, so a geometry file replaced

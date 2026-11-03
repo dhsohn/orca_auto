@@ -28,6 +28,7 @@ from ..machine_observation import report_json_path
 from ..state_reading import CorruptRunStateError, decode_run_state
 from ._artifacts_to_records import (
     UnreadableReportError,
+    decode_index_source,
     decode_report,
     first_artifact_text,
     record_from_artifacts,
@@ -148,7 +149,11 @@ def _discover_state(job_dir: Path) -> _DiscoveredState | None:
         return None
     # The row is projected from what the decoder read, not from the raw
     # envelope again: every reader then names the same job for this file.
-    state = run_state_index_source(decoded)
+    try:
+        state = decode_index_source(run_state_index_source(decoded))
+    except UnreadableReportError as exc:
+        logger.warning("Skipping ORCA run state with unusable index fields in %s: %s", job_dir, exc)
+        return None
     try:
         mtime_ns = state_file.stat().st_mtime_ns
     except OSError:

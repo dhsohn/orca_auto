@@ -36,6 +36,8 @@ import functools
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 
+import pytest
+
 from orca_auto.core.queue import transitions
 from orca_auto.core.queue.types import QueueStatus
 
@@ -129,6 +131,27 @@ def _unowned_references(table: Mapping[str, Iterable[_Owner]]) -> list[str]:
     return offenders
 
 
+def _stale_owners(table: Mapping[str, Iterable[_Owner]]) -> list[str]:
+    """Owners listed for a name they no longer reference: the map must match the code."""
+    referencing: dict[str, set[tuple[str, str]]] = {}
+    for path, scope, node in _nodes():
+        referenced = _referenced_name(node)
+        if referenced is not None and referenced in table:
+            referencing.setdefault(referenced, set()).add((path, scope))
+    stale: list[str] = []
+    for name, owners in table.items():
+        sites = referencing.get(name, set())
+        for owner in owners:
+            used = (
+                any(path == owner for path, _scope in sites)
+                if isinstance(owner, str)
+                else owner in sites
+            )
+            if not used:
+                stale.append(f"{name}: {owner}")
+    return stale
+
+
 def test_queue_file_is_written_only_by_the_store() -> None:
     offenders = [
         f"{path}:{node.lineno}"
@@ -215,14 +238,18 @@ _ATOMIC_WRITE_OWNERS: dict[str, set[_Owner]] = {
     },
     "atomic_write_confined_bytes": {
         "orca/state.py",  # job_state.json, and write_generation_bytes
-        "orca/report/publication.py",  # job_report.html
-        "orca/report/si.py",  # si_block.md
+        # job_report.html and si_block.md; the renderers return text only.
+        "orca/report/publication.py",
         "orca/execution_binding/_confinement.py",  # bound generation inputs
         "orca/orca_runner.py",  # trailing newline of the bound input
     },
     "atomic_write_bytes_at": {
         "core/engine_scratch/_fs.py",  # scratch manifest and staged inputs
         "core/engine_scratch/_publication.py",  # scratch copy-back journal
+    },
+    # Removing a generation file is held to the same ownership as writing it.
+    "unlink_confined_file": {
+        ("orca/report/publication.py", "_publish_optional_report"),  # stale HTML/SI
     },
 }
 
@@ -231,6 +258,15 @@ def test_atomic_writers_are_called_only_by_the_module_that_owns_the_file() -> No
     offenders = _unowned_references(_ATOMIC_WRITE_OWNERS)
 
     assert offenders == [], offenders
+
+
+@pytest.mark.parametrize("table", ["_ATOMIC_WRITE_OWNERS", "_STATE_WRITERS", "_REPORT_WRITERS"])
+def test_every_listed_owner_still_uses_its_writer(table: str) -> None:
+    # An owner that no longer writes (a renderer that now returns text) is
+    # removed from the map, so the map stays the code's ownership.
+    stale = _stale_owners(globals()[table])
+
+    assert stale == [], stale
 
 
 _STATE_WRITERS: dict[str, set[_Owner]] = {
