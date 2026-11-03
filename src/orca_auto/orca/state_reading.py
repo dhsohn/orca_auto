@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from orca_auto.core.artifacts import (
     MAX_RUN_ARTIFACT_JSON_BYTES,
@@ -15,8 +16,7 @@ from orca_auto.core.artifacts import (
 from orca_auto.core.confined_io import read_confined_text
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.generation_owner import require_direct_generation_owner
-from orca_auto.core.utils import copy_dict_or_empty as _dict
-from orca_auto.core.utils.persistence import load_json_mapping_file
+from orca_auto.core.utils.persistence import JSON_LOAD_EXCEPTIONS
 
 from .generation_validation import (
     require_bound_generation_directory,
@@ -37,10 +37,6 @@ def state_payload_job_id(payload: Any) -> str:
     job = payload.get("job")
     job = job if isinstance(job, dict) else {}
     return str(payload.get("job_id") or job.get("id") or "").strip()
-
-
-def _load_json_dict(path: Path) -> dict[str, Any] | None:
-    return load_json_mapping_file(path)
 
 
 def normalized_text(value: Any) -> str:
@@ -126,39 +122,148 @@ def verified_generation_artifact_target(
     return generation_dir, (device, inode)
 
 
+class CorruptRunStateError(RuntimeError):
+    """A ``job_state.json`` that exists but cannot be read as an ORCA state.
+
+    Raised for a file that is not a JSON object, or for a schema-v1 ORCA state
+    whose fields have the wrong types. A run never overwrites such a file: its
+    content is evidence of what happened, and a reader that cannot tell must
+    not guess.
+    """
+
+
+RunStateReadKind = Literal["valid", "missing", "unsupported", "corrupt"]
+
+
+@dataclass(frozen=True)
+class RunStateRead:
+    """The outcome of reading one ``job_state.json``.
+
+    ``unsupported`` is a readable JSON object that is not a schema-v1 ORCA
+    state (a legacy or foreign state, which a new run may replace);
+    ``corrupt`` is a file that cannot be read as one (see
+    :class:`CorruptRunStateError`), with the reason in ``reason``.
+    """
+
+    kind: RunStateReadKind
+    state: RunState | None = None
+    reason: str = ""
+
+
+def _schema_version(payload: Mapping[str, Any]) -> int:
+    value = payload.get("schema_version")
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        raise CorruptRunStateError("schema_version is not an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    raise CorruptRunStateError("schema_version is not an integer")
+
+
+def _mapping_field(payload: Mapping[str, Any], key: str, *, where: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise CorruptRunStateError(f"{where}{key} is not an object")
+    return dict(value)
+
+
+def _record_list_field(payload: Mapping[str, Any], key: str, *, where: str) -> list[Any]:
+    value = payload.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
+        raise CorruptRunStateError(f"{where}{key} is not a list of objects")
+    return list(value)
+
+
+def _text_field(payload: Mapping[str, Any], key: str, *, where: str) -> str:
+    value = payload.get(key)
+    if value is None or isinstance(value, str):
+        return normalized_text(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    raise CorruptRunStateError(f"{where}{key} is not text")
+
+
 def state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
-    if int(payload.get("schema_version", 0) or 0) != 1:
+    """The schema-v1 ORCA state in ``payload``; ``None`` for a legacy or foreign state.
+
+    Raises:
+        CorruptRunStateError: for a schema-v1 ORCA state whose fields have the
+            wrong types. Every field is checked here, at the disk boundary, so
+            no reader converts a wrong value into a plausible one (``"abc"``
+            into ``["a", "b", "c"]``) or fails on it later.
+    """
+    if _schema_version(payload) != 1:
         return None
     if normalized_text(payload.get("engine")) != "orca":
         return None
-    job = _dict(payload.get("job"))
-    status = _dict(payload.get("status"))
-    input_payload = _dict(payload.get("input"))
-    timestamps = _dict(payload.get("timestamps"))
-    engine_payload = _dict(payload.get("engine_payload"))
+    job = _mapping_field(payload, "job", where="")
+    status = _mapping_field(payload, "status", where="")
+    input_payload = _mapping_field(payload, "input", where="")
+    timestamps = _mapping_field(payload, "timestamps", where="")
+    engine_payload = _mapping_field(payload, "engine_payload", where="")
+    final_result = engine_payload.get("final_result")
+    if final_result is not None and not isinstance(final_result, Mapping):
+        raise CorruptRunStateError("engine_payload.final_result is not an object")
     state: RunState = {
-        "job_id": normalized_text(job.get("id")),
-        "queue_id": normalized_text(job.get("queue_id")),
-        "queue_generation": normalized_text(job.get("generation")),
-        "run_id": normalized_text(engine_payload.get("run_id")),
-        "reaction_dir": normalized_text(job.get("dir")),
-        "selected_inp": normalized_text(input_payload.get("primary_path")),
-        "status": normalized_text(status.get("state")),
-        "started_at": normalized_text(timestamps.get("started_at")),
-        "updated_at": normalized_text(timestamps.get("updated_at")),
-        "attempts": list(engine_payload.get("attempts") or []),
-        "scratch_publications": list(engine_payload.get("scratch_publications") or []),
-        "execution_provenance": _dict(engine_payload.get("execution_provenance")),
-        "final_result": cast(RunFinalResult | None, engine_payload.get("final_result")),
+        "job_id": _text_field(job, "id", where="job."),
+        "queue_id": _text_field(job, "queue_id", where="job."),
+        "queue_generation": _text_field(job, "generation", where="job."),
+        "run_id": _text_field(engine_payload, "run_id", where="engine_payload."),
+        "reaction_dir": _text_field(job, "dir", where="job."),
+        "selected_inp": _text_field(input_payload, "primary_path", where="input."),
+        "status": _text_field(status, "state", where="status."),
+        "started_at": _text_field(timestamps, "started_at", where="timestamps."),
+        "updated_at": _text_field(timestamps, "updated_at", where="timestamps."),
+        "attempts": _record_list_field(engine_payload, "attempts", where="engine_payload."),
+        "scratch_publications": _record_list_field(
+            engine_payload, "scratch_publications", where="engine_payload."
+        ),
+        "execution_provenance": _mapping_field(
+            engine_payload, "execution_provenance", where="engine_payload."
+        ),
+        "final_result": cast(
+            RunFinalResult | None, None if final_result is None else dict(final_result)
+        ),
     }
     return state
 
 
+def read_run_state(reaction_dir: Path) -> RunStateRead:
+    """Read ``reaction_dir``'s ``job_state.json`` and classify the outcome."""
+    path = state_path(reaction_dir)
+    if not path.exists():
+        return RunStateRead("missing")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except JSON_LOAD_EXCEPTIONS as exc:
+        if not path.exists():
+            return RunStateRead("missing")
+        return RunStateRead("corrupt", reason=f"unreadable JSON ({exc.__class__.__name__})")
+    if not isinstance(raw, dict):
+        return RunStateRead("corrupt", reason="not a JSON object")
+    try:
+        state = state_from_normalized_payload(raw)
+    except CorruptRunStateError as exc:
+        return RunStateRead("corrupt", reason=str(exc))
+    if state is None:
+        return RunStateRead("unsupported")
+    return RunStateRead("valid", state=state)
+
+
 def load_state(reaction_dir: Path) -> RunState | None:
-    raw = _load_json_dict(state_path(reaction_dir))
-    if raw is None:
-        return None
-    return state_from_normalized_payload(raw)
+    """The valid state of ``reaction_dir``; ``None`` when missing, unsupported or corrupt.
+
+    A caller that must tell a corrupt state from a missing one (a run about to
+    write, a listing that reports it) uses :func:`read_run_state`.
+    """
+    return read_run_state(reaction_dir).state
 
 
 def payload_matches_expected_job_id(payload: Any, expected_job_id: str | None) -> bool:
@@ -211,13 +316,19 @@ def load_generation_state(
         after.st_ino,
     ):
         return None
-    normalized = state_from_normalized_payload(payload)
+    try:
+        normalized = state_from_normalized_payload(payload)
+    except CorruptRunStateError:
+        return None
     if normalized is None:
         return None
     return payload, normalized
 
 
 __all__ = [
+    "CorruptRunStateError",
+    "RunStateRead",
+    "read_run_state",
     "get_run_id_from_state",
     "load_generation_state",
     "load_state",
