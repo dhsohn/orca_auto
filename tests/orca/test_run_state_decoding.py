@@ -264,3 +264,64 @@ def test_an_unreadable_report_is_set_aside_and_the_rebuild_continues(
     # indexed from its job_state.json, and the report is named in the log.
     assert sorted(row.job_id for row in preview.added) == ["job-bad", "job-good"]
     assert f"Ignoring unreadable ORCA report in {runs / 'bad'}" in caplog.text
+
+
+_UNUSABLE_REPORT_FIELDS = {
+    "top-level-list": [],
+    "job-id-object": {"job_id": {"id": "x"}},
+    "status-list": {"status": ["completed"]},
+    "path-null-byte": {"schema_version": 1, "input": {"primary_path": "\u0000"}},
+    "path-unknown-home": {
+        "schema_version": 1,
+        "input": {"primary_path": "~orca_review_missing_user/calc.inp"},
+    },
+    "path-not-text": {"selected_inp": 7},
+    "run-dir-null-byte": {"schema_version": 1, "job": {"dir": "/runs/\u0000"}},
+    "resource-infinity": {"schema_version": 1, "resources": {"request": {"max_memory_gb": 1e309}}},
+    "resource-text": {"resource_request": {"max_cores": "many"}},
+    "resources-list": {"resource_actual": [1, 2]},
+}
+
+
+@pytest.mark.parametrize("case", sorted(_UNUSABLE_REPORT_FIELDS))
+def test_a_report_with_an_unusable_index_field_is_set_aside(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, case: str
+) -> None:
+    from orca_auto.orca.machine_observation import report_json_path
+
+    runs = tmp_path / "runs"
+    write_run_state(runs / "good", status=RunStatus.COMPLETED, job_id="job-good")
+    write_run_state(runs / "bad", status=RunStatus.COMPLETED, job_id="job-bad")
+    report_json_path(runs / "bad").write_text(
+        json.dumps(_UNUSABLE_REPORT_FIELDS[case]), encoding="utf-8"
+    )
+
+    preview = rebuild_job_location_records(runs, apply=False)
+
+    assert sorted(row.job_id for row in preview.added) == ["job-bad", "job-good"]
+    if case != "top-level-list":
+        # A non-object file is not a report at all and is skipped silently.
+        assert f"Ignoring unreadable ORCA report in {runs / 'bad'}" in caplog.text
+
+
+def test_a_readable_report_still_outranks_the_state(tmp_path: Path) -> None:
+    from orca_auto.orca.machine_observation import report_json_path
+
+    runs = tmp_path / "runs"
+    write_run_state(runs / "job", status=RunStatus.RUNNING, job_id="job-1")
+    report_json_path(runs / "job").write_text(
+        json.dumps(
+            {
+                "job_id": "job-1",
+                "status": "completed",
+                "molecule_key": "C2H6",
+                "resource_request": {"max_cores": 4, "max_memory_gb": 8},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [row] = rebuild_job_location_records(runs, apply=False).added
+
+    assert (row.status, row.molecule_key) == ("completed", "C2H6")
+    assert row.resource_request == {"max_cores": 4, "max_memory_gb": 8}

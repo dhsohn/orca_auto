@@ -30,7 +30,7 @@ def resource_dict_from_any(value: Any) -> dict[str, int]:
             continue
         try:
             result[key_text] = int(raw)
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             continue
     return result
 
