@@ -208,6 +208,60 @@ def read_stable_regular_file(
     return payload
 
 
+def _open_confined_parent(
+    root: Path,
+    path: Path,
+    *,
+    label: str,
+    expected_parent_identity: tuple[int, int] | None,
+) -> int:
+    """Open ``path``'s parent without following it; refuse a parent other than the expected one.
+
+    Every later operation on ``path.name`` is relative to the returned
+    descriptor, so the identity checked here is the directory changed.
+    """
+
+    resolved_root = root.expanduser().resolve()
+    parent = path.parent
+    if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside its engine directory: {path}")
+    directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    parent_status = os.fstat(directory_fd)
+    if (
+        expected_parent_identity is not None
+        and (int(parent_status.st_dev), int(parent_status.st_ino)) != expected_parent_identity
+    ):
+        os.close(directory_fd)
+        raise ValueError(f"{label} parent directory identity changed: {parent}")
+    return directory_fd
+
+
+def unlink_confined_file(
+    root: Path,
+    path: Path,
+    *,
+    label: str,
+    expected_parent_identity: tuple[int, int] | None = None,
+) -> None:
+    """Remove ``path`` if present, under the same parent check as :func:`atomic_write_confined_bytes`.
+
+    The name is removed relative to the verified parent descriptor, so a
+    directory replaced at the same path is never touched.
+    """
+
+    directory_fd = _open_confined_parent(
+        root, path, label=label, expected_parent_identity=expected_parent_identity
+    )
+    try:
+        try:
+            os.unlink(path.name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            return
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 def atomic_write_confined_bytes(
     root: Path,
     path: Path,
@@ -219,25 +273,9 @@ def atomic_write_confined_bytes(
 ) -> None:
     """Atomically replace a regular file without following a final symlink."""
 
-    resolved_root = root.expanduser().resolve()
-    parent = path.parent
-    if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
-        raise ValueError(f"{label} must stay inside its engine directory: {path}")
-    directory_flags = os.O_RDONLY
-    directory_flags |= os.O_DIRECTORY
-    directory_flags |= os.O_NOFOLLOW
-    directory_fd = os.open(parent, directory_flags)
-    parent_status = os.fstat(directory_fd)
-    if (
-        expected_parent_identity is not None
-        and (
-            int(parent_status.st_dev),
-            int(parent_status.st_ino),
-        )
-        != expected_parent_identity
-    ):
-        os.close(directory_fd)
-        raise ValueError(f"{label} parent directory identity changed: {parent}")
+    directory_fd = _open_confined_parent(
+        root, path, label=label, expected_parent_identity=expected_parent_identity
+    )
     temporary_name = f".{path.name}.{secrets.token_hex(12)}.tmp"
     descriptor = -1
     try:
@@ -277,4 +315,5 @@ __all__ = [
     "read_stable_regular_file",
     "require_confined_regular_file",
     "thread_limited_env",
+    "unlink_confined_file",
 ]

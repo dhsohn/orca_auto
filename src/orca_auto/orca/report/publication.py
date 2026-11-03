@@ -27,7 +27,11 @@ from orca_auto.core.artifacts import (
     RUN_REPORT_HTML_FILE,
     SI_BLOCK_MD_FILE,
 )
-from orca_auto.core.confined_io import atomic_write_confined_bytes, read_confined_text
+from orca_auto.core.confined_io import (
+    atomic_write_confined_bytes,
+    read_confined_text,
+    unlink_confined_file,
+)
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 
 from .. import state_reading as _state_reading
@@ -98,7 +102,13 @@ def _publish_optional_report(
     try:
         rendered = render()
         if rendered is None:
-            path.unlink(missing_ok=True)
+            # Removed under the same verified-generation check as a write.
+            unlink_confined_file(
+                generation_target[0],
+                path,
+                label="ORCA generation artifact",
+                expected_parent_identity=generation_target[1],
+            )
             return ArtifactResult.not_applicable(artifact_id)
         atomic_write_confined_bytes(
             generation_target[0],
@@ -166,7 +176,9 @@ def _published_terminal_observation(
 def _published_observation(generation_dir: Path) -> tuple[str, dict[str, Any]] | None:
     """The published ``machine.json`` text and document of any phase; ``None`` when absent.
 
-    An existing path that cannot be read as bounded UTF-8 JSON fails closed.
+    Only a missing file is ``None``. An existing path that cannot be read as
+    bounded UTF-8 JSON, or whose top level is not an object (``[]``, ``null``,
+    a scalar), fails closed before any artifact writer runs.
     """
     path = report_json_path(generation_dir)
     try:
@@ -186,7 +198,7 @@ def _published_observation(generation_dir: Path) -> tuple[str, dict[str, Any]] |
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise RuntimeError(f"existing machine observation is invalid: {path}") from exc
     if not isinstance(existing, dict):
-        return None
+        raise RuntimeError(f"existing machine observation is invalid: {path}")
     return existing_text, existing
 
 
