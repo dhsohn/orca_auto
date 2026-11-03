@@ -122,3 +122,41 @@ def test_each_reader_tokenizes_each_line_once_per_version(
     assert tokenized(bind_checks) == len(lines)
     # The Detail reads the source and its presentation version.
     assert tokenized(lambda: queue_detail_kind(Path("job.inp"), lines)) == 2 * len(lines)
+
+
+def test_submission_reads_its_input_version_through_one_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The job type, Detail, geometry path, molecule key and resource request
+    # of a submission all read one parse; the Detail adds its presentation
+    # version. Before, each reader tokenized the input again.
+    from types import SimpleNamespace
+
+    from orca_auto.orca import submission
+    from tests.conftest import make_app_cfg
+
+    text = _input(200)
+    selected = tmp_path / "job.inp"
+    selected.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(submission, "assert_run_dir_publication_allowed", lambda _label: None)
+    calls = _counting_tokenizer(monkeypatch)
+
+    prepared = submission._prepare_submission_inputs(
+        make_app_cfg(tmp_path), SimpleNamespace(priority=None, force=False), selected
+    )
+
+    assert prepared.molecule_key == "H200"
+    assert prepared.prepared_input.resource_request == {"max_cores": 2, "max_memory_gb": 1}
+    assert calls[0] == 2 * len(text.splitlines())
+
+
+def test_the_resource_step_parses_afresh_when_the_parse_is_of_other_lines() -> None:
+    text = _input(2)
+    other = parse_input("! HF\n%pal nprocs 8 end\n%maxcore 4000\n".splitlines())
+
+    prepared = prepare_submission_resource_request(
+        Path("job.inp"), text.encode(), default_max_cores=1, default_max_memory_gb=1, parsed=other
+    )
+
+    # The 8-core parse of other lines is not reused for this input's 2 cores.
+    assert prepared.resource_request == {"max_cores": 2, "max_memory_gb": 1}

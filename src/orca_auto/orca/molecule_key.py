@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import OrcaGeometryBlock, find_geometry_block
+from .input_blocks import InputSource, OrcaGeometryBlock, ParsedInput, find_geometry_block
 from .orca_chemistry import build_formula
 
 logger = logging.getLogger(__name__)
@@ -30,13 +30,19 @@ def resolve_molecule_key(inp_path: Path) -> MoleculeKeyResolution:
     return molecule_key_from_text(text, inp_path)
 
 
-def molecule_key_from_text(text: str, inp_path: Path) -> MoleculeKeyResolution:
-    """The key of an input whose text is ``text``; ``inp_path`` places its xyzfile and folder."""
+def molecule_key_from_text(
+    text: str, inp_path: Path, *, parsed: ParsedInput | None = None
+) -> MoleculeKeyResolution:
+    """The key of an input whose text is ``text``; ``inp_path`` places its xyzfile and folder.
+
+    ``parsed`` is the parse of ``text.splitlines()`` when the caller already has
+    it; the geometry is then read from that parse instead of tokenizing again.
+    """
     tag = _find_user_tag(text)
     if tag is not None:
         return MoleculeKeyResolution(key=tag, source="tag")
 
-    formula = _formula_from_lines(text.splitlines(), inp_path.parent)
+    formula = _formula_from_lines(text.splitlines() if parsed is None else parsed, inp_path.parent)
     if formula is not None:
         return MoleculeKeyResolution(key=formula, source="formula")
 
@@ -56,7 +62,7 @@ def _find_user_tag(text: str) -> str | None:
     return None
 
 
-def _formula_from_lines(lines: list[str], inp_dir: Path) -> str | None:
+def _formula_from_lines(lines: InputSource, inp_dir: Path) -> str | None:
     # The shared geometry scanner reads the header, the xyzfile reference and
     # the inline atom rows through the ORCA comment tokenizer, so this key
     # sees the same atoms as execution binding does.

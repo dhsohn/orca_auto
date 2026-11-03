@@ -142,8 +142,14 @@ def prepare_submission_resource_request(
     *,
     default_max_cores: int,
     default_max_memory_gb: int,
+    parsed: ParsedInput | None = None,
 ) -> PreparedSubmissionResourceInput:
-    """Normalize the resources of ``source_payload``, the bytes of ``inp_path``, in memory."""
+    """Normalize the resources of ``source_payload``, the bytes of ``inp_path``, in memory.
+
+    ``parsed`` is the caller's parse of the same input. It is reused only when
+    its lines are exactly the lines of the strict UTF-8 decode here; any other
+    version is parsed afresh.
+    """
 
     try:
         source_text = source_payload.decode("utf-8", errors="strict")
@@ -152,7 +158,8 @@ def prepare_submission_resource_request(
     lines = source_text.splitlines()
     # Each version of the input (as submitted, after each injection) is parsed
     # once and every reader of that version shares the parse.
-    parsed = parse_input(lines)
+    if parsed is None or parsed.lines != tuple(lines):
+        parsed = parse_input(lines)
     # A missing %maxcore gets the configured value; a present one without a
     # readable value is refused, since replacing it would guess its intent and
     # keeping it beside an injected one leaves ORCA two directives.

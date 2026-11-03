@@ -115,6 +115,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Submission now reads the selected input through one parse for its job
+  type, Detail, `* xyzfile` geometry path, molecule key and resource request.
+  For a 1,005-line input the stage tokenized lines 5,025 times and now 2,010
+  (the Detail also reads its presentation version). The resource step reuses
+  the parse only when its strict UTF-8 decode gives the same lines, and
+  re-parses each version it rewrites. Queue metadata is unchanged.
 - One report publication now collects its evidence once (the job state, the
   verified generation and the selected input's route facts, read once for the
   HTML report and the SI block) and receives each optional report as an
