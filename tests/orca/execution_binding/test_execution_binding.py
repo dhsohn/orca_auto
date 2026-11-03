@@ -2146,7 +2146,7 @@ def test_orca_execution_snapshot_checks_aggregate_budget_before_dependency_copy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from orca_auto.orca.execution_binding import _confinement
+    from orca_auto.orca.execution_binding import _capture
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -2155,7 +2155,7 @@ def test_orca_execution_snapshot_checks_aggregate_budget_before_dependency_copy(
     selected = job_dir / "job.inp"
     selected.write_text("! SP\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     monkeypatch.setattr(
-        _confinement,
+        _capture,
         "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES",
         selected.stat().st_size + dependency.stat().st_size - 1,
     )

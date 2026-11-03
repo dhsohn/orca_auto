@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.confined_io import read_stable_regular_file, require_confined_regular_file
+from orca_auto.core.confined_io import require_confined_regular_file
 
 from .. import input_references
 from ..file_identity import file_content_identity
@@ -23,6 +23,7 @@ from ._inputs import _inline_geometry_atom_count, _runtime_outputs
 from ._models import _VerifiedSnapshotInputs
 from ._recovery import _is_recovery_checkpoint_source_name, recovery_checkpoint_private_name
 from ._snapshot_identity import (
+    _verified_identity_payload,
     _verify_identity,
     dependency_role,
     is_canonical_source_path,
@@ -246,7 +247,9 @@ def _verify_bound_snapshot_content(
     expected_selected_input_xyz: str,
     expected_resource_request: Mapping[str, int],
 ) -> Path:
-    selected = _verify_identity(
+    # One capture: the bytes whose identity is verified here are the bytes
+    # parsed below, never a second read of the path.
+    selected, selected_payload = _verified_identity_payload(
         snapshot.get("bound_selected_identity"),
         root=execution_dir,
         label="bound selected input",
@@ -261,10 +264,7 @@ def _verify_bound_snapshot_content(
     ):
         raise ValueError("Queued ORCA selected input does not match its private snapshot")
     try:
-        selected_text = read_stable_regular_file(
-            selected,
-            require_single_link=True,
-        ).decode("utf-8", errors="strict")
+        selected_text = selected_payload.decode("utf-8", errors="strict")
     except UnicodeError as exc:
         raise ValueError("Queued ORCA bound selected input must be UTF-8 text") from exc
     selected_lines = selected_text.splitlines()

@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.confined_io import (
-    MAX_INPUT_SNAPSHOT_BYTES,
-    read_stable_regular_file,
     require_confined_regular_file,
 )
 
 from ..input_references import checkpoint_file_looks_intact
-from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
+from . import _capture
 from ._inputs import _inline_geometry_atom_signature, _strict_xyz_atom_row, _xyz_atom_lines
 from ._models import _RecoveryPlan
 from ._snapshot_identity import (
@@ -144,10 +141,11 @@ def _validated_recovery_source_payload(
             "ORCA recovery has no submitted identity for dependency: "
             f"{source.relative_to(job_dir).as_posix()}"
         )
-    payload = read_stable_regular_file(source, max_bytes=MAX_INPUT_SNAPSHOT_BYTES)
-    if len(payload) != expected.get("size_bytes") or hashlib.sha256(
-        payload
-    ).hexdigest() != expected.get("sha256"):
+    captured = _capture.capture(source)
+    payload = captured.payload
+    if captured.size_bytes != expected.get("size_bytes") or captured.sha256 != expected.get(
+        "sha256"
+    ):
         raise ValueError(
             "ORCA recovery dependency changed since the crashed submission: "
             f"{source.relative_to(job_dir).as_posix()}"
@@ -179,7 +177,7 @@ def _validated_recovery_seed(
         candidate,
         label="ORCA recovery seed geometry",
     )
-    payload = read_stable_regular_file(seed, max_bytes=MAX_INPUT_SNAPSHOT_BYTES)
+    payload = _capture.capture(seed).payload
     if not payload.strip():
         return None
     try:
@@ -237,11 +235,11 @@ def _validated_recovery_checkpoint(
         label="ORCA recovery checkpoint",
     )
     size = checkpoint.stat().st_size
-    if size == 0 or size > MAX_INPUT_SNAPSHOT_BYTES:
+    if size == 0 or size > _capture.input_limit():
         return None
     if not checkpoint_file_looks_intact(checkpoint):
         return None
-    if estimated_source_bytes + size > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
+    if not _capture.fits_aggregate(estimated_source_bytes, size):
         return None
     private_name = recovery_checkpoint_private_name(source_selected)
     if any(dependency.name == private_name for dependency in scanned_dependencies):

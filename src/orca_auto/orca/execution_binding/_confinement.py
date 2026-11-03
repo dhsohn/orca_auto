@@ -13,14 +13,12 @@ from orca_auto.core.artifacts import (
     RUN_STATE_FILE,
 )
 from orca_auto.core.confined_io import (
-    MAX_INPUT_SNAPSHOT_BYTES,
     atomic_write_confined_bytes,
-    read_stable_regular_file,
     require_confined_regular_file,
 )
 from orca_auto.core.utils.persistence import durable_mkdir
 
-from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
+from . import _capture
 from ._models import _RouteOutputs
 
 _GENERATION_RUNTIME_FILE_NAMES = frozenset(
@@ -76,15 +74,14 @@ def _payload_with_budget(
     role: str,
     consumed_bytes: int,
 ) -> tuple[dict[str, Any], bytes, int]:
-    if consumed_bytes + len(payload) > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
-        raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
+    consumed_bytes = _capture.charge_aggregate(consumed_bytes, len(payload))
     descriptor = {
         "role": role,
         "source_path": str(source.resolve()),
         "sha256": hashlib.sha256(payload).hexdigest(),
         "size_bytes": len(payload),
     }
-    return descriptor, payload, consumed_bytes + len(payload)
+    return descriptor, payload, consumed_bytes
 
 
 def _source_with_budget(
@@ -93,10 +90,9 @@ def _source_with_budget(
     role: str,
     consumed_bytes: int,
 ) -> tuple[dict[str, Any], bytes, int]:
-    payload = read_stable_regular_file(source, max_bytes=MAX_INPUT_SNAPSHOT_BYTES)
     return _payload_with_budget(
         source,
-        payload,
+        _capture.capture(source).payload,
         role=role,
         consumed_bytes=consumed_bytes,
     )
