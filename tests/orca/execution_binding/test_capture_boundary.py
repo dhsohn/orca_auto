@@ -165,3 +165,62 @@ def test_captured_identity_describes_exactly_the_bytes_read(tmp_path: Path) -> N
     }
     with pytest.raises(ValueError):
         _capture.capture(path, max_bytes=4)
+
+
+def test_a_bound_input_over_one_source_budget_keeps_its_completion_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Binding and claim accept a bound input up to the generation budget; the
+    # completion decision reads the same input under the same budget, so an
+    # Opt Freq job is still verified as one.
+    from orca_auto.orca import input_syntax
+    from orca_auto.orca.completion_rules import detect_completion_mode
+    from orca_auto.orca.out_analyzer import analyze_output
+
+    monkeypatch.setattr(_capture, "MAX_INPUT_SNAPSHOT_BYTES", 240)
+    monkeypatch.setattr(_capture, "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES", 960)
+    monkeypatch.setattr(input_syntax, "MAX_AGGREGATE_SNAPSHOT_BYTES", 960)
+    job_dir, selected, executable = _job(tmp_path)
+    selected.write_text(
+        "! HF STO-3G Opt Freq\n#" + "x" * 200 + "\n* xyzfile 0 1 h2.xyz\n", encoding="utf-8"
+    )
+    snapshot = _build(job_dir, selected, executable)
+    _verify(job_dir, snapshot)
+    bound = Path(snapshot["selected_inp"])
+    assert bound.stat().st_size > 240
+
+    mode = detect_completion_mode(bound)
+
+    assert (mode.kind, mode.require_frequency) == ("opt", True)
+    out = tmp_path / "job.out"
+    out.write_text(
+        "FINAL SINGLE POINT ENERGY -1.0\nTHE OPTIMIZATION HAS CONVERGED\n"
+        "****ORCA TERMINATED NORMALLY****\n",
+        encoding="utf-8",
+    )
+    analysis = analyze_output(out, mode)
+    assert (analysis.status, analysis.reason) == ("incomplete", "frequency_evidence_missing")
+
+
+@pytest.mark.parametrize("kind", ["missing", "fifo", "over-budget"])
+def test_completion_requirements_of_an_unreadable_input_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    # Unreadable is not empty: the job is never verified as a single point.
+    import os
+
+    from orca_auto.orca import input_syntax
+    from orca_auto.orca.completion_rules import (
+        CompletionInputUnreadableError,
+        detect_completion_mode,
+    )
+
+    inp = tmp_path / "job.inp"
+    if kind == "fifo":
+        os.mkfifo(inp)
+    elif kind == "over-budget":
+        inp.write_text("! HF Opt Freq\n" + "#" * 100 + "\n", encoding="utf-8")
+        monkeypatch.setattr(input_syntax, "MAX_AGGREGATE_SNAPSHOT_BYTES", 50)
+
+    with pytest.raises(CompletionInputUnreadableError):
+        detect_completion_mode(inp)

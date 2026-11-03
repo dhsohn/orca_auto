@@ -21,11 +21,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES, read_stable_regular_file
+from orca_auto.core.confined_io import (
+    MAX_AGGREGATE_SNAPSHOT_BYTES,
+    MAX_INPUT_SNAPSHOT_BYTES,
+    read_stable_regular_file,
+)
 
 # The aggregate budget across one generation's inputs, the rewritten bound
 # input included.
-MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES = 4 * MAX_INPUT_SNAPSHOT_BYTES
+MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES = MAX_AGGREGATE_SNAPSHOT_BYTES
 
 AGGREGATE_BUDGET_ERROR = "ORCA submission inputs exceed the aggregate snapshot size limit"
 
