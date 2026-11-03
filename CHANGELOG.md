@@ -10,6 +10,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `index rebuild` no longer stops when one directory's `machine.json` has a
+  malformed `schema_version` (a non-numeric string, an object, a boolean).
+  That report is ignored with a warning and the directory is indexed from its
+  `job_state.json`; every other directory is unaffected.
 - Report publication now removes a stale `job_report.html` or `si_block.md`
   under the same verified-generation check as it writes one. A job type
   without those reports used to remove them by path, so a directory that had

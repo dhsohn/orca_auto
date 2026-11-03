@@ -27,6 +27,8 @@ from orca_auto.core.utils.persistence import load_json_mapping_file
 from ..machine_observation import report_json_path
 from ..state_reading import CorruptRunStateError, decode_run_state
 from ._artifacts_to_records import (
+    UnreadableReportError,
+    decode_report,
     first_artifact_text,
     record_from_artifacts,
     run_state_index_source,
@@ -154,9 +156,22 @@ def _discover_state(job_dir: Path) -> _DiscoveredState | None:
     return _DiscoveredState(
         job_dir=job_dir,
         state=state,
-        report=load_json_mapping_file(report_json_path(job_dir)),
+        report=_readable_report(job_dir),
         mtime_ns=mtime_ns,
     )
+
+
+def _readable_report(job_dir: Path) -> dict[str, Any] | None:
+    """``job_dir``'s report, or ``None`` when absent or unreadable (logged)."""
+    report = load_json_mapping_file(report_json_path(job_dir))
+    if report is None:
+        return None
+    try:
+        return decode_report(report)
+    except UnreadableReportError as exc:
+        # The decoded job_state.json still indexes this directory.
+        logger.warning("Ignoring unreadable ORCA report in %s: %s", job_dir, exc)
+        return None
 
 
 def _existing_path(existing: JobLocationRecord | None) -> Path | None:

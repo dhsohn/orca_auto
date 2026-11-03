@@ -25,10 +25,38 @@ from ._records import build_job_location_record, resolve_job_metadata
 from ._utils import normalize_path_text, resource_dict_from_any
 
 
+class UnreadableReportError(ValueError):
+    """A ``machine.json`` whose fields the index cannot read (a malformed ``schema_version``)."""
+
+
+def _schema_version(source: dict[str, Any]) -> int:
+    value = source.get("schema_version")
+    if value is None:
+        return 0
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().isdecimal():
+        return int(value)
+    raise UnreadableReportError(f"schema_version {value!r} is not an integer")
+
+
+def decode_report(report: Any) -> dict[str, Any]:
+    """The report as the index reads it; ``UnreadableReportError`` when it cannot.
+
+    The rebuild decodes each directory's report here once, so a malformed
+    report is set aside for that directory (its ``job_state.json`` still
+    indexes it) instead of failing the walk.
+    """
+    if not isinstance(report, dict):
+        raise UnreadableReportError("not a JSON object")
+    normalized_artifact_view(report)
+    return report
+
+
 def normalized_artifact_view(source: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(source, dict):
         return {}
-    if int(source.get("schema_version", 0) or 0) != 1:
+    if _schema_version(source) != 1:
         return dict(source)
     job = copy_dict_or_empty(source.get("job"))
     status = copy_dict_or_empty(source.get("status"))
