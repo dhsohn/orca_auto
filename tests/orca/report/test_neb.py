@@ -270,7 +270,7 @@ def test_neb_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -287,7 +287,7 @@ def test_neb_ts_report_renders_neb_specific_sections(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
@@ -319,7 +319,7 @@ def test_neb_ts_irc_report_composes_neb_and_irc_sections(tmp_path: Path) -> None
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")

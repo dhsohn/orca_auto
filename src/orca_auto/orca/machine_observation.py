@@ -28,7 +28,8 @@ import hashlib
 import json
 import re
 import stat
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
@@ -210,23 +211,44 @@ def artifact_receipt(
     }
 
 
-def record_report_generation(
-    report_generation: dict[str, str] | None, artifact_id: str, outcome: str
-) -> None:
-    """Note an optional report's outcome when the caller collects them; else nothing."""
-    if report_generation is not None:
-        report_generation[artifact_id] = outcome
+@dataclass(frozen=True)
+class ArtifactResult:
+    """One optional report's outcome in one publication.
+
+    ``REPORT_PRODUCED`` carries the published ``path``; ``REPORT_NOT_APPLICABLE``
+    (the job type has no such report) and ``REPORT_GENERATION_FAILED`` (it has
+    one that could not be rendered or written) carry none, so the two absences
+    stay distinct. The exception itself stays in the log.
+    """
+
+    artifact_id: str
+    outcome: str
+    path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.artifact_id not in OPTIONAL_REPORT_ARTIFACT_IDS:
+            raise ValueError(f"not an optional report artifact: {self.artifact_id!r}")
+        if self.outcome not in _REPORT_OUTCOMES:
+            raise ValueError(f"not a report outcome: {self.outcome!r}")
+        if (self.path is not None) != (self.outcome == REPORT_PRODUCED):
+            raise ValueError("only a produced report carries a path")
+
+    @classmethod
+    def produced(cls, artifact_id: str, path: Path) -> ArtifactResult:
+        return cls(artifact_id, REPORT_PRODUCED, path)
+
+    @classmethod
+    def not_applicable(cls, artifact_id: str) -> ArtifactResult:
+        return cls(artifact_id, REPORT_NOT_APPLICABLE)
+
+    @classmethod
+    def failed(cls, artifact_id: str) -> ArtifactResult:
+        return cls(artifact_id, REPORT_GENERATION_FAILED)
 
 
-def _report_generation_results(
-    report_generation: Mapping[str, str] | None,
-) -> dict[str, str] | None:
+def _report_generation_results(reports: Sequence[ArtifactResult]) -> dict[str, str] | None:
     """The published ``report_generation`` map: only after a failure, only fixed values."""
-    outcomes = {
-        artifact_id: outcome
-        for artifact_id, outcome in (report_generation or {}).items()
-        if artifact_id in OPTIONAL_REPORT_ARTIFACT_IDS and outcome in _REPORT_OUTCOMES
-    }
+    outcomes = {report.artifact_id: report.outcome for report in reports}
     if REPORT_GENERATION_FAILED not in outcomes.values():
         return None
     return dict(sorted(outcomes.items()))
@@ -384,18 +406,15 @@ def build_machine_observation(
     generation_dir: Path,
     report_payload: Mapping[str, Any],
     *,
-    html_path: Path | None = None,
-    si_path: Path | None = None,
-    report_generation: Mapping[str, str] | None = None,
+    reports: Sequence[ArtifactResult] = (),
 ) -> dict[str, Any]:
     """The ``machine.json`` document of the generation at ``generation_dir``.
 
-    ``report_payload`` is the normalized job state; ``html_path`` and
-    ``si_path`` are the report and SI block published in the generation.
-    ``report_generation`` holds the optional reports' outcomes of this
-    publication (:func:`record_report_generation`); a failed report has no
-    receipt and is named in ``results.report_generation`` instead. Optional
-    reports never affect delivery or handoff.
+    ``report_payload`` is the normalized job state; ``reports`` are the
+    optional reports' results of this publication (:class:`ArtifactResult`).
+    A produced report gets a receipt; a failed report has none and is named in
+    ``results.report_generation`` instead. Optional reports never affect
+    delivery or handoff.
     """
     job = _dict(report_payload.get("job"))
     input_payload = _dict(report_payload.get("input"))
@@ -421,9 +440,11 @@ def build_machine_observation(
             Path(last_out_path) if last_out_path else None,
             required=outcome == "succeeded",
         )
-    for artifact_id, path in (("human-report", html_path), ("supporting-information", si_path)):
-        if path is not None:
-            artifacts[artifact_id] = _receipt(generation_dir, artifact_id, path, required=False)
+    for report in reports:
+        if report.path is not None:
+            artifacts[report.artifact_id] = _receipt(
+                generation_dir, report.artifact_id, report.path, required=False
+            )
     if result_details.get("execution_provenance_artifact"):
         artifacts[EXECUTION_PROVENANCE_ARTIFACT_ID] = _receipt(
             generation_dir,
@@ -438,7 +459,7 @@ def build_machine_observation(
         science["reason"] = reason or "operation_not_succeeded"
         science["stationary_point"] = "unverified"
     result_details["science"] = science
-    generation_outcomes = _report_generation_results(report_generation)
+    generation_outcomes = _report_generation_results(reports)
     if generation_outcomes is not None:
         result_details["report_generation"] = generation_outcomes
     if outcome == "succeeded" and science["status"] != "verified":
@@ -497,6 +518,7 @@ def build_machine_observation(
 
 __all__ = [
     "ARTIFACT_ROLES",
+    "ArtifactResult",
     "ENGINE_NAME",
     "EXECUTION_PROVENANCE_ARTIFACT_ID",
     "MACHINE_CONTRACT_NAME",
@@ -516,7 +538,6 @@ __all__ = [
     "machine_code",
     "machine_json_bytes",
     "machine_lifecycle",
-    "record_report_generation",
     "report_json_path",
     "report_result_fields",
     "required_delivery_complete",

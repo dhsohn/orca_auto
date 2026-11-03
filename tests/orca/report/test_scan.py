@@ -123,7 +123,7 @@ def test_write_job_html_report_renders_scan_sections(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
@@ -148,7 +148,7 @@ def test_scan_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -182,7 +182,7 @@ def test_relaxed_scan_gets_profile_report_not_opt_report(tmp_path: Path) -> None
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
 
     assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
@@ -209,7 +209,7 @@ def _scan_report_text(tmp_path: Path, geom_block: str) -> str:
     write_scan_out(out_path)
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
+    ).path
     assert path is not None
     return path.read_text(encoding="utf-8")
 

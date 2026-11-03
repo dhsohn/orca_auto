@@ -108,7 +108,6 @@ _TARGETS: tuple[tuple[str, str, Callable[..., dict[str, Any]], bool], ...] = (
     ("orca_auto.core.indexing.store", "_save_records", _index_event, True),
     ("orca_auto.orca.state", "atomic_write_confined_bytes", _confined_event, False),
     ("orca_auto.orca.report.publication", "atomic_write_confined_bytes", _confined_event, False),
-    ("orca_auto.orca.report.si", "atomic_write_confined_bytes", _confined_event, False),
     (
         "orca_auto.core.queue.snapshot_intent",
         "atomic_write_json",

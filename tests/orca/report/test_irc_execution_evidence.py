@@ -110,7 +110,7 @@ def _irc_data(reaction_dir: Path, state: dict[str, Any]) -> IrcReportData:
 def _html(reaction_dir: Path, state: dict[str, Any]) -> str:
     path = write_job_html_report(
         reaction_dir, state, generation_target=report_generation_target(reaction_dir)
-    )
+    ).path
     assert path is not None, "the diagnostic IRC report must still be published"
     return path.read_text(encoding="utf-8")
 
