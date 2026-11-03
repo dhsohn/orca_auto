@@ -15,7 +15,7 @@ import pytest
 
 from orca_auto.core.admission import admission_dir, list_slots, release_slot, reserve_slot
 from orca_auto.core.queue.persistence import save_entries as save_entries_core
-from orca_auto.core.queue.store import QueueLockTimeoutError
+from orca_auto.core.queue.store import QueueLockTimeoutError, mutate_entries
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue
@@ -334,6 +334,55 @@ def test_every_candidate_is_validated_after_it_is_selected(
     )
     # The slot reserved for B is released; only A's slot remains.
     assert [slot["queue_id"] for slot in _slots(queue_root)] == [first.queue_id]
+
+
+def test_a_refused_first_candidate_spends_the_full_repair_result(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The full repair passes A and B. Before the first candidate is selected,
+    # A's row changes (so A is checked on its own) and both job directories
+    # are replaced. A's check fences it; B, the next candidate, must be checked
+    # on its own too, not claimed on the strength of the full repair.
+    worker = make_worker(max_concurrent=1, start=child_starter, sleep=lambda _seconds: None)
+    first, second = (_enqueue_ready(queue_root, f"mol_{name}") for name in "AB")
+    repair = queue_worker_mod.publication_repair
+    real_repair_all = repair.repair_queue_publications
+    real_check = repair.check_queue_publication
+    checked: list[str] = []
+
+    def repair_then_change(cfg: Any) -> Any:
+        result = real_repair_all(cfg)
+
+        def touch_first(entries: list[QueueEntry]) -> tuple[None, bool]:
+            for index, entry in enumerate(entries):
+                if entry.queue_id == first.queue_id:
+                    entries[index] = replace(entry, metadata={**entry.metadata, "touched": True})
+            return None, True
+
+        mutate_entries(queue_root, touch_first)
+        _replace_job_dir(queue_root / "mol_A")
+        _replace_job_dir(queue_root / "mol_B")
+        return result
+
+    def recorded_check(cfg: Any, root: Path, entry: QueueEntry) -> Any:
+        checked.append(entry.queue_id)
+        return real_check(cfg, root, entry)
+
+    monkeypatch.setattr(repair, "repair_queue_publications", repair_then_change)
+    monkeypatch.setattr(repair, "check_queue_publication", recorded_check)
+    worker._worker_state_last_reconcile = time.monotonic()
+
+    worker._fill_slots()
+
+    assert child_starter.started == []
+    # The full repair's own checks come first; then each candidate alone.
+    assert checked[-2:] == [first.queue_id, second.queue_id]
+    statuses = queue_statuses(queue_root)
+    assert statuses == {first.queue_id: QueueStatus.FAILED, second.queue_id: QueueStatus.FAILED}
+    assert _slots(queue_root) == []
 
 
 def test_a_withheld_candidate_is_passed_over_for_the_rest_of_the_pass(

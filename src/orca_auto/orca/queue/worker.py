@@ -449,7 +449,12 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 candidate = roots.peek_next_entry(self.cfg, skip_entry_fn=skip)
                 if candidate is None:
                     break
-                if validated.get(candidate.queue_id) != candidate:
+                # The full repair's result is spent on the first candidate,
+                # whatever becomes of it: any later candidate, after a refusal
+                # or a lost claim, is checked on its own.
+                reuses_full_repair = validated.get(candidate.queue_id) == candidate
+                validated = {}
+                if not reuses_full_repair:
                     verdict = publication_repair.check_queue_publication(
                         self.cfg, self.queue_root, candidate
                     )
@@ -460,7 +465,6 @@ class OrcaQueueWorker(QueueWorkerLoop):
                                 candidate.queue_id
                             }
                         continue
-                validated = {}
                 if admission_token is None:
                     admission_token = _try_reserve_admission_slot(
                         self.admission_root, self.max_concurrent, owned=self._owns_slot

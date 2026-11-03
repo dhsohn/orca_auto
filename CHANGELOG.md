@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Worker admission no longer lets a later candidate reuse the fill pass's
+  full publication check after the first candidate was refused. When the
+  first candidate had changed since that check and its own check fenced or
+  withheld it, the next candidate could still be claimed on the strength of
+  the earlier check, without checking its job directory again. The earlier
+  check now applies only to the first candidate, whatever its outcome.
 - Claim-time verification of a queued job now parses the same bytes of the
   bound input whose identity it checked. It used to hash the file once and
   then read it again to parse it, so a file replaced between the two reads
