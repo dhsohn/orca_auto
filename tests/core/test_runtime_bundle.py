@@ -25,12 +25,13 @@ from orca_auto.core.runtime_bundle import (
     verify_runtime_bundle,
 )
 from orca_auto.systemd_plan import build_systemd_install_plan
-from tests.cli.systemd.test_cli_systemd_restart_guard import (
+from tests.runtime_helpers import (
     WORKER,
-    _assert_locked,
-    _Evidence,
-    _reserve,
-    _site,
+    RestartEvidence,
+    admission_site,
+    assert_admission_locked,
+    reserve_admission_slot,
+    unseal_runtime,
 )
 
 
@@ -60,18 +61,11 @@ def _make_bundle(root: Path, *, version: str = "6.0.0") -> Path:
     return root
 
 
-def _unseal(root: Path) -> None:
-    root.chmod(0o755)
-    for path in root.rglob("*"):
-        if not path.is_symlink():
-            path.chmod(0o755 if path.is_dir() else 0o644)
-
-
 @pytest.fixture
 def bundle(tmp_path: Path) -> Iterator[Path]:
     root = _make_bundle(tmp_path / "release")
     yield root
-    _unseal(root)
+    unseal_runtime(root)
 
 
 def _source(root: Path) -> Path:
@@ -239,7 +233,7 @@ def test_worker_reexec_publishes_verified_build_evidence(
 def test_rendered_runtime_command_keeps_idle_restart_guard(
     bundle: Path, tmp_path: Path, busy: bool
 ) -> None:
-    site = _site(tmp_path)
+    site = admission_site(tmp_path)
     plan = build_systemd_install_plan(
         target_user="alice", repo=bundle, config=site.config, no_enable=True, no_sudo=True
     )
@@ -251,17 +245,17 @@ def test_rendered_runtime_command_keeps_idle_restart_guard(
         for line in worker.splitlines()
         if line.startswith("ExecStart=")
     )
-    evidence = _Evidence({WORKER: site})
+    evidence = RestartEvidence({WORKER: site})
     evidence.units[WORKER]["ExecStart"] = (
         f"{{ path={shlex.split(command)[0]} ; argv[]={command} ; ignore_errors=no ; }}"
     )
     if busy:
-        _reserve(site)
+        reserve_admission_slot(site)
         with pytest.raises(ValueError, match="1 active or reserved"), evidence.guard():
             pytest.fail("a managed runtime must preserve admission protection")
     else:
         with evidence.guard():
-            _assert_locked(site.admission)
+            assert_admission_locked(site.admission)
 
 
 @pytest.mark.parametrize("old_install", ["managed", "editable", "same-build-other-root"])
@@ -347,4 +341,4 @@ def test_status_detects_installed_unit_cutover_before_worker_restart(
         )
         assert f"installed unit requires runtime {desired_build}" in capsys.readouterr().err
     finally:
-        _unseal(desired)
+        unseal_runtime(desired)

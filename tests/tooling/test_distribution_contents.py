@@ -24,7 +24,7 @@ from scripts.check_distributions import (
     _unpack_sdist,
 )
 from scripts.check_wheel_contents import check_wheel_contents
-from tests.core.test_runtime_bundle import _unseal
+from tests.runtime_helpers import unseal_runtime
 
 
 def _wheel(
@@ -306,4 +306,4 @@ def test_bytecode_check_rejects_runtimes_an_interpreter_writes_into(
             with pytest.raises(AssertionError, match="interpreter wrote"):
                 _assert_runtime_writes_no_bytecode(root, work=tmp_path)
     finally:
-        _unseal(root)
+        unseal_runtime(root)

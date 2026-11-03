@@ -16,107 +16,16 @@ from orca_auto.orca.evidence import parsed_frequency_analysis
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
+from tests.orca_output_helpers import (
+    B3LYP_OPT_FREQ_COMPLETED_OUT,
+    TS_OPT_WITH_IMAGINARY_OUT,
+    TS_REAL_VIB_FORMAT_OUT,
+)
 
 # ---------------------------------------------------------------------------
 # Realistic ORCA output fixtures
 # ---------------------------------------------------------------------------
 
-_B3LYP_OPT_FREQ_COMPLETED = """\
-|  1> ! B3LYP 6-31G(d) Opt Freq
-|  2> * xyz 0 1
-|  3>   C    0.000000    0.000000    0.000000
-|  4>   O    1.200000    0.000000    0.000000
-|  5>   H   -0.500000    0.866025    0.000000
-|  6>   H   -0.500000   -0.866025    0.000000
-|  7> *
-
-CARTESIAN COORDINATES (ANGSTROEM)
-----------------------------
- C    0.000000    0.000000    0.000000
- O    1.200000    0.000000    0.000000
- H   -0.500000    0.866025    0.000000
- H   -0.500000   -0.866025    0.000000
-
----------------------------------------------------
-| Geometry Optimization Cycle   1                 |
----------------------------------------------------
-
-FINAL SINGLE POINT ENERGY      -113.800000000
-
-                         *************************************
-                         *  GEOMETRY CONVERGENCE              *
-                         *************************************
-Item                Value     Tolerance   Converged
-Energy change       0.000000  5.0000e-06    YES
-MAX gradient        0.010000  3.0000e-04    NO
-RMS gradient        0.005000  1.0000e-04    NO
-MAX step            0.020000  4.0000e-03    NO
-RMS step            0.008000  2.0000e-03    NO
-
----------------------------------------------------
-| Geometry Optimization Cycle   2                 |
----------------------------------------------------
-
-FINAL SINGLE POINT ENERGY      -113.850000000
-
-                         *************************************
-                         *  GEOMETRY CONVERGENCE              *
-                         *************************************
-Item                Value     Tolerance   Converged
-Energy change      -0.050000  5.0000e-06    NO
-MAX gradient        0.000200  3.0000e-04    YES
-RMS gradient        0.000050  1.0000e-04    YES
-MAX step            0.001000  4.0000e-03    YES
-RMS step            0.000500  2.0000e-03    YES
-
----------------------------------------------------
-| Geometry Optimization Cycle   3                 |
----------------------------------------------------
-
-CARTESIAN COORDINATES (ANGSTROEM)
-----------------------------
- C    0.000100    0.000200    0.000000
- O    1.205000    0.000100    0.000000
- H   -0.520000    0.870000    0.000000
- H   -0.520000   -0.870000    0.000000
-
-FINAL SINGLE POINT ENERGY      -113.867432100
-
-                         *************************************
-                         *  GEOMETRY CONVERGENCE              *
-                         *************************************
-Item                Value     Tolerance   Converged
-Energy change      -0.000001  5.0000e-06    YES
-MAX gradient        0.000010  3.0000e-04    YES
-RMS gradient        0.000005  1.0000e-04    YES
-MAX step            0.000100  4.0000e-03    YES
-RMS step            0.000050  2.0000e-03    YES
-
-THE OPTIMIZATION HAS CONVERGED
-
-VIBRATIONAL FREQUENCIES
------------------------
-  0:      0.00 cm**-1
-  1:      0.00 cm**-1
-  2:      0.00 cm**-1
-  3:      0.00 cm**-1
-  4:      0.00 cm**-1
-  5:      0.00 cm**-1
-  6:   1167.32 cm**-1
-  7:   1251.89 cm**-1
-  8:   1534.00 cm**-1
-  9:   1780.45 cm**-1
- 10:   2843.21 cm**-1
- 11:   2917.56 cm**-1
-
----------------------------
-
-Total Enthalpy                    ... -113.834210 Eh
-Final Gibbs free energy           ... -113.862100 Eh
-
-                             ****ORCA TERMINATED NORMALLY****
-TOTAL RUN TIME: 0 days 2 hours 15 minutes 30 seconds 0 msec
-"""
 
 _DLPNO_SP_COMPLETED = """\
 ! DLPNO-CCSD(T) cc-pVTZ
@@ -140,97 +49,11 @@ FINAL SINGLE POINT ENERGY      -56.520893412
 TOTAL RUN TIME: 0 days 5 hours 42 minutes 18 seconds 0 msec
 """
 
-_TS_OPT_WITH_IMAGINARY = """\
-! B3LYP def2-TZVP OptTS Freq
-* xyz 0 1
-  C    0.000000    0.000000    0.000000
-  H    1.089000    0.000000    0.000000
-  H   -0.544500    0.943000    0.000000
-  H   -0.544500   -0.471500    0.816500
-  H   -0.544500   -0.471500   -0.816500
-  Cl   3.000000    0.000000    0.000000
-*
-
-CARTESIAN COORDINATES (ANGSTROEM)
-----------------------------
- C    0.000000    0.000000    0.000000
- H    1.089000    0.000000    0.000000
- H   -0.544500    0.943000    0.000000
- H   -0.544500   -0.471500    0.816500
- H   -0.544500   -0.471500   -0.816500
- Cl   3.000000    0.000000    0.000000
-
-FINAL SINGLE POINT ENERGY      -500.123456789
-
-THE OPTIMIZATION HAS CONVERGED
-
-VIBRATIONAL FREQUENCIES
------------------------
-  0:      0.00 cm**-1
-  1:      0.00 cm**-1
-  2:      0.00 cm**-1
-  3:      0.00 cm**-1
-  4:      0.00 cm**-1
-  5:      0.00 cm**-1
-  6:   -432.15 cm**-1
-  7:    523.40 cm**-1
-  8:    780.10 cm**-1
-  9:   1050.32 cm**-1
- 10:   1320.45 cm**-1
- 11:   1450.78 cm**-1
- 12:   1580.90 cm**-1
- 13:   2980.12 cm**-1
- 14:   3050.45 cm**-1
- 15:   3120.78 cm**-1
-
----------------------------
-
-Total Enthalpy                    ... -500.089123 Eh
-Final Gibbs free energy           ... -500.112345 Eh
-
-                             ****ORCA TERMINATED NORMALLY****
-TOTAL RUN TIME: 0 days 8 hours 30 minutes 45 seconds 0 msec
-"""
 
 # Real ORCA 5.x/6.x emits a "Scaling factor for frequencies" line and blank
 # lines between the header rule and the numbered frequency list, then closes the
 # block with a dashed "NORMAL MODES" header. This is the on-disk shape the parser
 # must handle (the other fixtures use a simplified, blank-line-free layout).
-_TS_REAL_VIB_FORMAT = """\
-! B3LYP def2-TZVP OptTS Freq
-* xyz 0 1
-  C    0.000000    0.000000    0.000000
-  H    1.089000    0.000000    0.000000
-  Cl   3.000000    0.000000    0.000000
-*
-
-FINAL SINGLE POINT ENERGY      -500.123456789
-THE OPTIMIZATION HAS CONVERGED
-
------------------------
-VIBRATIONAL FREQUENCIES
------------------------
-
-Scaling factor for frequencies =  1.000000000  (already applied!)
-
-   0:         0.00 cm**-1
-   1:         0.00 cm**-1
-   2:         0.00 cm**-1
-   3:         0.00 cm**-1
-   4:         0.00 cm**-1
-   5:         0.00 cm**-1
-   6:      -432.15 cm**-1
-   7:       523.40 cm**-1
-   8:      1450.78 cm**-1
-
-
-------------
-NORMAL MODES
-------------
-
-                             ****ORCA TERMINATED NORMALLY****
-TOTAL RUN TIME: 0 days 0 hours 5 minutes 0 seconds 0 msec
-"""
 
 _SCF_FAILED = """\
 ! wB97X-D3 def2-TZVP Opt
@@ -348,7 +171,7 @@ class TestParserRealisticOutputs:
     def test_opt_freq_completed_full_extraction(self, tmp_path: Path) -> None:
         """B3LYP/6-31G(d) Opt Freq — all fields populated."""
         out = tmp_path / "formaldehyde_opt_freq.out"
-        out.write_text(_B3LYP_OPT_FREQ_COMPLETED, encoding="utf-8")
+        out.write_text(B3LYP_OPT_FREQ_COMPLETED_OUT, encoding="utf-8")
 
         r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
@@ -390,7 +213,7 @@ class TestParserRealisticOutputs:
     def test_ts_with_imaginary_frequency(self, tmp_path: Path) -> None:
         """OptTS with one imaginary frequency (expected for TS)."""
         out = tmp_path / "ts_sn2.out"
-        out.write_text(_TS_OPT_WITH_IMAGINARY, encoding="utf-8")
+        out.write_text(TS_OPT_WITH_IMAGINARY_OUT, encoding="utf-8")
 
         r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
@@ -412,7 +235,7 @@ class TestParserRealisticOutputs:
         analysis must still capture the frequencies. Regression: a blank-line
         terminated section body once dropped every frequency on real output."""
         out = tmp_path / "ts_real.out"
-        out.write_text(_TS_REAL_VIB_FORMAT, encoding="utf-8")
+        out.write_text(TS_REAL_VIB_FORMAT_OUT, encoding="utf-8")
 
         analysis = parsed_frequency_analysis(out)
 

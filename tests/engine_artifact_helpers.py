@@ -198,3 +198,36 @@ def bind_report_generation(job_dir: Path, state: dict) -> Path:
         "bound_selected_identity": file_content_identity(bound),
     }
     return generation
+
+
+def completed_opt_state(reaction_dir: Path, out_path: Path, *, reason: str) -> dict[str, Any]:
+    return {
+        "job_id": "job_test",
+        "run_id": "run_test",
+        "reaction_dir": str(reaction_dir),
+        "selected_inp": str(reaction_dir / "rxn.inp"),
+        "status": "completed",
+        "started_at": "2026-07-03T01:00:00+00:00",
+        "updated_at": "2026-07-03T04:00:00+00:00",
+        "attempts": [
+            {
+                "index": 1,
+                "inp_path": str(reaction_dir / "rxn.inp"),
+                "out_path": str(out_path),
+                "return_code": 0,
+                "analyzer_status": "completed",
+                "analyzer_reason": reason,
+                "markers": {},
+                "patch_actions": [],
+                "started_at": "2026-07-03T01:00:00+00:00",
+                "ended_at": "2026-07-03T02:15:00+00:00",
+            }
+        ],
+        "final_result": {
+            "status": "completed",
+            "analyzer_status": "completed",
+            "reason": reason,
+            "completed_at": "2026-07-03T02:15:30+00:00",
+            "last_out_path": str(out_path),
+        },
+    }

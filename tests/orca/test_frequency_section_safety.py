@@ -17,15 +17,20 @@ from orca_auto.orca.frequencies import scan_frequency_sections
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.output_status import iter_output_lines
 from orca_auto.orca.statuses import AnalyzerStatus
-from tests.orca.test_machine_science import _observation
-from tests.orca.test_out_analyzer import CONVERGED, ENERGY, NORMAL, _write_out
+from tests.machine_contract_helpers import build_test_observation
+from tests.orca_output_helpers import (
+    FINAL_ENERGY_LINE,
+    NORMAL_TERMINATION_LINE,
+    OPT_CONVERGED_LINE,
+    write_out_file,
+)
 
 OPTTS_FREQ_INPUT = "! HF STO-3G OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
 _HEADER = "VIBRATIONAL FREQUENCIES\n-----------------------\n\n"
 _PRIOR = "  0:      -500.00 cm**-1\n  1:      -120.00 cm**-1\n\n"
 _GOOD = "  0:      -420.00 cm**-1\n  1:       120.00 cm**-1\n\n"
-_EVIDENCE = ENERGY + "\n" + CONVERGED + "\n"
-_TERMINATION = NORMAL + "\n"
+_EVIDENCE = FINAL_ENERGY_LINE + "\n" + OPT_CONVERGED_LINE + "\n"
+_TERMINATION = NORMAL_TERMINATION_LINE + "\n"
 # What follows the final, empty header before the normal termination line.
 _CLOSE_PATHS = {
     "normal-modes": "NORMAL MODES\n------------\n\n",
@@ -65,7 +70,7 @@ def test_last_empty_frequency_header_supersedes_an_earlier_section(
 
     generation = tmp_path / "generation"
     generation.mkdir()
-    observation = _observation(generation, OPTTS_FREQ_INPUT.encode(), out.encode())
+    observation = build_test_observation(generation, OPTTS_FREQ_INPUT.encode(), out.encode())
     mode = detect_completion_mode(generation / "job.inp")
     analysis = analyze_output(generation / "job.out", mode)
     assert analysis.status == AnalyzerStatus.INCOMPLETE
@@ -106,7 +111,7 @@ def test_no_final_frequency_section_controls(tmp_path: Path, out: str) -> None:
     assert scan_frequency_sections(iter_output_lines(out)).analysis is None
     inp = tmp_path / "job.inp"
     inp.write_text(OPTTS_FREQ_INPUT, encoding="utf-8")
-    analysis = analyze_output(_write_out(tmp_path, out), detect_completion_mode(inp))
+    analysis = analyze_output(write_out_file(tmp_path, out), detect_completion_mode(inp))
     assert analysis.status == AnalyzerStatus.INCOMPLETE
     assert analysis.reason == "frequency_evidence_missing"
     assert analysis.markers["imaginary_frequency_count"] == 0
@@ -120,7 +125,7 @@ def test_last_printed_section_still_verifies_after_an_earlier_one(tmp_path: Path
     assert sections.analysis is not None
     assert sections.analysis.frequencies == (-420.0, 120.0)
 
-    observation = _observation(tmp_path, OPTTS_FREQ_INPUT.encode(), out.encode())
+    observation = build_test_observation(tmp_path, OPTTS_FREQ_INPUT.encode(), out.encode())
     analysis = analyze_output(tmp_path / "job.out", detect_completion_mode(tmp_path / "job.inp"))
     assert analysis.status == AnalyzerStatus.COMPLETED
     assert analysis.reason == "ts_criteria_met"
@@ -166,7 +171,7 @@ def test_unsupported_value_row_makes_the_final_section_unavailable(
     tmp_path: Path, job: str, value: str
 ) -> None:
     out = _final_section(_HEADER + _rows("100.00", value, "-400.00"))
-    observation = _observation(tmp_path, _INPUTS[job].encode(), out.encode())
+    observation = build_test_observation(tmp_path, _INPUTS[job].encode(), out.encode())
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "unknown"
     assert science["reason"] == "frequency_evidence_missing"
@@ -201,7 +206,7 @@ def test_supported_negative_middle_row_is_counted(
     assert sections.analysis is not None
     assert sections.analysis.frequencies == (100.0, 200.0, -400.0)
 
-    observation = _observation(tmp_path, _INPUTS[job].encode(), out.encode())
+    observation = build_test_observation(tmp_path, _INPUTS[job].encode(), out.encode())
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "verified"
     assert science["frequencies_available"] is True
@@ -215,7 +220,7 @@ def test_unsupported_final_section_does_not_fall_back_to_an_earlier_one(tmp_path
     out = _final_section(
         _HEADER + _rows("150.00", "250.00") + _HEADER + _rows("100.00", "NaN", "-400.00")
     )
-    observation = _observation(tmp_path, OPTFREQ_INPUT.encode(), out.encode())
+    observation = build_test_observation(tmp_path, OPTFREQ_INPUT.encode(), out.encode())
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "unknown"
     assert science["frequencies_available"] is False
@@ -233,7 +238,7 @@ def test_later_supported_section_recovers_after_an_unsupported_one(tmp_path: Pat
     assert sections.analysis is not None
     assert sections.analysis.frequencies == (120.0, 300.0)
 
-    observation = _observation(tmp_path, OPTFREQ_INPUT.encode(), out.encode())
+    observation = build_test_observation(tmp_path, OPTFREQ_INPUT.encode(), out.encode())
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "verified"
     assert science["imaginary_frequency_count"] == 0
@@ -274,7 +279,7 @@ def test_any_unparsed_supported_unit_row_makes_the_final_section_unavailable(
     tmp_path: Path, job: str, shape: str
 ) -> None:
     out = _final_section(_HEADER + "\n".join(_MALFORMED_SECTIONS[shape]) + "\n\n")
-    observation = _observation(tmp_path, _INPUTS[job].encode(), out.encode())
+    observation = build_test_observation(tmp_path, _INPUTS[job].encode(), out.encode())
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "unknown"
     assert science["reason"] == "frequency_evidence_missing"
@@ -304,7 +309,7 @@ def test_scaling_prose_without_the_unit_leaves_the_section_intact(tmp_path: Path
     assert sections.analysis is not None
     assert sections.analysis.frequencies == (120.0, 300.0)
 
-    observation = _observation(tmp_path, OPTFREQ_INPUT.encode(), out.encode())
+    observation = build_test_observation(tmp_path, OPTFREQ_INPUT.encode(), out.encode())
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "verified"
     assert science["stationary_point"] == "minimum"

@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from orca_auto.orca import machine_observation as machine
+from tests.machine_contract_helpers import build_test_observation
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "orca_6_1_1"
 SP_INPUT = "! HF STO-3G SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
@@ -14,28 +15,8 @@ SP_OUTPUT = (
 )
 
 
-def _observation(
-    tmp_path: Path, inp: bytes, out: bytes, status: str = "completed"
-) -> dict[str, Any]:
-    selected = tmp_path / "job.inp"
-    output = tmp_path / "job.out"
-    selected.write_bytes(inp)
-    output.write_bytes(out)
-    return machine.build_machine_observation(
-        tmp_path,
-        {
-            "job": {"id": "test-science"},
-            "input": {"primary_path": str(selected)},
-            "status": {"state": status},
-            "engine_payload": {
-                "final_result": {"last_out_path": str(output), "reason": "normal_termination"},
-            },
-        },
-    )
-
-
 def test_machine_sp_fields_have_independent_literal_values(tmp_path: Path) -> None:
-    observation = _observation(tmp_path, SP_INPUT.encode(), SP_OUTPUT.encode())
+    observation = build_test_observation(tmp_path, SP_INPUT.encode(), SP_OUTPUT.encode())
     assert observation["payload"]["data"]["results"]["science"] == {
         "status": "verified",
         "reason": "normal_termination",
@@ -80,7 +61,7 @@ def test_authentic_machine_science(
     stationary: str,
     imaginary: int | None,
 ) -> None:
-    observation = _observation(
+    observation = build_test_observation(
         tmp_path,
         (FIXTURES / f"{case}.inp").read_bytes(),
         (FIXTURES / f"{case}.out").read_bytes(),
@@ -96,7 +77,7 @@ def test_authentic_machine_science(
 
 
 def test_missing_evidence_never_becomes_consumable_success(tmp_path: Path) -> None:
-    observation = _observation(tmp_path, SP_INPUT.encode(), b"ORCA TERMINATED NORMALLY\n")
+    observation = build_test_observation(tmp_path, SP_INPUT.encode(), b"ORCA TERMINATED NORMALLY\n")
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "unknown"
     assert science["energy_hartree"] is None
@@ -109,7 +90,7 @@ def test_missing_evidence_never_becomes_consumable_success(tmp_path: Path) -> No
 def test_constrained_ts_does_not_claim_full_saddle(tmp_path: Path) -> None:
     inp = "! HF STO-3G OptTS Freq\n%geom Constraints { B 0 1 C } end end\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
     out = "FINAL SINGLE POINT ENERGY -1.1\nTHE OPTIMIZATION HAS CONVERGED\nVIBRATIONAL FREQUENCIES\n 0: -400.0 cm**-1\nORCA TERMINATED NORMALLY\n"
-    observation = _observation(tmp_path, inp.encode(), out.encode())
+    observation = build_test_observation(tmp_path, inp.encode(), out.encode())
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "verified"
     assert science["geometry_scope"] == "partial"
@@ -132,7 +113,7 @@ def test_receipt_then_changed_bytes_cannot_publish_science(
         return original(root, artifacts)
 
     monkeypatch.setattr(machine, "_scientific_results", change_before_analysis)
-    observation = _observation(tmp_path, SP_INPUT.encode(), SP_OUTPUT.encode())
+    observation = build_test_observation(tmp_path, SP_INPUT.encode(), SP_OUTPUT.encode())
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "unknown"
     assert science["energy_hartree"] is None
@@ -142,7 +123,7 @@ def test_receipt_then_changed_bytes_cannot_publish_science(
 
 @pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-8-sig"])
 def test_science_digest_binds_original_encoded_bytes(tmp_path: Path, encoding: str) -> None:
-    observation = _observation(tmp_path, SP_INPUT.encode(), SP_OUTPUT.encode(encoding))
+    observation = build_test_observation(tmp_path, SP_INPUT.encode(), SP_OUTPUT.encode(encoding))
     science = observation["payload"]["data"]["results"]["science"]
     assert science["status"] == "verified"
     assert science["energy_hartree"] == -1.1

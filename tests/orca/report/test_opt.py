@@ -9,7 +9,7 @@ from orca_auto.orca.report.composer import collect_html_report_parts
 from orca_auto.orca.report.opt import OptReportData
 from orca_auto.orca.report.publication import write_job_html_report
 from orca_auto.orca.statuses import AnalyzerStatus
-from tests.engine_artifact_helpers import report_generation_target
+from tests.engine_artifact_helpers import completed_opt_state, report_generation_target
 from tests.orca_output_helpers import (
     FREQ_TS_BLOCK,
     write_opt_inp,
@@ -23,45 +23,12 @@ def _opt_data(reaction_dir: Path, state: dict[str, Any]) -> OptReportData:
     return parts.opt
 
 
-def _state(reaction_dir: Path, out_path: Path, *, reason: str) -> dict[str, Any]:
-    return {
-        "job_id": "job_test",
-        "run_id": "run_test",
-        "reaction_dir": str(reaction_dir),
-        "selected_inp": str(reaction_dir / "rxn.inp"),
-        "status": "completed",
-        "started_at": "2026-07-03T01:00:00+00:00",
-        "updated_at": "2026-07-03T04:00:00+00:00",
-        "attempts": [
-            {
-                "index": 1,
-                "inp_path": str(reaction_dir / "rxn.inp"),
-                "out_path": str(out_path),
-                "return_code": 0,
-                "analyzer_status": "completed",
-                "analyzer_reason": reason,
-                "markers": {},
-                "patch_actions": [],
-                "started_at": "2026-07-03T01:00:00+00:00",
-                "ended_at": "2026-07-03T02:15:00+00:00",
-            }
-        ],
-        "final_result": {
-            "status": "completed",
-            "analyzer_status": "completed",
-            "reason": reason,
-            "completed_at": "2026-07-03T02:15:30+00:00",
-            "last_out_path": str(out_path),
-        },
-    }
-
-
 def test_collect_opt_report_parses_cycles_and_convergence(tmp_path: Path) -> None:
     write_opt_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
     write_opt_out(out_path)
 
-    data = _opt_data(tmp_path, _state(tmp_path, out_path, reason="normal_termination"))
+    data = _opt_data(tmp_path, completed_opt_state(tmp_path, out_path, reason="normal_termination"))
 
     assert data is not None
     assert data.kind == "opt"
@@ -79,7 +46,7 @@ def test_collect_opt_report_skips_contentless_final_attempt(tmp_path: Path) -> N
     dead_out = tmp_path / "rxn_retry.out"
     dead_out.write_text("ORCA crashed before the first cycle\n", encoding="utf-8")
 
-    state = _state(tmp_path, out_path, reason="normal_termination")
+    state = completed_opt_state(tmp_path, out_path, reason="normal_termination")
     state["attempts"].append(
         {
             "index": 2,
@@ -107,7 +74,7 @@ def test_opt_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     write_opt_out(out_path)
     missing_out = tmp_path / "rxn_retry.out"
-    state = _state(tmp_path, out_path, reason="normal_termination")
+    state = completed_opt_state(tmp_path, out_path, reason="normal_termination")
     state["attempts"].append({"index": 2, "out_path": str(missing_out)})
     state["final_result"]["last_out_path"] = str(missing_out)
 
@@ -149,7 +116,7 @@ def test_every_optimization_gets_the_opt_report(tmp_path: Path, route: str, kind
     write_opt_out(out_path)
 
     parts = collect_html_report_parts(
-        tmp_path, _state(tmp_path, out_path, reason="normal_termination")
+        tmp_path, completed_opt_state(tmp_path, out_path, reason="normal_termination")
     )
 
     assert parts is not None
@@ -165,7 +132,7 @@ def test_partial_opt_report_makes_no_minimum_claim(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path,
-        _state(tmp_path, out_path, reason="normal_termination"),
+        completed_opt_state(tmp_path, out_path, reason="normal_termination"),
         generation_target=report_generation_target(tmp_path),
     )
 
@@ -198,7 +165,7 @@ def test_relaxed_scan_of_any_optimization_gets_the_scan_report(tmp_path: Path, r
     write_opt_out(out_path)
 
     parts = collect_html_report_parts(
-        tmp_path, _state(tmp_path, out_path, reason="normal_termination")
+        tmp_path, completed_opt_state(tmp_path, out_path, reason="normal_termination")
     )
 
     assert parts is not None
@@ -214,7 +181,7 @@ def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path,
-        _state(tmp_path, out_path, reason="normal_termination"),
+        completed_opt_state(tmp_path, out_path, reason="normal_termination"),
         generation_target=report_generation_target(tmp_path),
     )
 
@@ -232,7 +199,7 @@ def test_attempt_table_normalizes_live_analyzer_status_enum(tmp_path: Path) -> N
     write_opt_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
     write_opt_out(out_path)
-    state = _state(tmp_path, out_path, reason="normal_termination")
+    state = completed_opt_state(tmp_path, out_path, reason="normal_termination")
     state["attempts"][0]["analyzer_status"] = AnalyzerStatus.COMPLETED
 
     path = write_job_html_report(
@@ -255,7 +222,7 @@ def test_frequency_without_mode_vectors_is_not_reported_as_missing_calculation(
 
     path = write_job_html_report(
         tmp_path,
-        _state(tmp_path, out_path, reason="ts_criteria_met"),
+        completed_opt_state(tmp_path, out_path, reason="ts_criteria_met"),
         generation_target=report_generation_target(tmp_path),
     )
 
@@ -273,7 +240,7 @@ def test_optts_report_summarizes_imaginary_mode(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path,
-        _state(tmp_path, out_path, reason="ts_criteria_met"),
+        completed_opt_state(tmp_path, out_path, reason="ts_criteria_met"),
         generation_target=report_generation_target(tmp_path),
     )
 
@@ -294,7 +261,7 @@ def test_opt_report_flags_unexpected_imaginary_mode(tmp_path: Path) -> None:
 
     path = write_job_html_report(
         tmp_path,
-        _state(tmp_path, out_path, reason="normal_termination"),
+        completed_opt_state(tmp_path, out_path, reason="normal_termination"),
         generation_target=report_generation_target(tmp_path),
     )
 
@@ -318,7 +285,7 @@ def test_opt_card_prefers_the_final_output_and_labels_an_earlier_frequency(
     final_out = reaction_dir / "rxn.retry01.out"
     write_opt_out(first_out, freq_block=FREQ_TS_BLOCK)
     write_opt_out(final_out)
-    state = _state(reaction_dir, final_out, reason="completed")
+    state = completed_opt_state(reaction_dir, final_out, reason="completed")
     state["attempts"].insert(
         0,
         {
@@ -345,7 +312,7 @@ def test_opt_card_final_output_frequency_is_not_labeled(tmp_path: Path) -> None:
     write_opt_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
     out_path = reaction_dir / "rxn.out"
     write_opt_out(out_path, freq_block=FREQ_TS_BLOCK)
-    state = _state(reaction_dir, out_path, reason="completed")
+    state = completed_opt_state(reaction_dir, out_path, reason="completed")
 
     data = _opt_data(reaction_dir, state)
 
@@ -364,7 +331,7 @@ def test_opt_card_matches_the_final_attempt_through_a_symlinked_path(tmp_path: P
     write_opt_out(out_path, freq_block=FREQ_TS_BLOCK)
     alias = tmp_path / "alias"
     alias.symlink_to(reaction_dir, target_is_directory=True)
-    state = _state(reaction_dir, out_path, reason="completed")
+    state = completed_opt_state(reaction_dir, out_path, reason="completed")
     # The attempt row keeps the alias path; the final result holds the resolved one.
     state["attempts"][0]["out_path"] = str(alias / "rxn.out")
 

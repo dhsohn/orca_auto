@@ -34,8 +34,8 @@ from tests.conftest import (
     make_app_cfg,
     make_queue_entry,
 )
-from tests.orca.test_submission import _real_submission
 from tests.queue_worker_helpers import write_completed_run_state
+from tests.submission_helpers import real_submission
 
 
 def _join_senders() -> None:
@@ -46,7 +46,7 @@ def _join_senders() -> None:
 
 
 def test_slow_queued_delivery_does_not_delay_submission_or_reservation(tmp_path, monkeypatch):
-    _root, args = _real_submission(tmp_path, monkeypatch)
+    _root, args = real_submission(tmp_path, monkeypatch)
     entered, release = threading.Event(), threading.Event()
     sends = []
 

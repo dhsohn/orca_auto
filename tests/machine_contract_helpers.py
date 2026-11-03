@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orca_auto.machine_contracts import ContractError, validate_machine_path
+from orca_auto.orca import machine_observation as machine
 
 
 def validate_common_machine(path: Path) -> None:
@@ -28,3 +30,23 @@ def validate_common_machine(path: Path) -> None:
         pytest.fail(f"machine-observation v1 rejects {path}:\n{exc}")
     except (OSError, ValueError) as exc:
         pytest.fail(f"machine-observation v1 cannot read {path}: {type(exc).__name__}: {exc}")
+
+
+def build_test_observation(
+    tmp_path: Path, inp: bytes, out: bytes, status: str = "completed"
+) -> dict[str, Any]:
+    selected = tmp_path / "job.inp"
+    output = tmp_path / "job.out"
+    selected.write_bytes(inp)
+    output.write_bytes(out)
+    return machine.build_machine_observation(
+        tmp_path,
+        {
+            "job": {"id": "test-science"},
+            "input": {"primary_path": str(selected)},
+            "status": {"state": status},
+            "engine_payload": {
+                "final_result": {"last_out_path": str(output), "reason": "normal_termination"},
+            },
+        },
+    )
