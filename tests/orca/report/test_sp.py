@@ -306,6 +306,44 @@ def test_vibrational_summary_falls_back_to_attempt_outputs(tmp_path: Path) -> No
 
     assert data is not None
     assert data.imaginary_count == 1
+    # The count is not the final output's: the card says where it came from,
+    # as the Opt report does.
+    assert data.frequency_source_note == "from attempt 1, not the final output"
+
+
+def test_frequency_fallback_source_is_shown_in_the_sp_report(tmp_path: Path) -> None:
+    state = _job_dir(
+        tmp_path,
+        inp_text=_FREQ_INP,
+        out_text=sp_out_text(route="B3LYP def2-SVP Freq"),
+        status="failed",
+    )
+    state["final_result"]["reason"] = "frequency_evidence_missing"
+    earlier = tmp_path / "rxn_attempt1.out"
+    earlier.write_text(sp_out_text(route="B3LYP def2-SVP Freq", freq_block=True), encoding="utf-8")
+    state["attempts"].insert(0, dict(state["attempts"][0], index=1, out_path=str(earlier)))
+
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert '<div class="metric-label">Imaginary frequencies</div>' in text
+    assert "from attempt 1, not the final output" in text
+
+
+def test_final_output_frequencies_carry_no_source_note(tmp_path: Path) -> None:
+    state = _job_dir(
+        tmp_path,
+        inp_text=_FREQ_INP,
+        out_text=sp_out_text(route="B3LYP def2-SVP Freq", freq_block=True),
+    )
+
+    data = _sp_data(tmp_path, state)
+
+    assert data.imaginary_count == 1
+    assert data.frequency_source_note == ""
 
 
 @pytest.mark.parametrize("keyword", ["EnGrad", "EnergyGrad", "engrad"])

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import html
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from ..completion_rules import RouteFacts, is_constrained_ts_search
@@ -14,12 +13,11 @@ from ..frequencies import FrequencyAnalysis, ModeSummary, mode_summaries
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
-    attempt_index,
-    attempt_out_path,
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    latest_frequency_analysis,
+    earlier_attempt_frequency_note,
+    final_or_latest_frequency_evidence,
     latest_optimization_progress,
     terminal_actions_html,
 )
@@ -97,11 +95,11 @@ def collect_opt_report_data(
             final_energy = final_result.energy_hartree
         except OSError:
             analysis = None
-    if analysis is not None and out_path is not None:
-        frequency_attempt_index = _attempt_index_for_output(attempts, out_path)
-    else:
-        analysis, frequency_attempt_index = latest_frequency_analysis(attempts)
-        frequency_from_earlier_attempt = analysis is not None
+    frequency = final_or_latest_frequency_evidence(attempts, out_path, analysis)
+    analysis = frequency.analysis if frequency is not None else None
+    if frequency is not None:
+        frequency_attempt_index = frequency.attempt_index
+        frequency_from_earlier_attempt = not frequency.from_final_output
 
     return OptReportData(
         header=header,
@@ -119,24 +117,6 @@ def collect_opt_report_data(
         frequency_from_earlier_attempt=frequency_from_earlier_attempt,
         constrained_ts_search=is_constrained_ts_search(route),
     )
-
-
-def _attempt_index_for_output(attempts: Sequence[Mapping[str, Any]], out_path: Path) -> int | None:
-    # Attempt rows store the path as written; the final result path can be
-    # the resolved form of the same file. Compare resolved forms.
-    target = _resolved_or_self(out_path)
-    for position in range(len(attempts) - 1, -1, -1):
-        attempt_out = attempt_out_path(attempts[position])
-        if attempt_out is not None and _resolved_or_self(attempt_out) == target:
-            return attempt_index(attempts[position], position)
-    return None
-
-
-def _resolved_or_self(path: Path) -> Path:
-    try:
-        return path.resolve()
-    except OSError:
-        return path
 
 
 def _imaginary_note(data: OptReportData) -> str:
@@ -159,7 +139,7 @@ def _imaginary_note(data: OptReportData) -> str:
     if data.frequency_from_earlier_attempt and data.frequency_attempt_index is not None:
         # The final output has no frequency section; the SI block will not
         # carry this count, so the card says where it came from.
-        notes.append(f"from attempt {data.frequency_attempt_index}, not the final output")
+        notes.append(earlier_attempt_frequency_note(data.frequency_attempt_index))
     return "; ".join(notes)
 
 

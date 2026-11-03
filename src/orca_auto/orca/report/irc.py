@@ -26,7 +26,7 @@ from .attempts import (
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    latest_frequency_analysis,
+    latest_frequency_evidence,
     latest_optimization_progress,
     parse_attempt_output,
     terminal_actions_html,
@@ -117,6 +117,8 @@ class IrcReportData:
     mode_summaries: tuple[ModeSummary, ...]
     # A TS search with restricted coordinates: its card makes no saddle claim.
     constrained_ts_search: bool = False
+    # Where the frequencies came from when not the final output, else "".
+    frequency_source_note: str = ""
 
 
 def _irc_driver_line(line: str) -> bool:
@@ -187,7 +189,8 @@ def collect_irc_report_data(
             result, _analysis = parsed_final_output(out_path)
         except OSError:
             result = None
-    analysis, _frequency_attempt_index = latest_frequency_analysis(attempts)
+    frequency = latest_frequency_evidence(attempts, out_path)
+    analysis = frequency.analysis if frequency is not None else None
 
     return IrcReportData(
         header=header,
@@ -207,6 +210,7 @@ def collect_irc_report_data(
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         constrained_ts_search=is_constrained_ts_search(route),
+        frequency_source_note=frequency.source_note() if frequency is not None else "",
     )
 
 
@@ -471,6 +475,8 @@ def _irc_metric_cards(
             note = CONSTRAINED_TS_SEARCH_NOTE
         else:
             note = f"expected {1 if data.ts_route else 0}"
+        if data.frequency_source_note:
+            note = f"{note}; {data.frequency_source_note}"
         cards.append(metric_card("Imaginary frequencies", str(data.imaginary_count), note))
     if is_primary:
         cards.append(attempts_metric_card(data.attempts, data.header.total_duration_text))

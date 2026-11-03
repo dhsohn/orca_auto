@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The SP and IRC HTML reports now say when their frequencies come from an
+  earlier attempt and not from the final output (`from attempt N, not the
+  final output`), as the Opt report already did. Before, an SP/Freq job that
+  failed with `frequency_evidence_missing` showed an earlier attempt's
+  imaginary-frequency count and vibrational summary with no source. Reports
+  whose frequencies come from the final output are unchanged.
 - Submission now reads a geometry header with the same comment rules as the
   binding that reads the geometry. A closed `# ... #` comment before or inside
   the header (`# geometry # * xyz 0 1`, `* xyz 0 # singlet # 1`, and the same
