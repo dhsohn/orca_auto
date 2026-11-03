@@ -8,6 +8,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [10.2.4] - 2026-11-04
+
 ### Fixed
 
 - `index rebuild` from scratch restores a job's requested resources. The
@@ -197,6 +199,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   completion already required frequency evidence for both spellings. Both
   paths now read one shared rule, `completion_rules.requests_frequency`.
   Queued and historical jobs are unchanged; no migration is required.
+- No state or configuration migration is required. Historical terminal
+  observations are unchanged; failed calculations are not rerun automatically.
+  See [Upgrading to 10.2.4](docs/RELEASE.md#upgrading-to-1024).
 
 ### Changed
 
@@ -251,6 +256,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   (`OutputChangedDuringPublication`) and the next attempt republishes all
   three from the current output. Before, a change between the HTML and SI
   writes could publish reports that describe different outputs.
+
+### Validation and limits
+
+- Bounded ORCA 6.1.1 acceptance (H2 single point, electronic-state and
+  input-echo checks, water optimization and frequencies, ammonia TS/IRC) passed
+  through real queue workers. Durable-queue water HF/STO-3G Opt with a
+  route-line `Freq` and with `%freq AnFreq true` converged identically, and a
+  from-scratch `index rebuild` recorded their requested resources. See
+  [Validation](docs/VALIDATION.md). It does not extend supported ORCA versions
+  or numerical-Hessian coverage.
 
 ## [10.2.3] - 2026-10-24
 

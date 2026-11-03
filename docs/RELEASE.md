@@ -30,6 +30,12 @@ schemas; release needs no `machine-contracts` clone. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to 10.2.4
+
+Version 10.2.4 fixes `index rebuild` (resource requests, molecule keys and directory keys restored from submission evidence; unusable reports and inputs set aside instead of stopping the rebuild), refuses FIFO and dangling-symlink store and state files, and non-UTF-8 store files, instead of hanging or treating them as empty, and verifies completion against bound inputs up to the generation budget. A report publication now stops when the output changes while it is being built. Submission now refuses `%method RunTyp` values the runtime cannot classify (including `Opt`, `Geom`, `Geometry` and `GeometryOpt`) and block settings that change the route's job (`%geom TS_search` on a non-TS optimization, `RunTyp` with a route optimization, TS search, IRC, NEB or MD); request these with route keywords such as `! Opt` or `! OptTS`. The 1,000-atom Hessian limit now also applies to frequency requests made only through `%freq AnFreq true` or `%freq NumFreq true`. Rows already queued are not re-checked. Public fields, statuses, CLI options and configuration keys are unchanged.
+
+Follow the [10.2 idle-window upgrade procedure](#upgrading-to-102) and retain the prior runtime for rollback. No state or configuration migration is required; historical terminal observations are not rewritten and failed calculations are not rerun automatically.
+
 ## Upgrading to 10.2.3
 
 Version 10.2.3 fixes completion checks for frequency requests in active `%freq AnFreq true` and `%freq NumFreq true` blocks. A run missing the requested final frequency evidence now fails rather than completing on energy and normal termination alone. Each switch uses its last explicit boolean value; existing route-line frequency requirements still apply.
