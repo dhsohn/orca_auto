@@ -10,6 +10,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- A job keyed by its directory name keeps that key when it is moved and
+  the index is rebuilt from scratch. With its recorded input path gone, the
+  rebuild fell back to the input file's stem (`calc`) instead of the job
+  directory's name (`rxn`); it now uses the same directory fallback as
+  submission and settlement.
 - `queue.json`, `.admission/admission_slots.json` and `job_locations.json`
   are now read as regular files only. A FIFO in their place made every
   queue, admission and index read wait forever while holding that store's

@@ -145,6 +145,15 @@ def _sanitize_key(raw: str) -> str:
     return safe if safe else "unknown"
 
 
+def directory_fallback_key(job_dir: Path) -> str:
+    """The key of a job with neither a ``# TAG`` nor a readable formula: its directory's name.
+
+    The one fallback rule: submission, settlement and the index all use it,
+    whether or not the selected input can still be read.
+    """
+    return _directory_name_fallback(job_dir)
+
+
 def _directory_name_fallback(job_dir: Path) -> str:
     name = job_dir.name
     result = _sanitize_key(name)

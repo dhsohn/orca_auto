@@ -26,7 +26,7 @@ from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME
 from ..config import AppConfig
 from ..input_blocks import parse_input
 from ..job_type import job_type_from_routes
-from ..molecule_key import molecule_key_from_text, resolve_molecule_key
+from ..molecule_key import directory_fallback_key, molecule_key_from_text, resolve_molecule_key
 from ._utils import normalize_path_text
 
 _MOLECULE_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -92,9 +92,11 @@ def resolve_job_metadata(
         if resolved is not None and not resolved.exists():
             resolved = None
     if resolved is None:
-        # No readable input: the route type is unknown and the key comes from names.
+        # No readable input (a moved job's recorded path is gone): the route
+        # type is unknown, and the key is the same directory fallback
+        # submission used, not the input file's stem.
         job_type = "other" if need_job_type else ""
-        molecule_key = molecule_key_from_selected_inp(raw, job_dir) if need_molecule_key else ""
+        molecule_key = directory_fallback_key(job_dir) if need_molecule_key else ""
         return job_type, molecule_key
     try:
         text = resolved.read_text(encoding="utf-8", errors="ignore")
