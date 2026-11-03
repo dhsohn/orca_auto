@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .input_syntax import read_input_text
 from .route_rules import RouteFacts, route_facts
 
 
@@ -53,8 +54,23 @@ class CompletionMode:
     require_frequency: bool = False
 
 
+class CompletionInputUnreadableError(RuntimeError):
+    """The input whose completion requirements are being decided cannot be read."""
+
+
 def detect_completion_mode(inp_path: Path) -> CompletionMode:
-    return completion_mode(route_facts(inp_path))
+    """The completion requirements of the input at ``inp_path``.
+
+    An input that cannot be read raises :class:`CompletionInputUnreadableError`.
+    Its requirements are unknown, and taking it for an empty input would
+    verify an optimization or frequency job as a single point.
+    """
+    text = read_input_text(inp_path)
+    if text is None:
+        raise CompletionInputUnreadableError(
+            f"ORCA input cannot be read to decide its completion requirements: {inp_path}"
+        )
+    return completion_mode(route_facts(inp_path, lines=text.splitlines()))
 
 
 def completion_mode(route: RouteFacts) -> CompletionMode:

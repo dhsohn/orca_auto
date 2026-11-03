@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
+from orca_auto.core.confined_io import MAX_AGGREGATE_SNAPSHOT_BYTES
 from orca_auto.core.utils.stable_fs import StableFsError, read_stable_regular_file_at
 
 _SAFE_UNQUOTED_ORCA_PATH_RE = re.compile(r"^[A-Za-z0-9._/+\-]+$")
@@ -199,8 +199,12 @@ def orca_route_lines(lines: list[str]) -> list[str]:
     return [route for line in lines if (route := orca_route_line(line)) is not None]
 
 
-def read_input_text(path: Path, *, max_bytes: int = MAX_INPUT_SNAPSHOT_BYTES) -> str | None:
+def read_input_text(path: Path, *, max_bytes: int | None = None) -> str | None:
     """The text of an input or geometry file read once, or ``None`` when it cannot be used.
+
+    The default limit is the generation budget, not one source's limit: the
+    selected input of a run is its bound copy, which binding and claim-time
+    verification accept up to that budget.
 
     Read through the stable regular-file reader: no final-symlink follow, no
     blocking on a FIFO, regular files only, within ``max_bytes``, and only if
@@ -209,7 +213,10 @@ def read_input_text(path: Path, *, max_bytes: int = MAX_INPUT_SNAPSHOT_BYTES) ->
     waiting on, or misreading, a file that is not a usable input.
     """
     try:
-        payload, _status = read_stable_regular_file_at(path, max_bytes=max_bytes)
+        payload, _status = read_stable_regular_file_at(
+            path,
+            max_bytes=MAX_AGGREGATE_SNAPSHOT_BYTES if max_bytes is None else max_bytes,
+        )
     except (OSError, StableFsError):
         return None
     return payload.decode("utf-8", errors="ignore")

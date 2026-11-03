@@ -12,6 +12,10 @@ from orca_auto.core.utils.persistence import open_pinned_readonly
 from orca_auto.core.utils.stable_fs import StableFsError
 
 MAX_INPUT_SNAPSHOT_BYTES = 64 * 1024 * 1024
+# The budget of one generation's inputs together. A bound input rewritten
+# from its source (an inlined geometry) may exceed one source's limit but
+# never this one, so every reader of a bound input uses it.
+MAX_AGGREGATE_SNAPSHOT_BYTES = 4 * MAX_INPUT_SNAPSHOT_BYTES
 
 
 def require_confined_regular_file(root: Path, path: Path, *, label: str) -> Path:
@@ -308,6 +312,7 @@ def atomic_write_confined_bytes(
 
 
 __all__ = [
+    "MAX_AGGREGATE_SNAPSHOT_BYTES",
     "MAX_INPUT_SNAPSHOT_BYTES",
     "atomic_write_confined_bytes",
     "open_confined_log",

@@ -10,6 +10,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `index rebuild` from scratch restores a job's requested resources. The
+  state envelope's `resources.request` is empty by design; the rebuild now
+  falls back to the request the execution snapshot captured at submission
+  (`execution_provenance.resource_request`) instead of indexing `{}`.
+- A run whose bound input is larger than one source input's 64 MiB limit
+  (an inlined geometry can push it there; binding accepts it up to the
+  256 MiB generation budget) is verified against its real completion
+  requirements again. Since the shared input reader landed, such an input
+  read as empty, so an `Opt Freq` job was verified as a single point and
+  could complete without frequency evidence. Inputs are now read up to the
+  generation budget, and the completion decision refuses an input it
+  cannot read instead of treating it as empty.
 - `index rebuild` no longer hangs, holding the index lock, when a job's
   selected `.inp` or its `* xyzfile` geometry is a FIFO. Inputs and geometry
   files read for index metadata (and for route facts and molecule keys) now
