@@ -12,12 +12,13 @@ from orca_auto.core.confined_io import read_stable_regular_file, require_confine
 from .. import input_references
 from ..file_identity import file_content_identity
 from ..input_validation import validate_supported_xyz_geometry_syntax
+from ..operation_facts import parse_operation_facts
 from ._confinement import (
     _reference_source,
     _validate_dependency_basename,
     _validate_unique_dependency_basenames,
 )
-from ._inputs import _inline_geometry_atom_count, _route_outputs
+from ._inputs import _inline_geometry_atom_count, _runtime_outputs
 from ._models import _VerifiedSnapshotInputs
 from ._recovery import _is_recovery_checkpoint_source_name, recovery_checkpoint_private_name
 from ._snapshot_identity import (
@@ -268,7 +269,7 @@ def _verify_bound_snapshot_content(
     selected_lines = selected_text.splitlines()
     validate_supported_xyz_geometry_syntax(selected_lines, label="Queued ORCA bound input")
     bound_references = input_references.scan_orca_file_references(selected_lines)
-    routes = _route_outputs(selected_lines)
+    routes = _runtime_outputs(parse_operation_facts(selected_lines, inp_path=selected))
     for role, _descriptor, source_path in verified.verified_dependencies:
         if role == verified.recovery_checkpoint_role:
             continue

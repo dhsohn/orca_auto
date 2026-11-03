@@ -17,10 +17,16 @@ from orca_auto.orca.execution_binding import (
     retire_snapshot_intent_for_row,
     verify_orca_execution_snapshot,
 )
-from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count, _route_outputs
+from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count, _runtime_outputs
 from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
+from orca_auto.orca.operation_facts import parse_operation_facts
 from tests.conftest import build_submitted_snapshot, write_fake_orca
+
+
+def _route_outputs(lines: list[str]) -> Any:
+    """The binding's runtime outputs for ``lines``, through the shared operation facts."""
+    return _runtime_outputs(parse_operation_facts(lines, inp_path=Path("job.inp")))
 
 
 def _visible_generations(job_dir: Path) -> list[Path]:

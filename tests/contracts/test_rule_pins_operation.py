@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.orca.completion_rules import completion_mode, geometry_scope, route_facts
-from orca_auto.orca.execution_binding._inputs import _route_outputs
+from orca_auto.orca.execution_binding._inputs import _runtime_outputs
 from orca_auto.orca.input_syntax import orca_route_lines
 from orca_auto.orca.job_type import job_type_from_routes
+from orca_auto.orca.operation_facts import parse_operation_facts
 from orca_auto.orca.queue_detail import queue_detail_kind
 from tests.conftest import build_submitted_snapshot, write_fake_orca
 from tests.contracts.normalize import assert_pin
@@ -52,6 +53,11 @@ SCENARIOS = {
     "runtyp-opt": "! HF STO-3G\n%method RunTyp Opt end",
     "runtyp-quoted": '! HF STO-3G\n%method RunTyp "SP" end',
 }
+
+
+def _route_outputs(lines: list[str]) -> Any:
+    """The binding's runtime outputs for ``lines``, through the shared operation facts."""
+    return _runtime_outputs(parse_operation_facts(lines, inp_path=Path("job.inp")))
 
 
 def _admission(tmp_path: Path, name: str, text: str) -> str:

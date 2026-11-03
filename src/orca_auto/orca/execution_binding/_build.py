@@ -22,6 +22,7 @@ from ..input_validation import (
     validate_supported_method_run_type,
     validate_supported_xyz_geometry_syntax,
 )
+from ..operation_facts import parse_operation_facts
 from ..resource_directives import resource_request_from_lines
 from ._cleanup import discard_unowned_generation
 from ._confinement import (
@@ -37,7 +38,7 @@ from ._confinement import (
 from ._constants import ORCA_EXECUTION_SNAPSHOT_VERSION
 from ._inputs import (
     _inline_geometry_atom_count,
-    _route_outputs,
+    _runtime_outputs,
     _validated_xyz_atom_count,
     _xyz_atom_lines,
 )
@@ -98,15 +99,16 @@ def _load_selected_snapshot_input(
     if resource_request_from_lines(lines) != dict(resource_request):
         raise ValueError("ORCA normalized selected input does not match its resource request")
     validate_supported_xyz_geometry_syntax(lines, label="ORCA selected input")
-    validate_supported_method_run_type(lines, label="ORCA selected input")
-    validate_consistent_operation(lines, label="ORCA selected input")
+    operation = parse_operation_facts(lines, inp_path=source_selected)
+    validate_supported_method_run_type(operation, label="ORCA selected input")
+    validate_consistent_operation(operation, label="ORCA selected input")
     requests_moread = orca_input_requests_moread(lines)
     if requests_moread and not orca_moinp_references(lines):
         raise ValueError(
             "ORCA MORead requires an explicit MOInp file so the checkpoint can be "
             "bound into the execution snapshot"
         )
-    routes = _route_outputs(lines)
+    routes = _runtime_outputs(operation)
     if (
         routes.hessian_requested
         and inline_atom_count is not None
