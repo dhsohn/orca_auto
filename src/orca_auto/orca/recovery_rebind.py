@@ -44,6 +44,7 @@ from .execution_binding import (
     orca_execution_snapshot_generation_dir,
     orca_execution_started_evidence,
     require_current_snapshot_version,
+    validated_resource_request,
     verify_orca_snapshot_executable,
 )
 from .output_adoption import completed_out_or_none
@@ -314,7 +315,23 @@ def maybe_rebind_recovery_generation(
     source_selected = str(metadata.get("source_selected_inp") or "").strip()
     if not source_selected:
         raise ValueError("ORCA crash recovery requires the submission source input path")
-    recorded_request = metadata.get("resource_request")
+    # The submission already resolved this job's request; recovery refills a
+    # missing directive from it, never from the current configuration, so a
+    # changed default cannot make a submitted job unrecoverable.
+    recorded_request = validated_resource_request(
+        metadata.get("resource_request"),
+        error="ORCA crash recovery requires the queued resource request",
+    )
+    if (
+        validated_resource_request(
+            snapshot.get("resource_request"),
+            error="ORCA crash recovery requires the snapshot resource request",
+        )
+        != recorded_request
+    ):
+        raise ValueError(
+            "ORCA crash recovery resource request diverged from its execution snapshot"
+        )
     with acquire_run_lock(reaction_dir):
         recover_crashed_state(reaction_dir)
         # The same bounded stable read submission used: it refuses a FIFO,
@@ -327,12 +344,10 @@ def maybe_rebind_recovery_generation(
         prepared = prepare_submission_resource_request(
             Path(source_selected),
             source_payload,
-            default_max_cores=int(cfg.resources.max_cores_per_task),
-            default_max_memory_gb=int(cfg.resources.max_memory_gb_per_task),
+            default_max_cores=recorded_request["max_cores"],
+            default_max_memory_gb=recorded_request["max_memory_gb"],
         )
-        if not isinstance(recorded_request, dict) or dict(prepared.resource_request) != dict(
-            recorded_request
-        ):
+        if dict(prepared.resource_request) != recorded_request:
             raise ValueError("ORCA crash recovery resource request diverged from the queued row")
         new_snapshot = build_orca_execution_snapshot(
             reaction_dir,
