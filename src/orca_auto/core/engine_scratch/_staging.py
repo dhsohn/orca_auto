@@ -11,6 +11,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from orca_auto.core.confined_io import (
+    MAX_AGGREGATE_SNAPSHOT_BYTES,
+    MAX_INPUT_SNAPSHOT_BYTES,
+)
+
 from ._constants import (
     _DURABLE_RESERVED_FILE_NAMES,
     _SCRATCH_CONTROL_FILE_NAMES,
@@ -21,6 +26,16 @@ from ._fs import (
     _read_stable_regular_file_at,
     _regular_file_sha256_at,
 )
+
+# The selected input is the generation's bound input, which may exceed one
+# source's budget once geometry is inlined; binding, claim and completion all
+# admit it under the generation's aggregate budget, so staging must too.  Each
+# dependency is a source file and keeps the per-source budget, and the whole
+# closure stays within the aggregate budget.  Looked up at call time so tests
+# can shrink them on this module.
+SELECTED_INPUT_MAX_BYTES = MAX_AGGREGATE_SNAPSHOT_BYTES
+DEPENDENCY_INPUT_MAX_BYTES = MAX_INPUT_SNAPSHOT_BYTES
+INPUT_CLOSURE_MAX_BYTES = MAX_AGGREGATE_SNAPSHOT_BYTES
 
 
 @dataclass(frozen=True)
@@ -52,7 +67,9 @@ def _capture_input_closure(
         durable_dir_fd,
         selected_name,
         display_path=durable_dir / selected_name,
+        max_bytes=SELECTED_INPUT_MAX_BYTES,
     )
+    closure_bytes = len(selected_payload)
     captured = {
         selected_name: _CapturedInput(
             name=selected_name,
@@ -80,7 +97,15 @@ def _capture_input_closure(
             durable_dir_fd,
             raw.name,
             display_path=durable_dir / raw.name,
+            max_bytes=DEPENDENCY_INPUT_MAX_BYTES,
         )
+        if raw.name not in captured:
+            closure_bytes += len(payload)
+            if closure_bytes > INPUT_CLOSURE_MAX_BYTES:
+                raise EngineScratchError(
+                    "engine input closure exceeds the scratch staging limit "
+                    f"({INPUT_CLOSURE_MAX_BYTES} bytes): {durable_dir / selected_name}"
+                )
         captured.setdefault(
             raw.name,
             _CapturedInput(name=raw.name, payload=payload, mode=mode),

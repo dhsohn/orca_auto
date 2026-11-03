@@ -133,23 +133,28 @@ class _DiscoveredState:
         return _artifact_status(self.state, self.report or {}) in TERMINAL_STATUSES
 
 
-def _discover_state(job_dir: Path) -> _DiscoveredState | None:
-    """Read ``job_dir``'s artifacts; ``None`` when there is no usable ORCA state."""
+def read_state_index_source(job_dir: Path) -> dict[str, Any] | None:
+    """The decoded index fields of ``job_dir``'s ``job_state.json``; ``None`` when unusable.
+
+    The one state-to-index conversion: the rebuild and the terminal upsert
+    both read the file once here, decode it with ``decode_run_state`` and
+    project it through ``run_state_index_source``, so both restore the same
+    request (the envelope's, else the captured provenance's) from the same
+    state. A missing, legacy or foreign state is ``None``; an unreadable or
+    corrupt one is logged and ``None`` (a FIFO is refused without blocking).
+    """
     state_file = job_dir / RUN_STATE_FILE
     read = read_json_artifact(state_file, max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES)
     if read.kind == "missing":
         return None
     if read.kind == "invalid" or not isinstance(read.value, dict):
-        # A FIFO is refused without blocking; this directory keeps its rows.
         logger.warning(
             "Skipping unreadable ORCA run state in %s: %s", job_dir, read.reason or "not an object"
         )
         return None
-    payload = read.value
     try:
-        decoded = decode_run_state(payload)
+        decoded = decode_run_state(read.value)
     except CorruptRunStateError as exc:
-        # The rebuild reports every other directory; this one keeps its rows.
         logger.warning("Skipping corrupt ORCA run state in %s: %s", job_dir, exc)
         return None
     if decoded is None:
@@ -157,10 +162,19 @@ def _discover_state(job_dir: Path) -> _DiscoveredState | None:
     # The row is projected from what the decoder read, not from the raw
     # envelope again: every reader then names the same job for this file.
     try:
-        state = decode_index_source(run_state_index_source(decoded))
+        return decode_index_source(run_state_index_source(decoded))
     except UnreadableReportError as exc:
         logger.warning("Skipping ORCA run state with unusable index fields in %s: %s", job_dir, exc)
         return None
+
+
+def _discover_state(job_dir: Path) -> _DiscoveredState | None:
+    """Read ``job_dir``'s artifacts; ``None`` when there is no usable ORCA state."""
+    state = read_state_index_source(job_dir)
+    if state is None:
+        # The rebuild reports every other directory; this one keeps its rows.
+        return None
+    state_file = job_dir / RUN_STATE_FILE
     try:
         mtime_ns = state_file.stat().st_mtime_ns
     except OSError:

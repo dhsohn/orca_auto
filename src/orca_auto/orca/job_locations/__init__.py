@@ -14,6 +14,7 @@ from ._generation import payload_matches_queue_generation
 from ._rebuild import (
     JobLocationRebuildConflict,
     JobLocationRebuildResult,
+    read_state_index_source,
     rebuild_job_location_records,
 )
 from ._records import (
@@ -31,6 +32,7 @@ __all__ = [
     "index_root_for_cfg",
     "list_job_location_records",
     "payload_matches_queue_generation",
+    "read_state_index_source",
     "rebuild_job_location_records",
     "record_from_artifacts",
     "resolve_job_metadata",

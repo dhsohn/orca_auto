@@ -1521,3 +1521,59 @@ def test_rollback_can_resume_after_a_second_interruption(
         assert sorted(path.name for path in durable.iterdir()) == ["sp.gbw", "sp.out"]
     finally:
         os.close(fd)
+
+
+def _shrink_staging_budgets(monkeypatch: pytest.MonkeyPatch, *, source: int, closure: int) -> None:
+    from orca_auto.core.engine_scratch import _staging as staging_mod
+
+    monkeypatch.setattr(staging_mod, "SELECTED_INPUT_MAX_BYTES", closure)
+    monkeypatch.setattr(staging_mod, "DEPENDENCY_INPUT_MAX_BYTES", source)
+    monkeypatch.setattr(staging_mod, "INPUT_CLOSURE_MAX_BYTES", closure)
+
+
+def test_scratch_stages_a_bound_input_over_the_source_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_shm: Path,
+) -> None:
+    # The selected input is the bound generation input: inlined geometry may
+    # push it past one source's budget, and binding/claim/completion admit it
+    # under the generation budget.  Staging applies that same budget.
+    policy = _policy(monkeypatch, fake_shm)
+    selected = _durable_input(tmp_path)
+    selected_size = selected.stat().st_size
+    _shrink_staging_budgets(monkeypatch, source=selected_size - 1, closure=4 * selected_size)
+
+    workspace = EngineScratchWorkspace.create(policy, selected)
+
+    assert (workspace.path / "sp.inp").read_bytes() == selected.read_bytes()
+    workspace.discard_unlaunched()
+
+
+def test_scratch_keeps_the_source_budget_for_each_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_shm: Path,
+) -> None:
+    policy = _policy(monkeypatch, fake_shm)
+    selected = _durable_input(tmp_path)
+    dependency_size = selected.with_name("input.xyz").stat().st_size
+    _shrink_staging_budgets(monkeypatch, source=dependency_size - 1, closure=10**6)
+
+    with pytest.raises(EngineScratchError, match="scratch staging limit"):
+        EngineScratchWorkspace.create(policy, selected)
+    assert not policy.root.exists() or not _scratch_attempts(policy.root)
+
+
+def test_scratch_refuses_a_closure_over_the_aggregate_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_shm: Path,
+) -> None:
+    policy = _policy(monkeypatch, fake_shm)
+    selected = _durable_input(tmp_path)
+    selected_size = selected.stat().st_size
+    _shrink_staging_budgets(monkeypatch, source=10**6, closure=selected_size + 1)
+
+    with pytest.raises(EngineScratchError, match="input closure exceeds"):
+        EngineScratchWorkspace.create(policy, selected)

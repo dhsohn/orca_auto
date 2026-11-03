@@ -1952,3 +1952,99 @@ def test_recovery_checkpoint_skipped_when_zero_filled(tmp_path: Path) -> None:
     assert "MORead" not in bound_text
     assert "%moinp" not in bound_text
     _verify(job_dir, replacement)
+
+
+def _rebind_in_thread(running: Any, *, queue_root: Path, cfg: AppConfig, fifo: Path) -> object:
+    """Run the rebind on a thread; a reader blocked on ``fifo`` is released and reported."""
+
+    import threading
+
+    outcome: dict[str, object] = {}
+
+    def target() -> None:
+        try:
+            outcome["result"] = _rebind.maybe_rebind_recovery_generation(
+                running, queue_root=queue_root, cfg=cfg
+            )
+        except BaseException as exc:  # noqa: BLE001 - the test inspects it
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(5.0)
+    if thread.is_alive():
+        # The old plain read blocks in open(); a writer releases it.
+        descriptor = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        os.close(descriptor)
+        thread.join(5.0)
+        pytest.fail("crash recovery blocked on a FIFO source input")
+    return outcome.get("error", outcome.get("result"))
+
+
+def test_rebind_refuses_a_fifo_source_without_blocking_and_releases_the_run_lock(
+    tmp_path: Path,
+) -> None:
+    from orca_auto.orca.run_lock import acquire_run_lock
+
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    source = Path(running.metadata["source_selected_inp"])
+    source_bytes = source.read_bytes()
+    source.unlink()
+    os.mkfifo(source)
+
+    outcome = _rebind_in_thread(running, queue_root=queue_root, cfg=cfg, fifo=source)
+
+    assert isinstance(outcome, ValueError)
+    assert "not a regular file" in str(outcome)
+    with acquire_run_lock(Path(running.metadata["reaction_dir"])):
+        pass
+    (row,) = list_queue(queue_root)
+    assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
+    assert row.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert (old_generation / "h2.xyz").read_text(encoding="utf-8") == _CRASHED_XYZ
+
+    # Restoring the submitted bytes lets the durable claim's replay finish
+    # with the same ordinal instead of spending another recovery.
+    source.unlink()
+    source.write_bytes(source_bytes)
+    result = _rebind.maybe_rebind_recovery_generation(row, queue_root=queue_root, cfg=cfg)
+    assert result.metadata["execution_snapshot"]["generation_name"] != snapshot["generation_name"]
+    assert result.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+
+
+def test_rebind_refuses_an_oversized_source_at_the_first_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    _crash_generation(snapshot)
+    source = Path(running.metadata["source_selected_inp"])
+    monkeypatch.setattr(_rebind, "MAX_INPUT_SNAPSHOT_BYTES", source.stat().st_size - 1)
+
+    def unreachable(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("an oversized source must be refused before the build")
+
+    monkeypatch.setattr(_rebind, "build_orca_execution_snapshot", unreachable)
+
+    with pytest.raises(ValueError, match="exceeds"):
+        _rebind.maybe_rebind_recovery_generation(
+            running, queue_root=queue_root, cfg=_worker_cfg(queue_root, executable)
+        )
+    (row,) = list_queue(queue_root)
+    assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
+
+
+def test_rebind_rejects_a_changed_regular_source_by_digest(tmp_path: Path) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    _crash_generation(snapshot)
+    source = Path(running.metadata["source_selected_inp"])
+    source.write_text("! HF STO-3G Opt\n* xyzfile 0 1 h2.xyz\n\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        _rebind.maybe_rebind_recovery_generation(
+            running, queue_root=queue_root, cfg=_worker_cfg(queue_root, executable)
+        )
+    (row,) = list_queue(queue_root)
+    assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]

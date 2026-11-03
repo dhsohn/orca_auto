@@ -1332,3 +1332,78 @@ def test_a_rebuild_from_scratch_restores_the_submitted_resource_request(
     [rebuilt] = list_job_location_records(tmp_path)
     assert submitted_request == {"max_cores": 2, "max_memory_gb": 4}
     assert rebuilt.resource_request == submitted_request
+
+
+def test_a_terminal_upsert_without_an_index_restores_the_rebuilds_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The terminal upsert and a fresh rebuild share one decoded state-to-index
+    # conversion, so from the same state with no index row to refine they
+    # restore the same submitted request.
+    from orca_auto.core.indexing.store import JOB_LOCATION_INDEX_FILE_NAME
+    from orca_auto.orca.execution_binding import orca_execution_provenance
+    from orca_auto.orca.job_locations import (
+        list_job_location_records,
+        rebuild_job_location_records,
+    )
+    from orca_auto.orca.queue.job_records import upsert_terminal_job_record
+    from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
+    from orca_auto.orca.state_reading import state_path
+
+    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    cfg = load_config(args.config)
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    assert result.status == "submitted", result.stderr
+    [entry] = queue_adapter.list_queue(tmp_path)
+    record_cancelled_run_state(
+        reaction_dir,
+        fallback_job_id=entry.task_id,
+        selected_inp=entry.metadata["selected_inp"],
+        execution_provenance=orca_execution_provenance(entry.metadata["execution_snapshot"]),
+    )
+    state_bytes = state_path(reaction_dir).read_bytes()
+    (tmp_path / JOB_LOCATION_INDEX_FILE_NAME).unlink()
+
+    assert upsert_terminal_job_record(
+        cfg, str(reaction_dir), fallback_job_id=entry.task_id, expected_job_id=entry.task_id
+    )
+    [upserted] = list_job_location_records(tmp_path)
+    (tmp_path / JOB_LOCATION_INDEX_FILE_NAME).unlink()
+    rebuild_job_location_records(tmp_path, apply=True)
+    [rebuilt] = list_job_location_records(tmp_path)
+
+    assert state_path(reaction_dir).read_bytes() == state_bytes
+    assert upserted.job_id == rebuilt.job_id == entry.task_id
+    assert upserted.status == rebuilt.status
+    assert (
+        upserted.resource_request
+        == rebuilt.resource_request
+        == {
+            "max_cores": 2,
+            "max_memory_gb": 4,
+        }
+    )
+
+
+def test_a_terminal_upsert_ignores_a_state_naming_another_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.orca.execution_binding import orca_execution_provenance
+    from orca_auto.orca.queue.job_records import upsert_terminal_job_record
+    from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
+
+    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    cfg = load_config(args.config)
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    assert result.status == "submitted", result.stderr
+    [entry] = queue_adapter.list_queue(tmp_path)
+    record_cancelled_run_state(
+        reaction_dir,
+        fallback_job_id=entry.task_id,
+        selected_inp=entry.metadata["selected_inp"],
+        execution_provenance=orca_execution_provenance(entry.metadata["execution_snapshot"]),
+    )
+
+    assert not upsert_terminal_job_record(
+        cfg, str(reaction_dir), fallback_job_id="other-job", expected_job_id="other-job"
+    )
