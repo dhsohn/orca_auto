@@ -18,6 +18,7 @@ from .. import input_references
 from ..file_identity import file_content_identity
 from ..input_references import orca_input_requests_moread, orca_moinp_references
 from ..input_validation import (
+    validate_consistent_operation,
     validate_supported_method_run_type,
     validate_supported_xyz_geometry_syntax,
 )
@@ -98,6 +99,7 @@ def _load_selected_snapshot_input(
         raise ValueError("ORCA normalized selected input does not match its resource request")
     validate_supported_xyz_geometry_syntax(lines, label="ORCA selected input")
     validate_supported_method_run_type(lines, label="ORCA selected input")
+    validate_consistent_operation(lines, label="ORCA selected input")
     requests_moread = orca_input_requests_moread(lines)
     if requests_moread and not orca_moinp_references(lines):
         raise ValueError(

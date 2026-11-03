@@ -2552,6 +2552,96 @@ def test_unsupported_method_run_type_rejected_before_generation_reservation(
     assert sorted(path.name for path in job_dir.iterdir()) == ["calc.inp", "calc.xyz"]
 
 
+def _build_inline_h2(tmp_path: Path, settings: str) -> dict[str, Any]:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "h2.inp"
+    selected.write_text(f"{settings}\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+    return build_submitted_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        "! HF STO-3G Opt Freq\n%geom TS_search EF end",
+        "! HF STO-3G Opt Freq\n%geom\n  TS_search = EF\nend",
+        "%geom ts_search ef end\n! HF STO-3G Opt Freq",
+        "! HF STO-3G Opt\n%geom TS_search end",
+        "! HF STO-3G TightOpt\n%geom MaxIter 50 TS_search EF end",
+        "! HF STO-3G\n! COpt Freq\n%geom TS_search EF end",
+    ],
+)
+def test_ts_search_block_on_a_non_ts_optimization_route_is_rejected(
+    tmp_path: Path, settings: str
+) -> None:
+    # Admitted, ``! Opt`` + TS_search would be verified as a minimum: an output
+    # with zero imaginary modes completes with stationary_point "minimum".
+    with pytest.raises(ValueError, match="TS_search on a non-TS optimization route"):
+        _build_inline_h2(tmp_path, settings)
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        "! HF STO-3G OptTS Freq\n%geom TS_search EF end",
+        "%geom TS_search EF end\n! HF STO-3G OptTS Freq",
+        "! HF STO-3G Opt Freq\n%geom # TS_search EF # end",
+        '! HF STO-3G Opt Freq\n%geom "TS_search" EF end',
+        "! HF STO-3G Opt Freq\n%geom MaxIter 50 end TS_search EF",
+        "! HF STO-3G Opt Freq\n%method TS_search EF end",
+        # Nothing optimizes: completion expects a single point either way, and
+        # the queue Detail records the block operation as before.
+        "! HF STO-3G Freq\n%geom TS_search EF end",
+        "! HF STO-3G\n%geom TS_search end",
+    ],
+)
+def test_ts_search_with_a_ts_route_or_inactive_is_admitted(tmp_path: Path, settings: str) -> None:
+    assert _build_inline_h2(tmp_path, settings)["selected_inp"]
+
+
+@pytest.mark.parametrize(
+    ("settings", "route_operation"),
+    [
+        ("! HF STO-3G Opt\n%method RunTyp Energy end", "optimization"),
+        ("%method RunTyp Energy end\n! HF STO-3G Opt", "optimization"),
+        ("! HF STO-3G\n%method RunTyp SP end\n! TightOpt", "optimization"),
+        ("! HF STO-3G Opt\n%method RunTyp Gradient end", "optimization"),
+        ("! HF STO-3G OptTS Freq\n%method RunTyp Energy end", "TS search"),
+        ("! HF STO-3G IRC\n%method RunTyp SP end", "IRC"),
+        ("! HF STO-3G Opt\n%method RunTyp SP RunTyp Energy end", "optimization"),
+    ],
+)
+def test_method_run_type_overriding_the_route_operation_is_rejected(
+    tmp_path: Path, settings: str, route_operation: str
+) -> None:
+    # Admitted, ``! Opt`` + ``RunTyp Energy`` would require optimization
+    # evidence that ORCA's single point never prints.
+    with pytest.raises(ValueError, match=f"overrides the route's {route_operation}"):
+        _build_inline_h2(tmp_path, settings)
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        "! HF STO-3G\n%method RunTyp Energy end",
+        "! HF STO-3G SP\n%method RunTyp SP end",
+        "! HF STO-3G Freq\n%method RunTyp Energy end",
+        "%method RunTyp Gradient end\n! HF STO-3G",
+        "! HF STO-3G Opt\n%method # RunTyp Energy # end",
+        '! HF STO-3G Opt\n%method "RunTyp" Energy end',
+        "! HF STO-3G Opt\n%scf RunTyp Energy end",
+    ],
+)
+def test_method_run_type_agreeing_with_the_route_is_admitted(tmp_path: Path, settings: str) -> None:
+    assert _build_inline_h2(tmp_path, settings)["selected_inp"]
+
+
 @pytest.mark.parametrize(
     "method_block",
     [

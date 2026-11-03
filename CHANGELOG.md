@@ -10,6 +10,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Submission now rejects block settings that change the job the route
+  keywords request, because completion classifies a job from its route alone:
+  - `%geom TS_search` on a non-TS optimization route (`! Opt` plus
+    `TS_search EF`) ran a transition-state search that was then verified as a
+    minimum. An output with no imaginary mode completed with science
+    `verified`, `stationary_point: "minimum"` and handoff `ready`.
+  - An accepted `%method RunTyp` (`Energy`, `SP` or a gradient value) together
+    with a route optimization, TS search, IRC, NEB or MD replaced that
+    operation. The single point ORCA then ran failed for missing optimization
+    evidence.
+  Request a TS search with `! OptTS`, and keep only one of a `RunTyp` and a
+  route operation. Rows queued before the upgrade are not re-checked.
+
+### Fixed
+
 - Submission now rejects a `%method RunTyp` value the runtime cannot classify,
   including the optimization spellings `Opt`, `Geom`, `Geometry` and
   `GeometryOpt`, as well as missing or quoted values. Such inputs were admitted

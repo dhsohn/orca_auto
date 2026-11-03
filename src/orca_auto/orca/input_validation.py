@@ -10,7 +10,9 @@ only raise ``ValueError``; rewriting stays with the modules below.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
+from .completion_rules import route_facts
 from .input_blocks import GEOM_HEADER_RE, iter_blocks, method_run_type_values
 from .input_references import orca_moinp_references
 from .input_syntax import active_orca_directive_text, orca_line_tokens, orca_route_tokens
@@ -116,6 +118,62 @@ def validate_supported_method_run_type(lines: list[str], *, label: str) -> None:
                 f"{label} uses unsupported %method RunTyp {value.value}; request an "
                 "optimization or other job type with a route keyword such as ! Opt"
             )
+
+
+def validate_consistent_operation(lines: list[str], *, label: str) -> None:
+    """Reject a block setting that changes the job the route keywords request.
+
+    Completion, the geometry scope and the execution binding classify a job
+    from its route keywords (:func:`.completion_rules.route_facts`), but ORCA
+    reads ``%`` blocks after the route, so a block can change the job:
+
+    - ``%geom TS_search`` turns a route optimization (``Opt``, ``TightOpt``, ...)
+      into a transition-state search, which would then be verified as a minimum;
+    - a ``%method RunTyp`` (only ``Energy``/``SP`` or a gradient value reach
+      here) replaces a route optimization, TS search, IRC, NEB or MD, which
+      would then be failed for missing optimization evidence.
+
+    Either is refused so the route alone states the job. Where the setting
+    agrees with the route or changes nothing completion checks (``TS_search``
+    with ``! OptTS`` or on a route that optimizes nothing, ``RunTyp`` on a
+    single-point route, a separate frequency request) it is accepted.
+    """
+
+    route = route_facts(Path(label), lines=lines)
+    if _has_ts_search_key(lines) and route.is_opt and not route.is_ts:
+        raise ValueError(
+            f"{label} uses %geom TS_search on a non-TS optimization route; request "
+            "the TS search with a route keyword such as ! OptTS"
+        )
+    run_types = [value.value for value in method_run_type_values(lines) if value is not None]
+    route_operation = next(
+        (
+            name
+            for name, requested in (
+                ("TS search", route.is_ts),
+                ("IRC", route.is_irc),
+                ("optimization", route.is_opt),
+                ("NEB or MD", route.is_non_stationary),
+            )
+            if requested
+        ),
+        None,
+    )
+    if run_types and route_operation is not None:
+        raise ValueError(
+            f"{label} sets %method RunTyp {run_types[-1]}, which overrides the route's "
+            f"{route_operation}; keep only one of the two declarations"
+        )
+
+
+def _has_ts_search_key(lines: list[str]) -> bool:
+    """Whether a ``%geom`` body carries an unquoted ``TS_search`` key, whatever its value."""
+    return any(
+        not token.quoted and token.value.lower() == "ts_search"
+        for block in iter_blocks(lines, "geom")
+        for row in block.rows
+        for token in row.tokens
+    )
 
 
 def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> None:
