@@ -242,22 +242,64 @@ def iter_blocks(lines: Sequence[str], block_name: str) -> Iterator[OrcaBlock]:
         index = block.end + 1 if block.closed else max(block.end, index + 1)
 
 
-def method_run_type_values(lines: Sequence[str]) -> list[OrcaLineToken | None]:
-    """The value token of every unquoted ``RunTyp`` key in ``%method`` bodies.
+# The block keys that declare an operation: the %freq frequency switches, the
+# %geom TS search switch and the %method run type.
+OPERATION_BLOCK_KEYS: dict[str, frozenset[str]] = {
+    "freq": frozenset({"anfreq", "numfreq"}),
+    "geom": frozenset({"ts_search"}),
+    "method": frozenset({"runtyp"}),
+}
 
-    ``None`` stands for a key with no value. Comments, quoted keys and tokens
-    after a block's closing ``end`` are not keys.
+
+@dataclass(frozen=True)
+class BlockDeclaration:
+    """One operation key (:data:`OPERATION_BLOCK_KEYS`) in a ``%block`` body.
+
+    Facts only: whether the key or its value is quoted, whether the block
+    closed, and where the key stands. Each reader decides what an uncertain
+    declaration means (completion skips a quoted key, the queue Detail calls it
+    unknown, submission rejects an unreadable run type).
     """
 
-    values: list[OrcaLineToken | None] = []
-    for block in iter_blocks(lines, "method"):
-        tokens = [token for row in block.rows for token in row.tokens]
-        for index, token in enumerate(tokens):
-            if token.quoted or token.value.lower() != "runtyp":
-                continue
-            value_index = value_token_index(tokens, index)
-            values.append(tokens[value_index] if value_index < len(tokens) else None)
-    return values
+    block: str
+    key: str  # lower case
+    key_quoted: bool
+    line_index: int
+    column: int
+    value: OrcaLineToken | None  # None: the key has no value
+    block_closed: bool
+
+
+def block_operation_declarations(lines: Sequence[str]) -> tuple[BlockDeclaration, ...]:
+    """Every operation key of every ``%freq``/``%geom``/``%method`` body, in input order per block.
+
+    Blocks of one name come in input order and keys in body order, so a reader
+    that lets the last value win sees ORCA's order. Comments and tokens after
+    a block's closing ``end`` are not body tokens.
+    """
+
+    declarations: list[BlockDeclaration] = []
+    for name, keys in OPERATION_BLOCK_KEYS.items():
+        for block in iter_blocks(lines, name):
+            located = [(row.line_index, token) for row in block.rows for token in row.tokens]
+            tokens = [token for _line_index, token in located]
+            for index, (line_index, token) in enumerate(located):
+                key = token.value.lower()
+                if key not in keys:
+                    continue
+                value_index = value_token_index(tokens, index)
+                declarations.append(
+                    BlockDeclaration(
+                        block=name,
+                        key=key,
+                        key_quoted=token.quoted,
+                        line_index=line_index,
+                        column=token.start,
+                        value=tokens[value_index] if value_index < len(tokens) else None,
+                        block_closed=block.closed,
+                    )
+                )
+    return tuple(declarations)
 
 
 def find_block(lines: Sequence[str], block_name: str) -> OrcaBlock | None:

@@ -242,3 +242,55 @@ def test_validate_unambiguous_directives_counts_pal_nprocs_via_the_shared_block_
         validate_unambiguous_orca_directives(after_end, label="job.inp")
         assert read_nprocs(after_end) == 4
     validate_unambiguous_orca_directives(["%pal", "  nprocs 4", "end", "%maxcore 512"], label="x")
+
+
+def _declarations(text: str) -> list[tuple[str, str, bool, str | None, bool | None, bool]]:
+    from orca_auto.orca.input_blocks import block_operation_declarations
+
+    return [
+        (
+            item.block,
+            item.key,
+            item.key_quoted,
+            None if item.value is None else item.value.value,
+            None if item.value is None else item.value.quoted,
+            item.block_closed,
+        )
+        for item in block_operation_declarations(text.splitlines())
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("! HF\n", []),
+        (
+            "%freq AnFreq true NumFreq = false end\n",
+            [
+                ("freq", "anfreq", False, "true", False, True),
+                ("freq", "numfreq", False, "false", False, True),
+            ],
+        ),
+        ("%geom\n  TS_search EF\nend\n", [("geom", "ts_search", False, "EF", False, True)]),
+        ('%method "RunTyp" Opt end\n', [("method", "runtyp", True, "Opt", False, True)]),
+        ('%method RunTyp "SP" end\n', [("method", "runtyp", False, "SP", True, True)]),
+        ("%method RunTyp end\n", [("method", "runtyp", False, None, None, True)]),
+        ("%method RunTyp Opt\n* xyz 0 1\n", [("method", "runtyp", False, "Opt", False, False)]),
+        ("%method # RunTyp Opt # end\n", []),
+        ("%method end RunTyp Opt\n", []),
+        ("%scf RunTyp Opt end\n", []),
+        (
+            "%freq AnFreq true end\n%freq AnFreq false end\n",
+            [
+                ("freq", "anfreq", False, "true", False, True),
+                ("freq", "anfreq", False, "false", False, True),
+            ],
+        ),
+    ],
+)
+def test_block_operation_declarations_report_facts_not_policy(
+    text: str, expected: list[tuple[str, str, bool, str | None, bool | None, bool]]
+) -> None:
+    # Quoted keys, quoted or missing values and unclosed blocks are reported as
+    # such; completion, submission and the queue Detail each decide what they mean.
+    assert _declarations(text) == expected

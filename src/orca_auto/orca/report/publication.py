@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from orca_auto.core.confined_io import atomic_write_confined_bytes, read_confine
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 
 from .. import state_reading as _state_reading
+from ..evidence import output_publication_scope
 from ..machine_observation import (
     REPORT_GENERATION_FAILED,
     REPORT_NOT_APPLICABLE,
@@ -129,12 +130,15 @@ def write_report_json(
     html_path: Path | None = None,
     si_path: Path | None = None,
     report_generation: dict[str, str] | None = None,
+    before_write: Callable[[], None] | None = None,
 ) -> Path | None:
     """Write ``machine.json`` (and ``execution_provenance.json``) into the verified generation.
 
     ``html_path`` and ``si_path`` are the reports already published there and
     ``report_generation`` their outcomes in this publication. A terminal
     observation is written once; writing different bytes over it raises.
+    ``before_write`` runs after the observation is built and before it is
+    written; when it raises, nothing is written.
     """
     payload = report_payload
     if generation_target is None:
@@ -170,6 +174,8 @@ def write_report_json(
         si_path=si_path,
         report_generation=report_generation,
     )
+    if before_write is not None:
+        before_write()
     path = report_json_path(generation_target[0])
     observation_bytes = machine_json_bytes(observation)
     if existing_terminal is not None:
@@ -258,26 +264,31 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
         return {}
     # This publication's optional report outcomes; never persisted elsewhere.
     report_generation: dict[str, str] = {}
-    html_path = write_job_html_report(
-        reaction_dir,
-        state,
-        generation_target=generation_target,
-        report_generation=report_generation,
-    )
-    si_path = write_si_block(
-        reaction_dir,
-        state,
-        generation_target=generation_target,
-        report_generation=report_generation,
-    )
-    json_path = write_report_json(
-        reaction_dir,
-        report_payload,
-        generation_target=generation_target,
-        html_path=html_path,
-        si_path=si_path,
-        report_generation=report_generation,
-    )
+    # HTML, SI and machine.json must describe one version of each output: an
+    # output that changes during the publication abandons it before
+    # machine.json is written, and the next publication starts over.
+    with output_publication_scope() as verify_outputs_unchanged:
+        html_path = write_job_html_report(
+            reaction_dir,
+            state,
+            generation_target=generation_target,
+            report_generation=report_generation,
+        )
+        si_path = write_si_block(
+            reaction_dir,
+            state,
+            generation_target=generation_target,
+            report_generation=report_generation,
+        )
+        json_path = write_report_json(
+            reaction_dir,
+            report_payload,
+            generation_target=generation_target,
+            html_path=html_path,
+            si_path=si_path,
+            report_generation=report_generation,
+            before_write=verify_outputs_unchanged,
+        )
     # List the reports as the observation just published receipts them, so
     # this result and any re-entry name the same files.
     published = _published_observation(generation_target[0])

@@ -11,7 +11,12 @@ import re
 from pathlib import Path
 
 from .completion_rules import RouteFacts, route_facts
-from .input_blocks import iter_blocks, percent_directive_header, scan_coordinate_rows
+from .input_blocks import (
+    block_operation_declarations,
+    iter_blocks,
+    percent_directive_header,
+    scan_coordinate_rows,
+)
 from .input_syntax import orca_line_tokens, orca_route_lines, orca_route_tokens, value_token_index
 from .job_type import FREQ_RE, SP_RE, job_type_from_routes
 
@@ -185,46 +190,46 @@ def _block_operation_kind(lines: list[str], *, named_neb: bool) -> str | None:
     scan_proven = False
     seen: set[tuple[str, str]] = set()
     unexplained = _operation_keyword_positions(lines)
-    for name in _NON_SINGLE_POINT_BLOCKS | _BLOCK_OPERATION_VALUES.keys():
+    for name in _NON_SINGLE_POINT_BLOCKS:
         for block in iter_blocks(lines, name):
-            located = [(row.line_index, token) for row in block.rows for token in row.tokens]
-            tokens = [token for _line_index, token in located]
-            if name in _NON_SINGLE_POINT_BLOCKS:
-                if not block.closed:
-                    return "unknown"
-                unexplained.difference_update(
-                    (line_index, token.start) for line_index, token in located if token.quoted
-                )
-                requested = True
-                continue
-            values = _BLOCK_OPERATION_VALUES[name]
-            for index, (line_index, token) in enumerate(located):
-                key = token.value.lower()
-                if key not in values:
-                    continue
-                identity = (name, key)
-                if token.quoted or not block.closed or identity in seen:
-                    return "unknown"
-                seen.add(identity)
-                value_index = value_token_index(tokens, index)
-                if (
-                    value_index >= len(tokens)
-                    or tokens[value_index].quoted
-                    or tokens[value_index].value.lower() not in values[key]
-                ):
-                    return "unknown"
-                unexplained.discard((line_index, token.start))
-                if name == "freq" and tokens[value_index].value.lower() == "true" and named_neb:
-                    return "unknown"
-                if name != "freq" or tokens[value_index].value.lower() == "true":
-                    requested = True
-            if name == "geom" and any(
-                not token.quoted and token.value.lower() == "scan" for token in tokens
-            ):
-                if not block.closed or not scan_coordinate_rows(lines[block.start : block.end + 1]):
-                    return "unknown"
-                scan_proven = True
-                requested = True
+            if not block.closed:
+                return "unknown"
+            unexplained.difference_update(
+                (row.line_index, token.start)
+                for row in block.rows
+                for token in row.tokens
+                if token.quoted
+            )
+            requested = True
+    # The operation keys are read by the shared block reader; this policy
+    # decides what an uncertain declaration (quoted, unclosed, repeated or with
+    # an unknown value) means for the Detail: an unknown operation.
+    for declaration in block_operation_declarations(lines):
+        values = _BLOCK_OPERATION_VALUES[declaration.block]
+        if declaration.key not in values:
+            continue
+        identity = (declaration.block, declaration.key)
+        if declaration.key_quoted or not declaration.block_closed or identity in seen:
+            return "unknown"
+        seen.add(identity)
+        value = declaration.value
+        if value is None or value.quoted or value.value.lower() not in values[declaration.key]:
+            return "unknown"
+        unexplained.discard((declaration.line_index, declaration.column))
+        if declaration.block == "freq" and value.value.lower() == "true" and named_neb:
+            return "unknown"
+        if declaration.block != "freq" or value.value.lower() == "true":
+            requested = True
+    for block in iter_blocks(lines, "geom"):
+        if any(
+            not token.quoted and token.value.lower() == "scan"
+            for row in block.rows
+            for token in row.tokens
+        ):
+            if not block.closed or not scan_coordinate_rows(lines[block.start : block.end + 1]):
+                return "unknown"
+            scan_proven = True
+            requested = True
     if unexplained or (scan_coordinate_rows(lines) is not None and not scan_proven):
         return "unknown"
     return "unsupported" if requested else None

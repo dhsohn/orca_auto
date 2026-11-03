@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -138,6 +140,75 @@ def _read_output_version(out_path: Path) -> tuple[_OutputVersion | None, str]:
     return (before if _output_version(out_path) == before else None), text
 
 
+class OutputChangedDuringPublication(RuntimeError):
+    """An output file changed while one report publication was reading it."""
+
+
+@dataclass
+class _PublicationVersions:
+    """The output versions one publication has read, by path."""
+
+    pinned: dict[str, _OutputVersion] = field(default_factory=dict)
+    changed: set[str] = field(default_factory=set)
+
+    def observe(self, path: str, version: _OutputVersion | None) -> None:
+        """Pin ``path`` to its first version; a later different (or unstable) one marks a change."""
+        if version is None:
+            self.changed.add(path)
+        elif self.pinned.setdefault(path, version) != version:
+            self.changed.add(path)
+
+    def verify(self) -> None:
+        """Raise unless every output read in this publication is still the version it read."""
+        changed = set(self.changed)
+        for path, version in self.pinned.items():
+            try:
+                current = _output_version(Path(path))
+            except OSError:
+                changed.add(path)
+                continue
+            if current != version:
+                changed.add(path)
+        if changed:
+            raise OutputChangedDuringPublication(
+                "ORCA output changed while its reports were published: "
+                + ", ".join(sorted(changed))
+            )
+
+
+_publication_versions: ContextVar[_PublicationVersions | None] = ContextVar(
+    "orca_auto_report_publication_versions", default=None
+)
+
+
+@contextmanager
+def output_publication_scope() -> Iterator[Callable[[], None]]:
+    """One report publication's view of its outputs: every read must see one file version.
+
+    Inside the scope the first read of each output pins its version, and the
+    yielded ``verify`` raises :class:`OutputChangedDuringPublication` when any
+    output read in the scope was read in another version, changed while read,
+    or no longer is the pinned version. The publisher calls it right before
+    it writes the machine observation, so HTML, SI and ``machine.json`` either
+    describe one output version or the publication is abandoned and retried.
+    The report writers turn their own exceptions into a ``failed`` outcome,
+    which is why the check is this explicit call and not an exception raised
+    inside them.
+    """
+    versions = _PublicationVersions()
+    token = _publication_versions.set(versions)
+    try:
+        yield versions.verify
+    finally:
+        _publication_versions.reset(token)
+
+
+def _observe_output_version(out_path: Path, version: _OutputVersion | None) -> None:
+    versions = _publication_versions.get()
+    if versions is not None:
+        versions.observe(str(out_path), version)
+
+
 class _ParsedOutputCache:
     """Bounded LRU keyed by the output file version (:data:`_OutputVersion`).
 
@@ -217,8 +288,10 @@ def _versioned_parsed_output(
     current = _output_version(out_path)
     snapshot = _parsed_output_cache.get(current)
     if snapshot is not None:
+        _observe_output_version(out_path, current)
         return current, snapshot
     version, text = _read_output_version(out_path)
+    _observe_output_version(out_path, version)
     parsed = _parse_output_text(text, str(out_path), derive)
     if version is None:
         return None, parsed
@@ -253,6 +326,7 @@ def parsed_output_facts(out_path: Path, parse_text: Callable[[str], T]) -> T:
         return cast(T, snapshot.derived[parse_text])
     except KeyError:
         read_version, text = _read_output_version(out_path)
+        _observe_output_version(out_path, read_version)
         facts = parse_text(text)
         if version is None or read_version != version:
             # The file changed since its base facts were cached: these facts
