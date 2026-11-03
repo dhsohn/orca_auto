@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..state import new_state, save_state
-from ..state_reading import load_state
+from ..state_reading import CorruptRunStateError, load_state, read_run_state
 from ..statuses import ACTIVE_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
 from ..types import RunState
 from .reporting import decide_attempt_outcome, exit_with_result, last_out_path_from_state
@@ -83,7 +83,20 @@ def is_resumable_state(state: RunState) -> bool:
 
 
 def load_or_create_state(reaction_dir: Path, selected_inp: Path) -> tuple[RunState, bool]:
-    state = load_state(reaction_dir)
+    """The state this run continues or a fresh one; a corrupt state is never overwritten.
+
+    A missing state, or a legacy or foreign one, is replaced by a fresh state.
+    A file that cannot be read as an ORCA state raises
+    :class:`CorruptRunStateError` (a ``RuntimeError``, so the run fails with
+    it) and stays on disk for inspection.
+    """
+    read = read_run_state(reaction_dir)
+    if read.kind == "corrupt":
+        raise CorruptRunStateError(
+            f"ORCA run state {reaction_dir / 'job_state.json'} is corrupt ({read.reason}); "
+            "it is kept for inspection and this run does not overwrite it"
+        )
+    state = read.state
     resumed = False
     if not state or not state_matches_selected(state, selected_inp):
         state = new_state(reaction_dir, selected_inp)

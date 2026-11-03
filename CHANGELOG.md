@@ -10,6 +10,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `job_state.json` is now validated where it is read. A schema-v1 ORCA state
+  with a wrongly typed field (for example `engine_payload.attempts: 42`) is
+  classified as corrupt instead of crashing the reader or being reshaped (a
+  string `"abc"` was read as the list `["a", "b", "c"]`, and a list
+  `final_result` was accepted). `queue list` and `index rebuild` skip such a
+  directory with a warning (`index rebuild` lists it under `skipped`) and
+  report every other job; before, one such file made both commands exit 1
+  with a traceback. A run refuses to start over a corrupt or unparseable root
+  state rather than overwriting it, so the file stays for inspection. A legacy
+  or foreign state is still replaced as before.
 - The report parse cache now keys an output by its full file version (device,
   inode, size, mtime and ctime) rather than path, size and mtime. Before, an
   output replaced with the same length and mtime could be rendered from the

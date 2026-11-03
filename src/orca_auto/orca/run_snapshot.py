@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import stat
 from collections.abc import Iterable, Mapping
@@ -17,9 +18,11 @@ from orca_auto.core.utils.persistence import load_json_mapping_file
 from orca_auto.core.utils.stable_fs import StableFsError, open_pinned_directory
 
 from .job_locations import list_job_location_records, resolve_record_job_dir
-from .state_reading import state_from_normalized_payload
+from .state_reading import CorruptRunStateError, state_from_normalized_payload
 
 StateFileIdentity = tuple[int, int, int, int]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -269,7 +272,12 @@ def collect_run_snapshots(
             if loaded_state is None:
                 continue
             state_payload, state_file_identity = loaded_state
-            state = state_from_normalized_payload(state_payload)
+            try:
+                state = state_from_normalized_payload(state_payload)
+            except CorruptRunStateError as exc:
+                # One damaged state must not hide every other run.
+                logger.warning("Skipping corrupt ORCA run state in %s: %s", reaction_dir, exc)
+                continue
             if state is None:
                 continue
             state_run_identity, state_generation_identity = state_publication_identity(
