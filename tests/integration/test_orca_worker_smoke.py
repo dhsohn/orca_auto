@@ -12,6 +12,11 @@ import pytest
 from orca_auto.cli import main as cli_main
 from orca_auto.core.admission import admission_dir, list_slots
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, SI_BLOCK_MD_FILE
+from orca_auto.core.engine_scratch import EngineScratchError
+from orca_auto.core.engine_scratch._policy import (
+    _filesystem_free_bytes,
+    _linux_available_memory_bytes,
+)
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
 from orca_auto.orca.completion_rules import route_facts
@@ -33,6 +38,11 @@ from orca_auto.orca.state_reading import load_state
 from tests.conftest import write_fake_orca
 from tests.contracts.report_verifier import load_report_json
 from tests.machine_contract_helpers import validate_common_machine
+
+# The worker configuration of these tests: a 1 GiB task memory limit and a
+# 1 GiB RAM-scratch reserve. The RAM-scratch precondition uses the same values.
+_TASK_MEMORY_GB = 1
+_SCRATCH_MIN_FREE_GB = 1
 
 
 def _write_fake_orca(
@@ -96,7 +106,7 @@ def _write_orca_worker_config(
         runtime.update(
             {
                 "scratch_root": str(scratch_root),
-                "scratch_min_free_gb": 1,
+                "scratch_min_free_gb": _SCRATCH_MIN_FREE_GB,
             }
         )
     path.write_text(
@@ -106,7 +116,7 @@ def _write_orca_worker_config(
                 "scheduler": {"max_active_simulations": 1},
                 "resources": {
                     "max_cores_per_task": 1,
-                    "max_memory_gb_per_task": 1,
+                    "max_memory_gb_per_task": _TASK_MEMORY_GB,
                 },
                 "orca": {
                     "runtime": runtime,
@@ -229,12 +239,48 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert "r2scan-3c" not in si_text
 
 
+def _ram_scratch_unavailable_reason(shm: Path) -> str | None:
+    """Why the worker would hold a RAM-scratch job on this host, or ``None``.
+
+    The product admits a job to RAM scratch only when the tmpfs has its
+    reserve free and the host can back the whole pool without swap
+    (``MemAvailable`` covers the task's memory limit, the tmpfs free space
+    and the host reserve). The test runs only where that holds, with the
+    same numbers as its worker configuration; a host that fails it is a
+    capacity refusal the product is right to make, not a test failure.
+    """
+    if not shm.is_dir():
+        return f"{shm} is not a directory"
+    gib = 1024**3
+    reserve = _SCRATCH_MIN_FREE_GB * gib
+    fd = os.open(shm, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        free = _filesystem_free_bytes(fd)
+    finally:
+        os.close(fd)
+    if free < 2 * gib:
+        return f"requires at least 2 GiB free in {shm} (free={free})"
+    try:
+        available = _linux_available_memory_bytes()
+    except EngineScratchError as exc:
+        return str(exc)
+    required = _TASK_MEMORY_GB * gib + free + reserve
+    if available < required:
+        return (
+            "RAM scratch cannot be guaranteed without swap on this host: "
+            f"MemAvailable={available} < task memory {_TASK_MEMORY_GB * gib} "
+            f"+ {shm} free {free} + reserve {reserve}"
+        )
+    return None
+
+
 def test_orca_queue_worker_runs_fake_orca_in_dev_shm_and_publishes_attempt(
     tmp_path: Path,
 ) -> None:
     shm = Path("/dev/shm")
-    if not shm.is_dir() or shutil.disk_usage(shm).free < 2 * 1024**3:
-        pytest.skip("requires at least 2 GiB free in /dev/shm")
+    reason = _ram_scratch_unavailable_reason(shm)
+    if reason is not None:
+        pytest.skip(reason)
     scratch_root = Path(tempfile.mkdtemp(prefix="orca-auto-test-", dir=shm))
     try:
         allowed_root = tmp_path / "orca_runs"
