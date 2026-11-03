@@ -267,6 +267,96 @@ def test_shutdown_return_releases_the_slot_when_the_requeue_fails(
     assert _slots(queue_root) == []
 
 
+def test_a_fill_pass_validates_every_pending_row_once_and_each_claim_again(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # N pending rows and K free slots: one full repair (N validations) plus one
+    # revalidation of each later claim (K - 1), instead of a full repair per slot.
+    worker = make_worker(max_concurrent=3, start=child_starter, sleep=lambda _seconds: None)
+    entries = [_enqueue_ready(queue_root, f"mol_{index}") for index in range(5)]
+    repair = queue_worker_mod.publication_repair
+    calls: list[str] = []
+    real_repair_one = repair.repair_queue_publication
+
+    def counted(cfg: Any, root: Path, entry: QueueEntry) -> bool:
+        calls.append(entry.queue_id)
+        return real_repair_one(cfg, root, entry)
+
+    monkeypatch.setattr(repair, "repair_queue_publication", counted)
+    worker._worker_state_last_reconcile = time.monotonic()
+
+    assert worker._fill_slots() == "processed"
+
+    assert len(child_starter.started) == 3
+    assert len(calls) == len(entries) + (3 - 1)
+
+
+def test_a_row_invalidated_during_a_fill_pass_is_not_claimed(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The full repair passed every row at the start of the pass; the second
+    # row then fails its own revalidation (its job directory moved, say) and
+    # must be withheld, so the third row takes the slot instead.
+    worker = make_worker(max_concurrent=2, start=child_starter, sleep=lambda _seconds: None)
+    first, second, third = (_enqueue_ready(queue_root, f"mol_{name}") for name in "ABC")
+    repair = queue_worker_mod.publication_repair
+    real_repair_one = repair.repair_queue_publication
+    full_repair_done: list[bool] = []
+    real_repair_all = repair.repair_queue_publications
+
+    def repair_all(cfg: Any) -> Any:
+        result = real_repair_all(cfg)
+        full_repair_done.append(True)
+        return result
+
+    def revalidate(cfg: Any, root: Path, entry: QueueEntry) -> bool:
+        if full_repair_done and entry.queue_id == second.queue_id:
+            return False
+        return real_repair_one(cfg, root, entry)
+
+    monkeypatch.setattr(repair, "repair_queue_publications", repair_all)
+    monkeypatch.setattr(repair, "repair_queue_publication", revalidate)
+    worker._worker_state_last_reconcile = time.monotonic()
+
+    worker._fill_slots()
+
+    assert [started.entry.queue_id for started in child_starter.started] == [
+        first.queue_id,
+        third.queue_id,
+    ]
+    assert queue_statuses(queue_root)[second.queue_id] == QueueStatus.PENDING
+
+
+def test_a_direct_admission_always_runs_the_full_repair(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = make_worker(max_concurrent=2, start=child_starter, sleep=lambda _seconds: None)
+    _enqueue_ready(queue_root, "mol_A")
+    full_repairs: list[bool] = []
+    real_repair_all = queue_worker_mod.publication_repair.repair_queue_publications
+
+    def repair_all(cfg: Any) -> Any:
+        full_repairs.append(True)
+        return real_repair_all(cfg)
+
+    monkeypatch.setattr(
+        queue_worker_mod.publication_repair, "repair_queue_publications", repair_all
+    )
+    worker._fill_slots(max_new_jobs=1)
+    worker._admit_next()
+
+    assert len(full_repairs) == 2
+
+
 @pytest.mark.parametrize("claim", ["lost", "raises"])
 def test_admission_pass_releases_the_slot_when_the_claim_fails(
     make_worker: Callable[..., OrcaQueueWorker],

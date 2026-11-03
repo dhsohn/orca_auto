@@ -172,6 +172,8 @@ class OrcaQueueWorker(QueueWorkerLoop):
         # reads them inside that claim.
         self._admission_withheld_keys: frozenset[str] = frozenset()
         self._publication_withheld_ids: frozenset[str] = frozenset()
+        # True once this fill pass has repaired every queued publication.
+        self._fill_pass_repaired = False
 
     # -- pid file and singleton lock ----------------------------------------
 
@@ -369,12 +371,20 @@ class OrcaQueueWorker(QueueWorkerLoop):
         released: object = release_slot(self.admission_root, admission_token)
         return released
 
+    def _begin_fill_pass(self) -> None:
+        self._fill_pass_repaired = False
+
+    def _end_fill_pass(self) -> None:
+        self._fill_pass_repaired = False
+
     def _admit_next(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
         """Admit one row: the whole reserve-before-claim sequence, in order.
 
         Withheld directories, publication repair, queued notification, capacity,
         preview, slot reservation, claim by id, and slot release when the claim
-        is lost.
+        is lost. The full publication repair, which validates every pending
+        row, runs on the first admission of a fill pass; later admissions in
+        the same pass revalidate only the row they are about to claim.
         """
         # Pending publication retains its replay snapshot and durable queue marker.
         # Until it is replayed, no new generation may start in that reaction
@@ -398,11 +408,14 @@ class OrcaQueueWorker(QueueWorkerLoop):
             else:
                 logger.info("ORCA admission is no longer withheld for any reaction dir")
             self._admission_withheld_keys = withheld
-        publication_withheld_ids = publication_repair.repair_queue_publications(self.cfg)
-        if publication_withheld_ids is None:
-            logger.warning("Queue admission paused: ORCA queue could not be inspected")
-            return "blocked", None
-        self._publication_withheld_ids = publication_withheld_ids
+        revalidate_preview = self._fill_pass_repaired
+        if not self._fill_pass_repaired:
+            publication_withheld_ids = publication_repair.repair_queue_publications(self.cfg)
+            if publication_withheld_ids is None:
+                logger.warning("Queue admission paused: ORCA queue could not be inspected")
+                return "blocked", None
+            self._publication_withheld_ids = publication_withheld_ids
+            self._fill_pass_repaired = True
         # Load-bearing, not a duplicate of the poll-sleep call: a row the repair
         # above just published and the claim below takes in this same pass is
         # never pending at a later sleep, so it would never be notified.
@@ -416,6 +429,17 @@ class OrcaQueueWorker(QueueWorkerLoop):
         if not admission_has_capacity(self.admission_root, self.max_concurrent):
             return "blocked", None
         preview = roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
+        # Later in a pass the full repair is not repeated, so the row about to be
+        # claimed is revalidated alone (its path, inode and publication state may
+        # have changed since the pass began). A row that fails joins the
+        # withheld set and the next candidate is previewed.
+        while revalidate_preview and preview is not None:
+            if publication_repair.repair_queue_publication(
+                self.cfg, roots.queue_root(self.cfg), preview
+            ):
+                break
+            self._publication_withheld_ids = self._publication_withheld_ids | {preview.queue_id}
+            preview = roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
         if preview is None:
             return "idle", None
         admission_token = _try_reserve_admission_slot(

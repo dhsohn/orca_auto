@@ -84,6 +84,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Filling several worker slots in one pass repairs and validates every pending
+  queue publication once, then revalidates only the row each later admission
+  is about to claim, rather than repeating the full pass for every slot. With
+  N pending rows and K free slots, that is N + K - 1 row validations instead
+  of about K·N. A row that fails its own revalidation is withheld and the next
+  candidate is admitted.
 - The completion analyzer no longer retains the normal-mode matrix and
   geometry while it scans for the final frequency section; verdicts are
   unchanged and reports, the SI block and `machine.json` keep the full detail.
