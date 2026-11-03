@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES, read_stable_regular_file
 from orca_auto.core.queue.generation import (
     is_visible_generation_name,
     new_visible_generation_name,
@@ -316,8 +317,13 @@ def maybe_rebind_recovery_generation(
     recorded_request = metadata.get("resource_request")
     with acquire_run_lock(reaction_dir):
         recover_crashed_state(reaction_dir)
-        # Plain read: build requires the crashed stable-read digest, which bounds size and tearing.
-        source_payload = Path(source_selected).read_bytes()
+        # The same bounded stable read submission used: it refuses a FIFO,
+        # symlink or oversized source before blocking or buffering it, and
+        # the builder still requires these bytes to match the crashed
+        # generation's recorded source digest.
+        source_payload = read_stable_regular_file(
+            source_selected, max_bytes=MAX_INPUT_SNAPSHOT_BYTES
+        )
         prepared = prepare_submission_resource_request(
             Path(source_selected),
             source_payload,

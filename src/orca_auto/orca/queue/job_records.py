@@ -3,7 +3,8 @@
 Submission, publication repair and the worker's attach project a queued or
 running record from the captured metadata of the durable row; projection never
 reopens a mutable source input to reconstruct submission-time facts. A terminal
-record is projected from the generation's own terminal ``job_state.json``.
+record is projected from the generation's own terminal ``job_state.json``
+through the rebuild's decoded state-to-index conversion.
 """
 
 from __future__ import annotations
@@ -15,8 +16,13 @@ from orca_auto.core.config.schema import positive_int_mapping
 from orca_auto.core.statuses import TERMINAL_STATUSES, normalize_status
 
 from ..config import AppConfig
-from ..job_locations import record_from_artifacts, resource_dict, upsert_job_record
-from ..state_reading import load_state, payload_matches_expected_job_id
+from ..job_locations import (
+    read_state_index_source,
+    record_from_artifacts,
+    resource_dict,
+    upsert_job_record,
+)
+from ..state_reading import payload_matches_expected_job_id
 from .entries import queue_entry_metadata, queue_entry_reaction_dir
 
 
@@ -64,12 +70,14 @@ def upsert_terminal_job_record(
 ) -> bool:
     job_dir = Path(reaction_dir).expanduser().resolve()
     expected = str(expected_job_id or fallback_job_id or "").strip()
-    state = load_state(job_dir)
+    # The same decoded state-to-index conversion as a fresh rebuild, so an
+    # upsert with no existing row restores the same request the rebuild does.
+    state = read_state_index_source(job_dir)
     if expected and not payload_matches_expected_job_id(state, expected):
         state = None
     record = record_from_artifacts(
         job_dir=job_dir,
-        state=dict(state) if state is not None else None,
+        state=state,
         report=None,
         fallback_job_id=fallback_job_id or "",
     )
