@@ -134,7 +134,7 @@ def test_sanitize_key(raw: str, expected: str) -> None:
 def test_uses_parent_name(tmp_path: Path) -> None:
     directory = tmp_path / "Int1_DMSO"
     directory.mkdir()
-    assert _directory_name_fallback(_inp(directory, "! Opt\n")) == "Int1_DMSO"
+    assert _directory_name_fallback(_inp(directory, "! Opt\n").parent) == "Int1_DMSO"
 
 
 def test_tag_takes_priority(tmp_path: Path) -> None:
