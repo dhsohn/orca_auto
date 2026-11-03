@@ -51,7 +51,11 @@ def now_utc_iso() -> str:
 
 
 def _existing_generation_payload(generation_dir: Path) -> dict[str, Any] | None:
-    if not _state_reading.state_path(generation_dir).exists():
+    # Only an absent path is "no state yet". lstat does not follow a link, so
+    # a dangling job_state.json symlink exists here and is refused below.
+    try:
+        _state_reading.state_path(generation_dir).lstat()
+    except FileNotFoundError:
         return None
     loaded = _state_reading.load_generation_state(generation_dir)
     if loaded is None:
