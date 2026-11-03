@@ -1200,3 +1200,53 @@ def test_the_molecule_formula_is_read_once_from_the_captured_geometry(
     execution_dir = Path(entry.metadata["execution_snapshot"]["execution_dir"]).resolve()
     assert entry.metadata["molecule_key"] == "H2"
     assert [path.resolve().parent for path in reads] == [execution_dir]
+
+
+@pytest.mark.parametrize(
+    ("inp", "expected"),
+    [
+        # A tag, a readable formula, and coordinates the formula reader cannot
+        # parse (the key falls back to the job directory's name).
+        ("# TAG: my_dimer\n! SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", "my_dimer"),
+        ("! SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", "H2"),
+        ("! SP\n* xyz 0 1\nH .0 .0 .0\nH .0 .0 .74\n*\n", "rxn"),
+    ],
+)
+def test_the_molecule_key_is_one_value_from_submission_to_settlement_and_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inp: str, expected: str
+) -> None:
+    from orca_auto.core.indexing.store import JOB_LOCATION_INDEX_FILE_NAME
+    from orca_auto.orca.job_locations import (
+        list_job_location_records,
+        rebuild_job_location_records,
+    )
+    from orca_auto.orca.queue.job_records import upsert_terminal_job_record
+    from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
+
+    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    (reaction_dir / "rxn.inp").write_text(inp, encoding="utf-8")
+    cfg = load_config(args.config)
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    assert result.status == "submitted", result.stderr
+    [entry] = queue_adapter.list_queue(tmp_path)
+    [submitted] = list_job_location_records(tmp_path)
+
+    record_cancelled_run_state(
+        reaction_dir,
+        fallback_job_id=entry.task_id,
+        selected_inp=entry.metadata["selected_inp"],
+    )
+    assert upsert_terminal_job_record(
+        cfg, str(reaction_dir), fallback_job_id=entry.task_id, expected_job_id=entry.task_id
+    )
+    [settled] = list_job_location_records(tmp_path)
+    (tmp_path / JOB_LOCATION_INDEX_FILE_NAME).unlink()
+    rebuild_job_location_records(tmp_path, apply=True)
+    [rebuilt] = list_job_location_records(tmp_path)
+
+    assert entry.metadata["molecule_key"] == expected
+    assert (submitted.molecule_key, settled.molecule_key, rebuilt.molecule_key) == (
+        expected,
+        expected,
+        expected,
+    )

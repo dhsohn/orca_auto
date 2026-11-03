@@ -35,15 +35,16 @@ def molecule_key_from_text(
     inp_path: Path,
     *,
     parsed: ParsedInput | None = None,
-    fallback_inp_path: Path | None = None,
+    fallback_dir: Path | None = None,
 ) -> MoleculeKeyResolution:
     """The key of an input whose text is ``text``; ``inp_path`` places its xyzfile and folder.
 
     ``parsed`` is the parse of ``text.splitlines()`` when the caller already has
     it; the geometry is then read from that parse instead of tokenizing again.
-    ``fallback_inp_path`` names the job whose directory gives the fallback key
-    (default ``inp_path``): a bound copy in a generation still falls back to
-    the submitted job directory's name.
+    ``fallback_dir`` is the job directory whose name is the fallback key
+    (default: ``inp_path``'s directory). A bound copy in a generation passes
+    the submitted job directory, so the fallback never becomes the
+    generation's name.
     """
     tag = _find_user_tag(text)
     if tag is not None:
@@ -54,7 +55,7 @@ def molecule_key_from_text(
         return MoleculeKeyResolution(key=formula, source="formula")
 
     return MoleculeKeyResolution(
-        key=_directory_name_fallback(inp_path if fallback_inp_path is None else fallback_inp_path),
+        key=_directory_name_fallback(inp_path.parent if fallback_dir is None else fallback_dir),
         source="directory_fallback",
     )
 
@@ -144,7 +145,7 @@ def _sanitize_key(raw: str) -> str:
     return safe if safe else "unknown"
 
 
-def _directory_name_fallback(inp_path: Path) -> str:
-    name = inp_path.parent.name
+def _directory_name_fallback(job_dir: Path) -> str:
+    name = job_dir.name
     result = _sanitize_key(name)
     return result if result else "unknown"

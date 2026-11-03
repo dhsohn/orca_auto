@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- A job whose molecule key falls back to its directory name (no `# TAG`
+  and no readable formula) now keeps that key through terminal settlement
+  and index rebuild. Both re-derived the key from the bound input inside the
+  execution generation and fell back to the generation directory's name
+  (`20261103-082728-e5321a86`) instead of the job directory's (`rxn`), even
+  when the index was rebuilt from scratch.
 - Terminal settlement (a failed or cancelled run that never wrote its own
   outcome) now refuses a `job_state.json` that reads as corrupt, a broken
   symlink included. It reduced the read to "no state", checked

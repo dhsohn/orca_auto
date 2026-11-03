@@ -225,9 +225,16 @@ def record_from_artifacts(
     supplied_molecule_key = first_artifact_value(sources, "molecule_key") or (
         existing.molecule_key if existing else ""
     )
+    original_run_dir = (
+        first_artifact_text(sources, "original_run_dir")
+        or normalize_text(existing.original_run_dir if existing else "")
+        or str(job_dir)
+    )
+    # The directory fallback is the job's own run directory, as submission
+    # recorded it, wherever the job lives now.
     derived_job_type, derived_molecule_key = resolve_job_metadata(
         selected_inp,
-        job_dir,
+        Path(original_run_dir),
         need_job_type=not supplied_job_type,
         need_molecule_key=not supplied_molecule_key,
     )
@@ -238,11 +245,6 @@ def record_from_artifacts(
     molecule_key = normalize_text(supplied_molecule_key or derived_molecule_key)
     resource_request = _first_resources(sources, "resource_request", existing)
     resource_actual = _first_resources(sources, "resource_actual", existing)
-    original_run_dir = (
-        first_artifact_text(sources, "original_run_dir")
-        or normalize_text(existing.original_run_dir if existing else "")
-        or str(job_dir)
-    )
     return build_job_location_record(
         existing=existing,
         job_id=job_id,

@@ -75,7 +75,10 @@ def resolve_job_metadata(
 
     Only the requested fields are derived, so a caller whose artifacts
     already carry a field never opens the input for it. When both are
-    needed, the input is read once and one parse serves both.
+    needed, the input is read once and one parse serves both. The molecule
+    key's directory fallback is ``job_dir``'s name, the job's own directory,
+    never the directory of a bound copy in a generation, so it matches the
+    key submission recorded.
     """
     if not (need_job_type or need_molecule_key):
         return "", ""
@@ -100,7 +103,9 @@ def resolve_job_metadata(
     parsed = parse_input(text.splitlines())
     job_type = job_type_from_routes(list(parsed.route_lines)) if need_job_type else ""
     molecule_key = (
-        molecule_key_from_text(text, resolved, parsed=parsed).key if need_molecule_key else ""
+        molecule_key_from_text(text, resolved, parsed=parsed, fallback_dir=job_dir).key
+        if need_molecule_key
+        else ""
     )
     return job_type, molecule_key
 

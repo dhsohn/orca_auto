@@ -346,7 +346,7 @@ def _bound_molecule_key(inputs: _PreparedSubmissionInputs, execution_snapshot: A
     return molecule_key_from_text(
         payload.decode("utf-8", errors="ignore"),
         bound,
-        fallback_inp_path=inputs.selected_inp,
+        fallback_dir=inputs.selected_inp.parent,
     ).key
 
 
