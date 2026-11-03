@@ -2048,3 +2048,55 @@ def test_rebind_rejects_a_changed_regular_source_by_digest(tmp_path: Path) -> No
         )
     (row,) = list_queue(queue_root)
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
+
+
+def _cfg_with_defaults(
+    queue_root: Path, executable: Path, *, cores: int, memory_gb: int
+) -> AppConfig:
+    return AppConfig(
+        runtime=OrcaRuntimeConfig(allowed_root=str(queue_root)),
+        resources=CommonResourceConfig(max_cores_per_task=cores, max_memory_gb_per_task=memory_gb),
+        paths=PathsConfig(orca_executable=str(executable)),
+    )
+
+
+def test_rebind_keeps_the_submitted_request_after_the_default_changes(tmp_path: Path) -> None:
+    # The source has no %pal/%maxcore, so submission resolved its request from
+    # the defaults then. A later default change applies to new submissions
+    # only: recovery refills the missing directives from the submitted request.
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    source = Path(running.metadata["source_selected_inp"])
+    source_bytes = source.read_bytes()
+    assert b"%pal" not in source_bytes and b"%maxcore" not in source_bytes
+    cfg = _cfg_with_defaults(queue_root, executable, cores=4, memory_gb=8)
+
+    result = _rebind.maybe_rebind_recovery_generation(running, queue_root=queue_root, cfg=cfg)
+
+    replacement = result.metadata["execution_snapshot"]
+    assert replacement["generation_name"] != snapshot["generation_name"]
+    assert replacement["resource_request"] == {"max_cores": 1, "max_memory_gb": 1}
+    assert result.metadata["resource_request"] == {"max_cores": 1, "max_memory_gb": 1}
+    _verify(Path(result.metadata["reaction_dir"]), replacement)
+    assert source.read_bytes() == source_bytes
+    assert (old_generation / "h2.xyz").read_text(encoding="utf-8") == _CRASHED_XYZ
+
+
+def test_rebind_still_rejects_a_source_directive_that_contradicts_the_request(
+    tmp_path: Path,
+) -> None:
+    # An explicit directive still wins over the refilled default, so a source
+    # that now asks for other resources diverges from the submitted request.
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    _crash_generation(snapshot)
+    source = Path(running.metadata["source_selected_inp"])
+    source.write_text(
+        "! HF STO-3G Opt\n%pal nprocs 2 end\n* xyzfile 0 1 h2.xyz\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="diverged"):
+        _rebind.maybe_rebind_recovery_generation(
+            running, queue_root=queue_root, cfg=_worker_cfg(queue_root, executable)
+        )
+    (row,) = list_queue(queue_root)
+    assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
