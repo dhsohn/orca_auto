@@ -18,7 +18,7 @@ from typing import Any
 
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 
-from ..state_reading import load_state, state_path, state_payload_job_id
+from ..state_reading import RunStateRead, read_run_state, state_payload_job_id
 from ..statuses import TERMINAL_RUN_STATUS_VALUES
 from ..types import RunState
 from .entries import (
@@ -91,16 +91,26 @@ def state_generation_fingerprint(
     )
 
 
+def run_state_read_fingerprint(read: RunStateRead) -> StateGenerationFingerprint:
+    """The fingerprint of one classified read of ``job_state.json``.
+
+    Only ``missing`` is an absent state. ``corrupt`` (a broken symlink, a FIFO,
+    unreadable JSON) and ``unsupported`` are present but unreadable, so no
+    writer takes them for a directory without a state.
+    """
+    if read.kind == "missing":
+        return StateGenerationFingerprint(present=False, readable=True)
+    return state_generation_fingerprint(read.state, present=True)
+
+
 def load_state_generation_fingerprint(
     reaction_dir: Path,
 ) -> StateGenerationFingerprint:
-    state_file = state_path(reaction_dir)
-    present = state_file.exists()
     try:
-        state = load_state(reaction_dir)
+        read = read_run_state(reaction_dir)
     except Exception:  # noqa: BLE001 - unreadability is part of the fingerprint
         return StateGenerationFingerprint(present=True, readable=False)
-    return state_generation_fingerprint(state, present=present or state_file.exists())
+    return run_state_read_fingerprint(read)
 
 
 class TerminalGenerationVerdict(str, Enum):

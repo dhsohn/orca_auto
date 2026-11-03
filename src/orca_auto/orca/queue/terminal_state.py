@@ -15,13 +15,13 @@ from ..attempt.reporting import build_final_result, last_out_path_from_state
 from ..report.publication import write_report_files
 from ..run_lock import acquire_run_lock
 from ..state import finalize_state, new_state
-from ..state_reading import load_state, state_path
+from ..state_reading import read_run_state, state_path
 from ..statuses import TERMINAL_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
 from ..types import RunState
 from .terminal_marker import (
     StateGenerationFingerprint,
     TerminalGenerationVerdict,
-    state_generation_fingerprint,
+    run_state_read_fingerprint,
     terminal_generation_verdict,
     terminal_status_from_run_state,
 )
@@ -37,9 +37,11 @@ def _load_state_for_terminal_generation(
 ) -> RunState | None:
     """The state to finalize, ``None`` to synthesize a fresh one, or a fail-closed error."""
     state_file = state_path(job_dir)
-    state_existed = state_file.exists()
-    state = load_state(job_dir)
-    current = state_generation_fingerprint(state, present=state_existed or state_file.exists())
+    # The read's own classification decides presence: a corrupt state (a
+    # broken symlink included) is present and unreadable, never absent.
+    read = read_run_state(job_dir)
+    state = read.state
+    current = run_state_read_fingerprint(read)
     observed_run_id = (
         observed_state.run_id
         if observed_state is not None

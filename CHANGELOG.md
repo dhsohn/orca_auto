@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Terminal settlement (a failed or cancelled run that never wrote its own
+  outcome) now refuses a `job_state.json` that reads as corrupt, a broken
+  symlink included. It reduced the read to "no state", checked
+  `Path.exists()` (false for a dangling link) and replaced the path with a
+  fresh terminal state. Only a state that is actually missing is still
+  synthesized.
 - `queue list`, `index rebuild` and every run-state read no longer hang
   when a `job_state.json` or `machine.json` is a FIFO. Both are now opened
   without blocking, as regular files only, within the artifact size limit,
