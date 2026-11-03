@@ -10,7 +10,9 @@ messages the recording notification channel received.
 
 from __future__ import annotations
 
+import functools
 import json
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import replace
@@ -1764,3 +1766,45 @@ def test_retired_generation_is_frozen_across_terminal_replay_and_notification(
         assert load_report_json_with_output_receipt(generation) is None
     else:
         assert not machine_path.exists()
+
+
+@pytest.mark.parametrize("writer", ["failed", "cancelled"])
+def test_terminal_writers_keep_a_broken_state_symlink_and_refuse(
+    tmp_path: Path, writer: str
+) -> None:
+    # A dangling job_state.json symlink reads as corrupt, not missing: the
+    # writer cannot tell which generation it named, so it refuses rather
+    # than replace the path with a fresh terminal state.
+    state = state_path(tmp_path)
+    state.symlink_to(tmp_path / "gone.json")
+    record = (
+        _record_cancelled_run_state
+        if writer == "cancelled"
+        else functools.partial(_record_failed_run_state, reason="worker_exited")
+    )
+
+    with pytest.raises(RuntimeError, match="unreadable"):
+        record(tmp_path, fallback_job_id="task-1", selected_inp=str(tmp_path / "job.inp"))
+
+    assert state.is_symlink()
+    assert os.readlink(state) == str(tmp_path / "gone.json")
+    assert load_state_generation_fingerprint(tmp_path) == StateGenerationFingerprint(
+        present=True, readable=False
+    )
+
+
+@pytest.mark.parametrize("writer", ["failed", "cancelled"])
+def test_terminal_writers_still_synthesize_a_missing_state(tmp_path: Path, writer: str) -> None:
+    record = (
+        _record_cancelled_run_state
+        if writer == "cancelled"
+        else functools.partial(_record_failed_run_state, reason="worker_exited")
+    )
+
+    run_id, terminal_status = record(
+        tmp_path, fallback_job_id="task-1", selected_inp=str(tmp_path / "job.inp")
+    )
+
+    assert run_id
+    assert terminal_status == writer
+    assert load_state_generation_fingerprint(tmp_path).present is True
