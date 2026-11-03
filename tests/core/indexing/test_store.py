@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -19,6 +20,7 @@ from orca_auto.core.indexing.store import (
     prune_job_locations,
     upsert_job_location,
 )
+from orca_auto.core.utils import json_artifacts
 
 
 def _record(
@@ -91,16 +93,14 @@ def test_list_job_locations_preserves_read_error_behavior(
     path.write_bytes(original_bytes)
     original_stat = path.stat()
     error = FileNotFoundError("index disappeared") if disappeared else OSError("read failed")
-    original_read_text = Path.read_text
+    real_read = json_artifacts.read_stable_regular_file_at
 
-    def failing_read_text(
-        target: Path, encoding: str | None = None, errors: str | None = None
-    ) -> str:
-        if target == path:
+    def failing_read(target: Any, **kwargs: Any) -> Any:
+        if Path(target) == path:
             raise error
-        return original_read_text(target, encoding=encoding, errors=errors)
+        return real_read(target, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", failing_read_text)
+    monkeypatch.setattr(json_artifacts, "read_stable_regular_file_at", failing_read)
 
     if disappeared:
         assert list_job_locations(tmp_path) == []
@@ -119,8 +119,10 @@ def test_list_job_locations_preserves_invalid_utf8_error_and_bytes(tmp_path: Pat
     path.write_bytes(original_bytes)
     original_stat = path.stat()
 
-    with pytest.raises(UnicodeDecodeError):
+    # A non-UTF-8 index is a corrupt index, like any other unparseable one.
+    with pytest.raises(JobLocationIndexCorruptError) as failure:
         list_job_locations(tmp_path)
+    assert isinstance(failure.value.__cause__, UnicodeDecodeError)
 
     assert path.read_bytes() == original_bytes
     assert path.stat().st_mtime_ns == original_stat.st_mtime_ns

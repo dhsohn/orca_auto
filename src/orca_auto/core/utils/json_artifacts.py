@@ -27,6 +27,7 @@ class JsonArtifactRead:
     value: Any = None
     reason: str = ""
     status: os.stat_result | None = None  # the file's fstat after the read, when read
+    error: BaseException | None = None  # the exception behind an invalid read
 
 
 def read_json_artifact(
@@ -39,10 +40,12 @@ def read_json_artifact(
         return JsonArtifactRead("missing")
     except StableFsError as exc:
         # not_regular (a FIFO, a directory), too_large, changed while read.
-        return JsonArtifactRead("invalid", reason=exc.reason)
+        return JsonArtifactRead("invalid", reason=exc.reason, error=exc)
     except OSError as exc:
         # A final symlink (ELOOP), a permission error, an I/O error.
-        return JsonArtifactRead("invalid", reason=f"unreadable ({exc.__class__.__name__})")
+        return JsonArtifactRead(
+            "invalid", reason=f"unreadable ({exc.__class__.__name__})", error=exc
+        )
     try:
         value = json.loads(payload.decode("utf-8"))
     except ValueError as exc:
@@ -50,9 +53,52 @@ def read_json_artifact(
         # the parser's own refusal of an integer over the int-to-str digit
         # limit: each is a file that exists but cannot be used.
         return JsonArtifactRead(
-            "invalid", reason=f"unreadable JSON ({exc.__class__.__name__})", status=status
+            "invalid",
+            reason=f"unreadable JSON ({exc.__class__.__name__})",
+            status=status,
+            error=exc,
         )
     return JsonArtifactRead("valid", value=value, status=status)
 
 
-__all__ = ["JsonArtifactRead", "read_json_artifact"]
+# The byte limit of one durable JSON store (queue.json, admission_slots.json,
+# job_locations.json). These hold one row per job, far above any run artifact.
+MAX_STORE_JSON_BYTES = 256 * 1024 * 1024
+
+
+def load_json_list_file(
+    path: Path,
+    *,
+    corrupt_error: type[Exception],
+    description: str,
+    max_bytes: int = MAX_STORE_JSON_BYTES,
+) -> list[Any]:
+    """The JSON list at ``path``; ``[]`` only when the file is missing.
+
+    Read through :func:`read_json_artifact`, so a FIFO is refused without
+    blocking (a caller holding its store lock releases it at once), and a
+    dangling symlink, a non-regular file or a file changed while read is
+    ``corrupt_error``, never an empty store. Each store keeps its own row
+    checks and error type.
+    """
+    read = read_json_artifact(path, max_bytes=max_bytes)
+    if read.kind == "missing":
+        return []
+    if read.kind == "invalid":
+        if read.status is not None:
+            # The bytes were read; they are not JSON.
+            raise corrupt_error(f"{description} is not valid JSON: {path}") from read.error
+        # Not a regular file (a FIFO, a dangling symlink), changed while read,
+        # too large, or an I/O error: the store exists but cannot be used.
+        raise corrupt_error(f"{description} cannot be read: {path}") from read.error
+    if not isinstance(read.value, list):
+        raise corrupt_error(f"{description} must contain a JSON list: {path}")
+    return read.value
+
+
+__all__ = [
+    "MAX_STORE_JSON_BYTES",
+    "JsonArtifactRead",
+    "load_json_list_file",
+    "read_json_artifact",
+]

@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from ..utils.persistence import atomic_write_json, load_json_list_file, resolve_root_path
+from ..utils.json_artifacts import load_json_list_file
+from ..utils.persistence import atomic_write_json, resolve_root_path
 from .records import AdmissionSlot, slot_from_dict, slot_to_dict
 
 ADMISSION_DIR_NAME = ".admission"

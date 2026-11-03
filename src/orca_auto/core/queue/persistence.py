@@ -7,9 +7,9 @@ from typing import Any
 
 from orca_auto.core.artifacts import QUEUE_FILE
 
+from ..utils.json_artifacts import load_json_list_file
 from ..utils.persistence import (
     atomic_write_json,
-    load_json_list_file,
     resolve_root_path,
 )
 from .priority import normalize_queue_priority
