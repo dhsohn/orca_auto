@@ -219,18 +219,23 @@ def record_from_artifacts(
     if not job_id:
         return None
 
-    derived_job_type, derived_molecule_key = resolve_job_metadata(selected_inp, job_dir)
+    # Each field takes the artifacts' value first; only a missing one is
+    # derived from the selected input, which is otherwise never opened.
+    supplied_job_type = first_artifact_value(sources, "job_type")
+    supplied_molecule_key = first_artifact_value(sources, "molecule_key") or (
+        existing.molecule_key if existing else ""
+    )
+    derived_job_type, derived_molecule_key = resolve_job_metadata(
+        selected_inp,
+        job_dir,
+        need_job_type=not supplied_job_type,
+        need_molecule_key=not supplied_molecule_key,
+    )
     job_type = (
-        normalize_text(
-            first_artifact_value(sources, "job_type") or derived_job_type or default_job_type
-        )
+        normalize_text(supplied_job_type or derived_job_type or default_job_type)
         or default_job_type
     )
-    molecule_key = normalize_text(
-        first_artifact_value(sources, "molecule_key")
-        or (existing.molecule_key if existing else "")
-        or derived_molecule_key
-    )
+    molecule_key = normalize_text(supplied_molecule_key or derived_molecule_key)
     resource_request = _first_resources(sources, "resource_request", existing)
     resource_actual = _first_resources(sources, "resource_actual", existing)
     original_run_dir = (

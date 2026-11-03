@@ -150,6 +150,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- `index rebuild` derives a row's job type or molecule key from the selected
+  input only when the artifacts do not already carry it. When both are
+  missing it reads the input once and shares one parse between them. Before,
+  it read the input twice and the geometry once for every row, even when the
+  report supplied both values. The resulting rows are unchanged.
 - Submission now reads the selected input through one parse for its job
   type, Detail, `* xyzfile` geometry path, molecule key and resource request.
   For a 1,005-line input the stage tokenized lines 5,025 times and now 2,010
