@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `queue list`, `index rebuild` and every run-state read no longer hang
+  when a `job_state.json` or `machine.json` is a FIFO. Both are now opened
+  without blocking, as regular files only, within the artifact size limit,
+  and only if unchanged while read. A FIFO, a directory, a symlink or an
+  oversized file reads as a corrupt state (or an ignored report), and the
+  other directories are listed and indexed as before.
 - `index rebuild` now sets aside a report whose index fields cannot be used
   (an input path with a NUL byte or an unknown `~user`, a non-finite or
   non-integer resource value, a non-text identifier), as it already did for

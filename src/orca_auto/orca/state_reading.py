@@ -16,7 +16,7 @@ from orca_auto.core.artifacts import (
 from orca_auto.core.confined_io import read_confined_text
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.generation_owner import require_direct_generation_owner
-from orca_auto.core.utils.persistence import JSON_LOAD_EXCEPTIONS
+from orca_auto.core.utils.json_artifacts import read_json_artifact
 
 from .generation_validation import (
     require_bound_generation_directory,
@@ -314,15 +314,14 @@ def decode_run_state(payload: dict[str, Any]) -> DecodedRunState | None:
 
 def read_run_state(reaction_dir: Path) -> RunStateRead:
     """Read ``reaction_dir``'s ``job_state.json`` and classify the outcome."""
-    path = state_path(reaction_dir)
-    if not path.exists():
+    read = read_json_artifact(state_path(reaction_dir), max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES)
+    if read.kind == "missing":
         return RunStateRead("missing")
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except JSON_LOAD_EXCEPTIONS as exc:
-        if not path.exists():
-            return RunStateRead("missing")
-        return RunStateRead("corrupt", reason=f"unreadable JSON ({exc.__class__.__name__})")
+    if read.kind == "invalid":
+        # Not a regular file (a FIFO is refused without blocking), too large,
+        # changed while read, or not JSON: present but unusable.
+        return RunStateRead("corrupt", reason=read.reason)
+    raw = read.value
     if not isinstance(raw, dict):
         return RunStateRead("corrupt", reason="not a JSON object")
     try:

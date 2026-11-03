@@ -8,13 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import RUN_STATE_FILE
+from orca_auto.core.artifacts import MAX_RUN_ARTIFACT_JSON_BYTES, RUN_STATE_FILE
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
     should_exclude_from_production_runs_scan,
 )
-from orca_auto.core.utils.persistence import load_json_mapping_file
+from orca_auto.core.utils.json_artifacts import read_json_artifact
 from orca_auto.core.utils.stable_fs import StableFsError, open_pinned_directory
 
 from .job_locations import list_job_location_records, resolve_record_job_dir
@@ -89,27 +89,24 @@ def state_publication_identity(
 def load_pinned_state(
     directory_fd: int,
 ) -> tuple[dict[str, Any], StateFileIdentity] | None:
-    flags = os.O_RDONLY | os.O_NOFOLLOW
-    try:
-        state_fd = os.open(RUN_STATE_FILE, flags, dir_fd=directory_fd)
-    except OSError:
+    # The stable reader refuses a FIFO without blocking, a non-regular file
+    # and an oversized one, and accepts the bytes only if the file did not
+    # change while read.
+    read = read_json_artifact(
+        RUN_STATE_FILE, dir_fd=directory_fd, max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES
+    )
+    if read.kind != "valid" or not isinstance(read.value, dict) or read.status is None:
         return None
-
+    opened_identity = _state_file_identity(read.status)
     try:
-        opened_identity = _state_file_identity(os.fstat(state_fd))
-        payload = load_json_mapping_file(Path("/proc/self/fd") / str(state_fd))
-        if payload is None:
-            return None
         current_identity = _state_file_identity(
             os.stat(RUN_STATE_FILE, dir_fd=directory_fd, follow_symlinks=False)
         )
-        if current_identity != opened_identity:
-            return None
-        return payload, opened_identity
     except OSError:
         return None
-    finally:
-        os.close(state_fd)
+    if current_identity != opened_identity:
+        return None
+    return read.value, opened_identity
 
 
 def _open_snapshot_directory(
