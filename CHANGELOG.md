@@ -10,6 +10,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- An unquoted `* xyzfile` geometry file named like a file directive
+  (`moinp`, `hessfile`, `gshess`, `inhessname`, ...) is now accepted as the
+  geometry file name. The reference scanner read the consumed name again as
+  a directive and refused the submission, while the quoted name was accepted.
 - `index rebuild` no longer stops when one directory's `machine.json` has a
   malformed `schema_version` (a non-numeric string, an object, a boolean).
   That report is ignored with a warning and the directory is indexed from its

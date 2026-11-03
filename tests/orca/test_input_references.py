@@ -63,3 +63,18 @@ def test_md_filename_value_may_follow_an_equals_sign() -> None:
         scan_orca_file_references(
             ["! MD", "%md", '  Dump Filename = "../traj.xyz"', "end", *_GEOMETRY]
         )
+
+
+@pytest.mark.parametrize(
+    "name", ["moinp", "hessfile", "inhessname", "gshess", "pointcharges", "product"]
+)
+def test_a_geometry_file_named_like_a_directive_is_only_a_file_name(name: str) -> None:
+    # The xyzfile token is consumed as the geometry file name; it is never
+    # read again as a directive that names a further file. Quoting the name
+    # does not change the result.
+    for value in (name, f'"{name}"'):
+        references = scan_orca_file_references(["! HF", f"* xyzfile 0 1 {value}"])
+
+        assert [(reference.kind, reference.value) for reference in references] == [
+            ("geometry", name)
+        ], value
