@@ -10,6 +10,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The queue row's and index's `molecule_key` now describe the geometry the
+  execution generation captured. It was computed from the external
+  `* xyzfile` geometry as read before binding, so a geometry file replaced
+  in between was recorded under the old formula (`H2`) while the job ran
+  the new one (`He`). The key is now read from the bound input, checked
+  against its snapshot identity. A `# TAG` keeps priority, and the
+  directory fallback is still the submitted job directory's name.
 - An unquoted `* xyzfile` geometry file named like a file directive
   (`moinp`, `hessfile`, `gshess`, `inhessname`, ...) is now accepted as the
   geometry file name. The reference scanner read the consumed name again as
