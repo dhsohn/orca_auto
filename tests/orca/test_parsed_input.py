@@ -145,7 +145,7 @@ def test_submission_reads_its_input_version_through_one_parse(
         make_app_cfg(tmp_path), SimpleNamespace(priority=None, force=False), selected
     )
 
-    assert prepared.molecule_key == "H200"
+    assert prepared.molecule.key == "H200"
     assert prepared.prepared_input.resource_request == {"max_cores": 2, "max_memory_gb": 1}
     assert calls[0] == 2 * len(text.splitlines())
 

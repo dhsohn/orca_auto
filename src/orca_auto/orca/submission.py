@@ -43,6 +43,7 @@ from orca_auto.orca.run_dir_guard import (
 
 from .config import AppConfig
 from .execution_binding import (
+    bound_selected_input_payload,
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
     same_directory_identity,
@@ -50,7 +51,7 @@ from .execution_binding import (
 from .input_artifacts import OrcaSelectedInputArtifacts, xyzfile_input_path
 from .input_blocks import parse_input
 from .job_type import job_type_from_routes
-from .molecule_key import molecule_key_from_text
+from .molecule_key import MoleculeKeyResolution, molecule_key_from_text
 from .queue import adapter as queue_adapter
 from .queue import entries as queue_entries
 from .queue.adapter import DuplicateEntryError
@@ -245,7 +246,9 @@ class _PreparedSubmissionInputs:
     artifacts: OrcaSelectedInputArtifacts
     job_type: str
     detail_kind: str
-    molecule_key: str
+    # Read from the submitted input; the queue row takes the key of the bound
+    # generation (``_bound_molecule_key``) unless a ``# TAG`` set it.
+    molecule: MoleculeKeyResolution
     prepared_input: PreparedSubmissionResourceInput
     priority: int
     force: bool
@@ -274,7 +277,7 @@ def _prepare_submission_inputs(
     )
     job_type = job_type_from_routes(list(parsed.route_lines))
     detail_kind = queue_detail_kind(inp_path, parsed)
-    molecule_key = molecule_key_from_text(text, inp_path, parsed=parsed).key
+    molecule = molecule_key_from_text(text, inp_path, parsed=parsed)
     # The resource step decodes strictly; it reuses this parse only when its
     # lines are identical, and re-parses each version it rewrites.
     prepared_input = prepare_submission_resource_request(
@@ -296,7 +299,7 @@ def _prepare_submission_inputs(
         artifacts=artifacts,
         job_type=job_type,
         detail_kind=detail_kind,
-        molecule_key=molecule_key,
+        molecule=molecule,
         prepared_input=prepared_input,
         priority=priority,
         force=force,
@@ -323,6 +326,26 @@ def _build_execution_snapshot(
         normalized_selected_payload=inputs.prepared_input.normalized_payload,
         source_selected_payload=inputs.source_payload,
     )
+
+
+def _bound_molecule_key(inputs: _PreparedSubmissionInputs, execution_snapshot: Any) -> str:
+    """The molecule key of the geometry the generation captured.
+
+    The submitted input was read before binding, and an external ``xyzfile``
+    can change before the binding captures it. The formula is therefore read
+    from the bound input, checked against its snapshot identity, whose
+    geometry reference names the private copy of the captured bytes. A
+    ``# TAG`` keeps priority, and the directory fallback stays the submitted
+    job directory's name.
+    """
+    if inputs.molecule.source == "tag":
+        return inputs.molecule.key
+    bound, payload = bound_selected_input_payload(execution_snapshot)
+    return molecule_key_from_text(
+        payload.decode("utf-8", errors="ignore"),
+        bound,
+        fallback_inp_path=inputs.selected_inp,
+    ).key
 
 
 def _cleanup_submission_snapshot(reaction_dir: Path, execution_snapshot: Any) -> None:
@@ -359,11 +382,12 @@ def create_queued_submission(
             reaction_dir=reaction_dir,
             artifacts=inputs.artifacts,
             job_type=inputs.job_type,
-            molecule_key=inputs.molecule_key,
+            molecule_key=inputs.molecule.key,
             resource_request=inputs.prepared_input.resource_request,
             execution_snapshot=execution_snapshot,
             detail_kind=inputs.detail_kind,
         )
+        queue_metadata["molecule_key"] = _bound_molecule_key(inputs, execution_snapshot)
         task_id = timestamped_token("orca", token_bytes=16)
         transition_snapshot_intent(
             queue_root,

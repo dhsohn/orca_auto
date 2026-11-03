@@ -10,6 +10,29 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The queue row's and index's `molecule_key` now describe the geometry the
+  execution generation captured. It was computed from the external
+  `* xyzfile` geometry as read before binding, so a geometry file replaced
+  in between was recorded under the old formula (`H2`) while the job ran
+  the new one (`He`). The key is now read from the bound input, checked
+  against its snapshot identity. A `# TAG` keeps priority, and the
+  directory fallback is still the submitted job directory's name.
+- An unquoted `* xyzfile` geometry file named like a file directive
+  (`moinp`, `hessfile`, `gshess`, `inhessname`, ...) is now accepted as the
+  geometry file name. The reference scanner read the consumed name again as
+  a directive and refused the submission, while the quoted name was accepted.
+- `index rebuild` no longer stops when one directory's `machine.json` has a
+  malformed `schema_version` (a non-numeric string, an object, a boolean).
+  That report is ignored with a warning and the directory is indexed from its
+  `job_state.json`; every other directory is unaffected.
+- Report publication now removes a stale `job_report.html` or `si_block.md`
+  under the same verified-generation check as it writes one. A job type
+  without those reports used to remove them by path, so a directory that had
+  replaced the generation at the same path lost its files before the
+  publication failed on its next write. A present `machine.json` whose top
+  level is not an object (`[]`, `null`, a scalar) now blocks publication as
+  an invalid observation, as unreadable JSON already did; it was read as "not
+  yet published" and overwritten together with the HTML report and SI block.
 - Worker admission no longer lets a later candidate reuse the fill pass's
   full publication check after the first candidate was refused. When the
   first candidate had changed since that check and its own check fenced or

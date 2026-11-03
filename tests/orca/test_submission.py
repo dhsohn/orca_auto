@@ -1098,3 +1098,79 @@ def test_an_input_edited_during_submission_yields_one_consistent_snapshot(
     assert snapshot["source_inputs"]["selected_source"]["size_bytes"] == len(original)
     assert Path(metadata["selected_inp"]).read_bytes() == original
     assert b"Freq" in selected.read_bytes()
+
+
+def _submit_with_geometry_swapped_before_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, inp: str, before: str, after: str
+) -> dict[str, Any]:
+    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    (reaction_dir / "rxn.inp").write_text(inp, encoding="utf-8")
+    geometry = reaction_dir / "geom.xyz"
+    geometry.write_text(before, encoding="utf-8")
+    real_build = run_inp.build_orca_execution_snapshot
+
+    def swap_then_build(*build_args: Any, **build_kwargs: Any) -> dict[str, Any]:
+        geometry.write_text(after, encoding="utf-8")
+        return real_build(*build_args, **build_kwargs)
+
+    monkeypatch.setattr(run_inp, "build_orca_execution_snapshot", swap_then_build)
+
+    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+
+    assert result.status == "submitted", result.stderr
+    [entry] = queue_adapter.list_queue(tmp_path)
+    return dict(entry.metadata)
+
+
+_H2_XYZ = "2\nH2\nH 0 0 0\nH 0 0 0.74\n"
+_HE_XYZ = "1\nHe\nHe 0 0 0\n"
+
+
+def test_the_molecule_key_describes_the_geometry_the_generation_captured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.orca.job_locations import list_job_location_records
+
+    metadata = _submit_with_geometry_swapped_before_binding(
+        tmp_path,
+        monkeypatch,
+        inp="! SP\n* xyzfile 0 1 geom.xyz\n",
+        before=_H2_XYZ,
+        after=_HE_XYZ,
+    )
+
+    execution_dir = Path(metadata["execution_snapshot"]["execution_dir"])
+    assert (execution_dir / "geom.xyz").read_text(encoding="utf-8") == _HE_XYZ
+    assert metadata["molecule_key"] == "He"
+    [record] = list_job_location_records(tmp_path)
+    assert record.molecule_key == "He"
+
+
+def test_a_tag_keeps_priority_over_the_captured_geometry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metadata = _submit_with_geometry_swapped_before_binding(
+        tmp_path,
+        monkeypatch,
+        inp="# TAG: my_dimer\n! SP\n* xyzfile 0 1 geom.xyz\n",
+        before=_H2_XYZ,
+        after=_HE_XYZ,
+    )
+
+    assert metadata["molecule_key"] == "my_dimer"
+
+
+def test_the_fallback_key_is_the_job_directory_not_the_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A captured geometry without a readable formula falls back to the
+    # submitted job directory's name, never the generation directory's.
+    metadata = _submit_with_geometry_swapped_before_binding(
+        tmp_path,
+        monkeypatch,
+        inp="! SP\n* xyzfile 0 1 geom.xyz\n",
+        before=_H2_XYZ,
+        after="2\ntruncated\nH 0 0 0\n",
+    )
+
+    assert metadata["molecule_key"] == "rxn"

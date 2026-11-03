@@ -20,6 +20,7 @@ from ._recovery import recovery_checkpoint_private_name
 from ._reservation import retire_snapshot_intent_for_row
 from ._snapshot_identity import (
     STALE_RECOVERY_SNAPSHOT_ERROR,
+    bound_selected_input_payload,
     orca_execution_provenance,
     orca_execution_snapshot_generation_dir,
     require_current_snapshot_version,
@@ -33,6 +34,7 @@ __all__ = [
     "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES",
     "ORCA_EXECUTION_SNAPSHOT_VERSION",
     "STALE_RECOVERY_SNAPSHOT_ERROR",
+    "bound_selected_input_payload",
     "build_orca_execution_snapshot",
     "cleanup_unowned_orca_execution_snapshot",
     "orca_execution_provenance",

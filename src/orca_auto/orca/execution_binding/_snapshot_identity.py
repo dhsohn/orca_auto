@@ -210,3 +210,13 @@ def _verified_identity_payload(
     if captured.identity() != dict(identity):
         raise ValueError(f"Queued ORCA {label} snapshot is corrupt")
     return path, captured.payload
+
+
+def bound_selected_input_payload(snapshot: Mapping[str, Any]) -> tuple[Path, bytes]:
+    """The bound selected input of ``snapshot``, read once and checked against its identity."""
+
+    return _verified_identity_payload(
+        snapshot.get("bound_selected_identity"),
+        root=Path(str(snapshot.get("execution_dir") or "")),
+        label="bound selected input",
+    )

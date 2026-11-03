@@ -387,11 +387,17 @@ def _classify_token(
     word = tokens[token_index].value.lower()
     spaced = token_index == 1 and tokens[0].value == "%"
     keyword = f"%{word}" if spaced else word
+    # A token already consumed as a file name (the ``* xyzfile`` geometry, a
+    # MOInp value, another directive's value) is that name, never a directive
+    # of its own: a geometry file named ``moinp`` or ``hessfile`` names no
+    # further file.
+    if token_index in reference_value_indices:
+        return keyword, None
     if keyword in _SIMPLE_FILE_REFERENCE_KEYS and (token_index == 0 or spaced):
         return keyword, "auxiliary"
     if word in _BLOCK_FILE_REFERENCE_KEYS:
         return keyword, "auxiliary"
-    if token_index in neb_keyword_indices and token_index not in reference_value_indices:
+    if token_index in neb_keyword_indices:
         return keyword, "neb_geometry"
     return keyword, None
 
@@ -472,6 +478,9 @@ def scan_orca_file_references(lines: InputSource) -> list[OrcaFileReference]:
                     and _FILE_PATH_VALUE_RE.search(token.value.strip())
                 ):
                     raise ValueError(f"Unsupported ORCA file reference: {line.strip()}")
+                continue
+            if token_index in reference_value_indices:
+                # A consumed file name is checked as a name, not as a directive.
                 continue
             keyword, kind = _classify_token(
                 tokens,

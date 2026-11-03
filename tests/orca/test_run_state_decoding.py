@@ -242,3 +242,25 @@ def test_the_reader_and_the_index_rebuild_name_the_same_job(tmp_path: Path) -> N
     # rebuild; neither names ``legacy-engine-job``.
     assert read_run_state(conflicting).kind == "corrupt"
     assert preview.skipped == (str(conflicting),)
+
+
+@pytest.mark.parametrize(
+    "report",
+    [{"schema_version": "broken"}, {"schema_version": {"major": 1}}, {"schema_version": True}],
+)
+def test_an_unreadable_report_is_set_aside_and_the_rebuild_continues(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, report: dict[str, Any]
+) -> None:
+    from orca_auto.orca.machine_observation import report_json_path
+
+    runs = tmp_path / "runs"
+    write_run_state(runs / "good", status=RunStatus.COMPLETED, job_id="job-good")
+    write_run_state(runs / "bad", status=RunStatus.COMPLETED, job_id="job-bad")
+    report_json_path(runs / "bad").write_text(json.dumps(report), encoding="utf-8")
+
+    preview = rebuild_job_location_records(runs, apply=False)
+
+    # The other directory is unaffected; the bad report's own job is still
+    # indexed from its job_state.json, and the report is named in the log.
+    assert sorted(row.job_id for row in preview.added) == ["job-bad", "job-good"]
+    assert f"Ignoring unreadable ORCA report in {runs / 'bad'}" in caplog.text
