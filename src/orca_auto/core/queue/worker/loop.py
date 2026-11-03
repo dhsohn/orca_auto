@@ -140,23 +140,37 @@ class QueueWorkerLoop:
         (:meth:`_return_reserved`) instead of starting its child, so no job
         starts after the worker was asked to stop; the fill then reports
         ``blocked`` unless an earlier job already started.
+
+        :meth:`_begin_fill_pass` and :meth:`_end_fill_pass` bracket the fill,
+        so work that must run once per pass (not once per slot) can be scoped
+        to it; a direct :meth:`_admit_next` call is outside any pass.
         """
-        started = 0
-        while len(self._running) < self.max_concurrent:
-            if max_new_jobs is not None and started >= max_new_jobs:
-                break
-            if self._shutdown_requested:
-                return "processed" if started else "blocked"
-            status, reserved = self._admit_next()
-            if status != "processed" or reserved is None:
-                return "processed" if started else status
-            if self._shutdown_requested:
-                self._return_reserved(reserved)
-                return "processed" if started else "blocked"
-            if not self._start_reserved(reserved):
-                return "processed"
-            started += 1
-        return "processed" if started else "idle"
+        self._begin_fill_pass()
+        try:
+            started = 0
+            while len(self._running) < self.max_concurrent:
+                if max_new_jobs is not None and started >= max_new_jobs:
+                    break
+                if self._shutdown_requested:
+                    return "processed" if started else "blocked"
+                status, reserved = self._admit_next()
+                if status != "processed" or reserved is None:
+                    return "processed" if started else status
+                if self._shutdown_requested:
+                    self._return_reserved(reserved)
+                    return "processed" if started else "blocked"
+                if not self._start_reserved(reserved):
+                    return "processed"
+                started += 1
+            return "processed" if started else "idle"
+        finally:
+            self._end_fill_pass()
+
+    def _begin_fill_pass(self) -> None:
+        return None
+
+    def _end_fill_pass(self) -> None:
+        return None
 
     def _check_completed_jobs(self, *, retained_completed_ids: set[str] | None = None) -> None:
         completed = [

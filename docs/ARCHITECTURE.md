@@ -219,7 +219,7 @@ row is claimed by id, with the previewed row as `expected_entry`), child start
 and attach, terminal finalization, cancellation, shutdown and orphan
 reconciliation. `_admit_next` spells out one admission in order: withheld
 directories, publication repair, queued notification, capacity, preview, slot
-reservation, claim by id of that same preview (the queue is listed again only when the previewed row was lost meanwhile), and slot release when no row is claimed. Its base `core.queue.worker.loop.QueueWorkerLoop` orders the passes
+reservation, claim by id of that same preview (the queue is listed again only when the previewed row was lost meanwhile), and slot release when no row is claimed. The full publication repair, which validates every pending row, runs on the first admission of a fill pass; later admissions in the same pass revalidate only the row they are about to claim and withhold it when it fails. Its base `core.queue.worker.loop.QueueWorkerLoop` orders the passes
 (reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
 and knows a job only as a process-backed record. Before each sleep the ORCA
 worker runs `_periodic_upkeep`: the queued notification, then the recovery pass
