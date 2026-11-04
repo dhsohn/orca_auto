@@ -8,6 +8,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- A terminal replay that the worker skips on consecutive reconcile passes,
+  because the row is not the confirmed generation owner of its directory, is
+  now logged once at WARNING with the row, task and directory. It was logged
+  only at DEBUG while the directory stayed fenced as "terminal publication
+  pending".
+
 ## [10.2.4] - 2026-11-04
 
 ### Fixed
