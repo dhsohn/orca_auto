@@ -291,10 +291,13 @@ def _replay_current_terminal_entries(
     pending_replays: dict[str, TerminalReplayWorkItem],
     superseded_replay_keys: set[str],
     latest_generation_by_reaction: Mapping[str, str],
-) -> tuple[dict[str, str], set[str]]:
-    """Replay each observed terminal row; return the new cursor and the rows to retry."""
+    previously_stalled_keys: set[str],
+) -> tuple[dict[str, str], set[str], set[str]]:
+    """Replay each observed terminal row; return the new cursor, the rows to retry
+    and the rows whose replay was skipped on consecutive passes."""
     after_statuses: dict[str, str] = {}
     retry_keys: set[str] = set()
+    stalled_keys: set[str] = set()
     for entry in after_entries:
         queue_id = entry.queue_id
         status = entry.status.value
@@ -331,13 +334,29 @@ def _replay_current_terminal_entries(
         if not reaction_dir:
             continue
         reaction_key = settlement.reaction_dir_key(entry) or ""
-        if latest_generation_by_reaction.get(reaction_key) != queue_id:
-            logger.debug(
-                "Skipping terminal replay for superseded or ambiguous ORCA generation: "
-                "queue_id=%s reaction_dir=%s",
-                queue_id,
-                reaction_dir,
-            )
+        selected_owner = latest_generation_by_reaction.get(reaction_key)
+        if selected_owner != queue_id:
+            if queue_id in previous_retry_keys:
+                # Skipped on the previous pass too: the row stays fenced and the
+                # retry is silent, so say so once until it settles or drops.
+                stalled_keys.add(queue_id)
+                if queue_id not in previously_stalled_keys:
+                    logger.warning(
+                        "ORCA terminal replay remains unsettled: the row is not the "
+                        "confirmed generation owner of its reaction dir, which stays fenced: "
+                        "queue_id=%s task_id=%s reaction_dir=%s selected_owner=%s",
+                        queue_id,
+                        entry.task_id,
+                        reaction_dir,
+                        selected_owner or "<ambiguous>",
+                    )
+            else:
+                logger.debug(
+                    "Skipping terminal replay for superseded or ambiguous ORCA generation: "
+                    "queue_id=%s reaction_dir=%s",
+                    queue_id,
+                    reaction_dir,
+                )
             # Ambiguity is retryable: state/report identity may become durable on
             # the next poll without another queue status transition.
             retry_keys.add(queue_id)
@@ -377,7 +396,7 @@ def _replay_current_terminal_entries(
         else:
             pending_replays.pop(queue_id, None)
             after_statuses[queue_id] = item.resolved_status
-    return after_statuses, retry_keys
+    return after_statuses, retry_keys, stalled_keys
 
 
 def _retry_terminal_replays_without_queue_entries(
@@ -464,7 +483,7 @@ def reconcile_terminal_replays(
         )
     )
 
-    after_statuses, retry_keys = _replay_current_terminal_entries(
+    after_statuses, retry_keys, replay_state.stalled_replay_keys = _replay_current_terminal_entries(
         cfg,
         queue_root,
         after_entries,
@@ -474,6 +493,7 @@ def reconcile_terminal_replays(
         pending_replays,
         superseded_replay_keys | superseded_generation_keys,
         latest_generation_by_reaction,
+        replay_state.stalled_replay_keys,
     )
 
     _retry_terminal_replays_without_queue_entries(

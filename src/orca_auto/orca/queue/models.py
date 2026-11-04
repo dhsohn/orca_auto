@@ -54,6 +54,8 @@ class OrcaWorkerReplayState:
     whose observed transition the last pass could not replay (an ambiguous
     generation owner or failed side effects); the next pass treats them as
     still observed. A key leaves the set when its row settles or drops.
+    ``stalled_replay_keys`` holds the rows skipped for want of a confirmed
+    generation owner on consecutive passes; each was logged once at WARNING.
     """
 
     # ``generation_owners`` and ``generation_owner_active`` are keyed by reaction
@@ -63,6 +65,7 @@ class OrcaWorkerReplayState:
     reconcile_statuses: dict[str, str] | None = None
     retry_keys: set[str] = field(default_factory=set)
     blocked_marker_keys: set[str] = field(default_factory=set)
+    stalled_replay_keys: set[str] = field(default_factory=set)
     generation_owners: dict[str, str] = field(default_factory=dict)
     generation_owner_active: dict[str, bool] = field(default_factory=dict)
 

@@ -19,6 +19,7 @@ from orca_auto.core.engine_scratch._policy import (
 )
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
+from orca_auto.core.utils.process_tracking import run_lock_is_held
 from orca_auto.orca.config import load_config
 from orca_auto.orca.evidence import collect_structure_evidence, parsed_frequency_analysis
 from orca_auto.orca.machine_observation import report_json_path
@@ -31,6 +32,7 @@ from orca_auto.orca.queue.entries import (
     queue_entry_reaction_dir,
     same_generation,
 )
+from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.report.composer import collect_html_report_parts
 from orca_auto.orca.route_rules import route_facts
@@ -100,6 +102,7 @@ def _write_orca_worker_config(
     allowed_root: Path,
     orca_executable: Path,
     scratch_root: Path | None = None,
+    task_memory_gb: int = _TASK_MEMORY_GB,
 ) -> None:
     runtime: dict[str, object] = {}
     if scratch_root is not None:
@@ -116,7 +119,7 @@ def _write_orca_worker_config(
                 "scheduler": {"max_active_simulations": 1},
                 "resources": {
                     "max_cores_per_task": 1,
-                    "max_memory_gb_per_task": _TASK_MEMORY_GB,
+                    "max_memory_gb_per_task": task_memory_gb,
                 },
                 "orca": {
                     "runtime": runtime,
@@ -330,6 +333,74 @@ def test_orca_queue_worker_runs_fake_orca_in_dev_shm_and_publishes_attempt(
             "omitted_transient_bytes": len(b"transient"),
         }
         assert not any(path.name.startswith("attempt-") for path in scratch_root.iterdir())
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
+def test_cancel_of_a_scratch_deferred_job_settles_and_frees_its_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A real child refuses RAM scratch (no host has this much memory) and
+    # returns the row to the queue; the operator then cancels it between claims.
+    import orca_auto.core.queue.store as store_mod
+
+    shm = Path("/dev/shm")
+    if not shm.is_dir():
+        pytest.skip(f"{shm} is not a directory")
+    scratch_root = Path(tempfile.mkdtemp(prefix="orca-auto-test-", dir=shm))
+    try:
+        allowed_root = tmp_path / "orca_runs"
+        reaction_dir = allowed_root / "project_a" / "deferred_cancel"
+        bin_dir = tmp_path / "bin"
+        for path in (allowed_root, admission_dir(allowed_root), bin_dir, reaction_dir):
+            path.mkdir(parents=True, exist_ok=True)
+        counter_path = tmp_path / "fake_orca_counter.txt"
+        fake_orca = bin_dir / "fake_orca.py"
+        _write_fake_orca(fake_orca, counter_path)
+        config_path = tmp_path / "orca_auto.yaml"
+        _write_orca_worker_config(
+            config_path,
+            allowed_root=allowed_root,
+            orca_executable=fake_orca,
+            scratch_root=scratch_root,
+            task_memory_gb=1024**2,
+        )
+        (reaction_dir / "rxn.inp").write_text(
+            "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
+        )
+        assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+        worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
+        worker._sleep_fn = lambda _seconds: None
+        # Every deferral is due at once, so each pass claims and defers again.
+        monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
+
+        def run_passes(count: int) -> None:
+            for _ in range(count):
+                worker._worker_state_last_reconcile = None  # reconcile on every pass
+                worker.run_pass()
+                for _queue_id, job in worker._running_jobs():
+                    job.process.wait(timeout=30)
+
+        run_passes(3)
+        deferred = _queue_entry_for_reaction(allowed_root, reaction_dir)
+        assert deferred.status == QueueStatus.PENDING
+        assert "RAM headroom" in deferred.metadata["admission_deferral"]["reason"]
+
+        assert cli_main(["queue", "cancel", deferred.queue_id, "--config", str(config_path)]) == 0
+        run_passes(3)
+
+        cancelled = _queue_entry_for_reaction(allowed_root, reaction_dir)
+        assert cancelled.status == QueueStatus.CANCELLED
+        assert terminal_replay_marker_from_entry(cancelled) is None
+        assert worker.replay_state.pending_replays == {}
+        assert not run_lock_is_held(reaction_dir)
+        assert list_slots(admission_dir(allowed_root)) == []
+        assert not counter_path.exists()
+        state = load_state(reaction_dir)
+        assert state is not None
+        assert state["job_id"] == cancelled.task_id
+        assert state["status"] == "cancelled"
     finally:
         shutil.rmtree(scratch_root, ignore_errors=True)
 

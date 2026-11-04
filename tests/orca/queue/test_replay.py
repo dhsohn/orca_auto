@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 import threading
 from collections.abc import Callable
@@ -1006,6 +1007,68 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     assert _row(queue_root, "queue-a") == row_a_before
     [record] = list_job_location_records(queue_root)
     assert record.job_id == cancelled_b.task_id
+    assert len(recording_channel.sends) == 1
+
+
+def test_persistently_unsettled_replay_warns_once_until_it_settles(
+    queue_root: Path,
+    reaction_dir: Path,
+    replay_cfg: AppConfig,
+    recording_channel: RecordingChannel,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rows = [
+        _entry(
+            reaction_dir,
+            QueueStatus.CANCELLED,
+            queue_id=f"queue-{name}",
+            task_id=f"task-{name}",
+            metadata={
+                TERMINAL_REPLAY_METADATA_KEY: terminal_replay_marker(
+                    reaction_dir=str(reaction_dir),
+                    task_id=f"task-{name}",
+                    selected_inp="",
+                    status=STATUS_CANCELLED,
+                    error="cancel_requested",
+                )
+            },
+        )
+        for name in ("a", "b")
+    ]
+    _store(queue_root, *rows)
+    worker = _replay_worker(replay_cfg)
+
+    def stalled_warnings() -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+            and "terminal replay remains unsettled" in record.getMessage()
+        ]
+
+    caplog.set_level(logging.DEBUG, logger="orca_auto.orca.queue.replay")
+    _reconcile(worker)
+    # One ambiguous pass may resolve on the next poll; it stays at debug.
+    assert stalled_warnings() == []
+    assert worker.replay_state.retry_keys == {"queue-a", "queue-b"}
+
+    _reconcile(worker)
+    _reconcile(worker)
+
+    # Skipped again: each fenced row is reported once, not on every pass.
+    warnings = stalled_warnings()
+    assert len(warnings) == 2
+    assert any("queue_id=queue-a" in message for message in warnings)
+    assert any("queue_id=queue-b" in message for message in warnings)
+    assert worker.replay_state.stalled_replay_keys == {"queue-a", "queue-b"}
+
+    state = new_state(reaction_dir, reaction_dir / "b.inp")
+    state["job_id"] = "task-b"
+    save_state(reaction_dir, state)
+    _reconcile(worker)
+
+    assert terminal_replay_marker_from_entry(_row(queue_root, "queue-b")) is None
+    assert "queue-b" not in worker.replay_state.stalled_replay_keys
     assert len(recording_channel.sends) == 1
 
 
