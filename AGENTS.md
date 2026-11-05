@@ -1,6 +1,6 @@
 # 작업자 진입점 — orca_auto
 
-공장 공통 규칙은 `~/manual/AGENTS.md`가 지정하는 순서를 따른다. 이 저장소는
+공장 공통 규칙은 `~/skills/AGENTS.md`가 지정하는 순서를 따른다. 이 저장소는
 Linux/WSL에서 독립 ORCA 작업을 디스크 큐와 백그라운드 감독 워커로 실행한다.
 공개 인터페이스 규격의 기준 문서는 [docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md)이다.
 
