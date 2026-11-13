@@ -15,6 +15,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   now logged once at WARNING with the row, task and directory. It was logged
   only at DEBUG while the directory stayed fenced as "terminal publication
   pending".
+- Slack notifications are now Block Kit cards: a header with the event and
+  its severity, the author and the job fields, every dynamic value as plain
+  text ([ADR 0019](docs/adr/0019-slack-block-kit-cards.md)). The plain-text
+  message is still sent, unchanged, as the fallback for notification
+  previews and screen readers. Delivery, retries and configuration are
+  unchanged; a rejected block payload is not resent as text.
 
 ## [10.2.4] - 2026-11-04
 

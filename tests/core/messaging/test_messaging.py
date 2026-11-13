@@ -30,6 +30,7 @@ from orca_auto.core.messaging import (
     text,
 )
 from orca_auto.core.messaging.discord_bot import DiscordBotChannel
+from orca_auto.core.messaging.render_slack import render_slack_blocks, render_slack_text
 
 # Obviously synthetic values: no real Slack workspace, token or channel.
 _SLACK_TOKEN = "xoxb-synthetic-test-token"
@@ -177,6 +178,53 @@ def test_render_discord_embed_marks_inline_fields() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Slack rendering (Block Kit)
+# --------------------------------------------------------------------------- #
+def test_render_slack_blocks_groups_short_fields_and_preserves_literal_text() -> None:
+    directory = "/calculation" * 8
+    message = Message(
+        title="ORCA started",
+        groups=(
+            group(
+                field_row("Job", text("<!channel>")),
+                field_row("Attempt", raw("#3")),
+                field_row("Directory", code(directory)),
+            ),
+        ),
+        author="orca_auto",
+    )
+    blocks = render_slack_blocks(message)
+    assert blocks[0]["type"] == "header"
+    compact, wide = blocks[2:]
+    assert compact["fields"] == [
+        {"type": "plain_text", "text": "Job\n<!channel>", "emoji": False},
+        {"type": "plain_text", "text": "Attempt\n#3", "emoji": False},
+    ]
+    assert wide["text"]["text"] == f"Directory\n{directory}"
+
+
+def test_render_slack_blocks_enforces_block_budget_and_marks_omissions() -> None:
+    message = Message(
+        title="T",
+        groups=(group(*(field_row(f"field-{index}", text("v" * 90)) for index in range(60))),),
+    )
+    blocks = render_slack_blocks(message)
+    assert len(blocks) == 50
+    assert blocks[-1]["text"]["text"] == "More: …"
+
+
+def test_render_slack_text_keeps_legacy_escape_behavior() -> None:
+    message = Message(
+        title="notify <here>",
+        groups=(group(field_row("Job", text("a&b"))),),
+        author="bot",
+    )
+    rendered = render_slack_text(message)
+    assert rendered.startswith("bot: notify &lt;here&gt;")
+    assert "a&amp;b" in rendered
+
+
+# --------------------------------------------------------------------------- #
 # Channel resolution / config
 # --------------------------------------------------------------------------- #
 def test_build_channel_returns_discord_bot_when_config_complete() -> None:
@@ -265,6 +313,8 @@ def test_configured_slack_channel_posts_one_message_to_chat_post_message(
     assert body["channel"] == _SLACK_CHANNEL
     assert "ORCA completed" in body["text"]
     assert "water-opt" in json.dumps(body)
+    assert body["blocks"][0]["text"]["text"].startswith("✅ ORCA completed")
+    assert body["blocks"][1]["elements"][0]["text"] == "orca_auto"
     assert _SLACK_TOKEN not in json.dumps(body)
     # Neither the token nor the message payload is logged.
     assert _SLACK_TOKEN not in caplog.text

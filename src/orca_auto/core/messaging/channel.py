@@ -23,7 +23,7 @@ class MessageChannel(Protocol):
     """A destination that renders and delivers :class:`Message` notifications.
 
     Implementations own their own native rendering and transport (Discord embeds
-    over the Bot API, Slack plain text over ``chat.postMessage``). Callers build
+    over the Bot API, Slack Block Kit over ``chat.postMessage``). Callers build
     a provider-neutral :class:`Message` and never see the wire format.
     """
 

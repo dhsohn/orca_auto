@@ -1,6 +1,6 @@
 # ADR 0016: Slack as an additional notification provider
 
-- Status: Proposed
+- Status: Partly superseded by [ADR 0019](0019-slack-block-kit-cards.md)
 - Date: 2026-10-02
 
 ## Problem

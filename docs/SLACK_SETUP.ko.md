@@ -4,7 +4,7 @@
 
 > **10.0.0 신규 기능.** 9.0.x 및 이전 버전은 Slack을 지원하지 않습니다. 기본 제공자는 계속 Discord입니다. [Discord 알림 설정](DISCORD_SETUP.ko.md)을 참고하세요.
 
-ORCA_auto는 작업이 큐에 등록, 시작, 종료될 때 Slack 채널 하나에 일반 텍스트 알림을 보낼 수 있습니다. 전송은 발신 전용이며, ORCA_auto는 Slack Web API 메서드 하나만 호출하고 Slack에서 오는 명령은 받지 않습니다.
+ORCA_auto는 작업이 큐에 등록되거나 시작·종료될 때 Slack 채널 하나에 카드 알림을 보낼 수 있습니다. 카드에는 작업 상태와 세부 정보가 표시되며, 알림 미리보기와 화면 읽기 프로그램에는 일반 텍스트 요약을 제공합니다. 전송은 발신 전용이며, ORCA_auto는 Slack Web API 메서드 하나만 호출하고 Slack에서 오는 명령은 받지 않습니다.
 
 ## 1. 봇 토큰 준비 (소유자 작업)
 
@@ -47,6 +47,7 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 | 동작 | ORCA_auto의 처리 |
 | :--- | :--- |
 | 엔드포인트 | 고정 URL `https://slack.com/api/chat.postMessage`로 JSON을 보내며, 설정한 채널만 목적지입니다 |
+| 메시지 형태 | Block Kit 제목과 작업 필드. 동적 값과 대체 요약은 일반 텍스트로 표시합니다 |
 | 리디렉션 | 어떤 호스트나 스킴으로도 따라가지 않습니다. 리디렉션은 `slack_http_<status>`로 보고되고 토큰은 다른 곳으로 전달되지 않습니다 |
 | 전송 확인 | 응답에 `"ok": true`, 설정한 ID와 같은 `channel`, 숫자·점·숫자 여섯 자리 형식의 `ts`가 있을 때만 전송된 것으로 봅니다 |
 | 요청 제한 | 올바른 `Retry-After`가 있는 HTTP 429만, 그 시간만큼 기다린 뒤 `max_attempts`회(최대 10회)와 총 대기 120초 안에서 재시도합니다 |
