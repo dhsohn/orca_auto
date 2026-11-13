@@ -223,6 +223,22 @@ def test_slack_config_file_delivers_lifecycle_notifications_to_slack_only(
     assert payload["channel"] == _SLACK_CHANNEL
     assert title in payload["text"]
     assert _JOB_NAME in payload["text"]
+    blocks = payload["blocks"]
+    assert isinstance(blocks, list) and blocks
+    expected_header = f"✅ {title}" if kind == "finished" else title
+    assert blocks[0] == {
+        "type": "header",
+        "text": {"type": "plain_text", "text": expected_header, "emoji": False},
+    }
+    assert blocks[1] == {
+        "type": "context",
+        "elements": [{"type": "plain_text", "text": "orca_auto", "emoji": False}],
+    }
+    assert blocks[2]["fields"][0] == {
+        "type": "plain_text",
+        "text": f"Job\n{_JOB_NAME}",
+        "emoji": False,
+    }
     assert transport.sleeps == []
     assert all(stream.closed for stream in transport.streams)
     assert _SLACK_TOKEN not in caplog.text

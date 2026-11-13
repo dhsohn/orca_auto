@@ -379,3 +379,4 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0016: Slack as an additional notification provider](adr/0016-slack-notification-provider.md)
 - [ADR 0017: Queue Detail kind vocabulary and Unknown fallback](adr/0017-queue-detail-kind-vocabulary.md)
 - [ADR 0018: Other operation evidence and Unknown Queue Detail](adr/0018-queue-detail-other-and-unknown.md)
+- [ADR 0019: Slack notifications as Block Kit cards](adr/0019-slack-block-kit-cards.md)

@@ -42,7 +42,7 @@ from orca_auto.core.config.schema import (
 )
 
 from .channel import SendResult
-from .render_slack import render_slack_text
+from .render_slack import render_slack_blocks, render_slack_text
 from .richtext import Message
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,6 +111,7 @@ class SlackBotChannel:
         return {
             "channel": self.config.default_channel_id,
             "text": render_slack_text(message),
+            "blocks": render_slack_blocks(message),
             # Plain text: no Markdown, no name/channel linking, no previews.
             "mrkdwn": False,
             "parse": "none",

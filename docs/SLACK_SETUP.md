@@ -4,7 +4,7 @@
 
 > **New in 10.0.0.** 9.0.x and earlier versions do not support Slack. Discord remains the default provider; see [Discord Setup](DISCORD_SETUP.md).
 
-ORCA_auto can post a plain-text notification to one Slack channel when a job is queued, started and finished. Delivery is outbound only: ORCA_auto calls one Slack Web API method and accepts no commands from Slack.
+ORCA_auto can post a card to one Slack channel when a job is queued, started or finished. Each card shows the event and job details, with a plain-text summary for notification previews and screen readers. Delivery is outbound only: ORCA_auto calls one Slack Web API method and accepts no commands from Slack.
 
 ## 1. Provision a bot token (owner action)
 
@@ -47,6 +47,7 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 | Behavior | What ORCA_auto does |
 | :--- | :--- |
 | Endpoint | Posts JSON to the fixed URL `https://slack.com/api/chat.postMessage`; the configured channel is the only destination |
+| Message shape | Block Kit header and job fields, with plain text for dynamic values and the fallback summary |
 | Redirects | Never followed, to any host or scheme; a redirect is reported as `slack_http_<status>` and the token is not sent on |
 | Confirmation | A send counts as delivered only when the response has `"ok": true`, `channel` equal to the configured ID and a `ts` of digits, a dot and six digits |
 | Rate limits | Only HTTP 429 with a well-formed `Retry-After` is retried, after that wait, within `max_attempts` sends (at most 10) and 120 seconds of total waiting |
