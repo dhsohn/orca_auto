@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from orca_auto.core.confined_io import require_confined_regular_file
 
 from .. import input_references
+from ..engine_moinp import engine_moinp_sources
 from ..file_identity import file_content_identity
 from ..input_blocks import parse_input
 from ..input_validation import validate_supported_xyz_geometry_syntax
@@ -246,6 +248,7 @@ def _verify_bound_snapshot_content(
     expected_selected_inp: str | Path,
     expected_selected_input_xyz: str,
     expected_resource_request: Mapping[str, int],
+    allow_runtime_outputs: bool,
 ) -> Path:
     # One capture: the bytes whose identity is verified here are the bytes
     # parsed below, never a second read of the path.
@@ -272,6 +275,8 @@ def _verify_bound_snapshot_content(
     parsed_selected = parse_input(selected_lines)
     validate_supported_xyz_geometry_syntax(parsed_selected, label="Queued ORCA bound input")
     bound_references = input_references.scan_orca_file_references(parsed_selected)
+    moinp_references = input_references.orca_moinp_references(parsed_selected)
+    moinp_sources = engine_moinp_sources(parsed_selected)
     routes = _runtime_outputs(parse_operation_facts(parsed_selected, inp_path=selected))
     for role, _descriptor, source_path in verified.verified_dependencies:
         if role == verified.recovery_checkpoint_role:
@@ -283,7 +288,11 @@ def _verify_bound_snapshot_content(
             inline_same_stem_xyz=role in verified.mutable_roles,
         )
     bound_reference_paths = {
-        _reference_source(execution_dir, selected, reference.value)
+        _reference_source(
+            execution_dir,
+            selected,
+            moinp_sources[reference.value] if reference in moinp_references else reference.value,
+        )
         for reference in bound_references
     }
     expected_bound_reference_paths = {
@@ -295,6 +304,16 @@ def _verify_bound_snapshot_content(
         raise ValueError(
             "Queued ORCA bound input references do not match its materialized dependencies"
         )
+    for target, source in moinp_sources.items():
+        if stat.S_IMODE((execution_dir / source).stat().st_mode) != 0o400:
+            raise ValueError("ORCA bound MOInp source must remain immutable (0400)")
+        engine_copy = execution_dir / target
+        if os.path.lexists(engine_copy):
+            if not allow_runtime_outputs:
+                raise ValueError("ORCA engine MOInp copy already exists before launch")
+            require_confined_regular_file(
+                execution_dir, engine_copy, label="ORCA engine MOInp copy"
+            )
     if verified.verified_source_paths != sorted(
         verified.verified_source_paths,
         key=lambda path: path.relative_to(resolved_job_dir).as_posix(),
@@ -351,6 +370,7 @@ def verify_orca_execution_snapshot(
         expected_selected_inp=expected_selected_inp,
         expected_selected_input_xyz=expected_selected_input_xyz,
         expected_resource_request=expected_resource_request,
+        allow_runtime_outputs=allow_runtime_outputs,
     )
 
     executable = verify_orca_snapshot_executable(snapshot)

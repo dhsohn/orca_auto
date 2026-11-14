@@ -73,6 +73,7 @@ Every durable file has one writer module. `tests/core/queue/test_ownership_guard
 | `<runs_root>/queue_worker.pid` | `queue_worker.pid.lock`, held for the worker's lifetime | `core/queue/worker/pid_file.py` | Parent: `OrcaQueueWorker._write_pid_file` and `_remove_pid_file` under the lifetime lock. PID readers never mutate the file ([ADR 0011](adr/0011-read-only-pid-lookups.md)) | `orca/commands/queue.existing_worker_pid`, `submission`, `orphans` |
 | RAM scratch manifest `<scratch_root>/attempt-*/.orca_auto_scratch.json` | `<scratch_root>/.orca_auto_scratch.lock` | `core/engine_scratch/_manifest._write_workspace_manifest` | Child: `EngineScratchWorkspace.create` (`OrcaRunner.prepare`). CLI: `scratch clear` removes non-live workspaces | `engine_scratch/_inspect` (launch sweep, `scratch list`) |
 | Scratch copy-back into `<generation_dir>` and its `.orca_auto_scratch_publication.json` journal | `run.lock` | `core/engine_scratch/_publication._publish_workspace` | Child: `OrcaRunner` through `EngineScratchWorkspace.publish` | `_recover_incomplete_publication` on the next launch |
+| Generation or scratch `orca_auto_moinp_<basename>` | `run.lock` / owned scratch workspace | `orca/engine_moinp.prepare_engine_moinp` creates the private copy; scratch publication copies it back | Child: `OrcaRunner` immediately before launch | ORCA, snapshot verification, acceptance receipts |
 | `<runs_root>/logs/<queue_id>.log` | none | `core/queue/processes.start_background_process` (the child's stdout and stderr) | Parent: `OrcaQueueWorker._start_background_process`. CLI: `queue list clear` removes it | `queue list` shows the path |
 | `orca_auto.yaml` | none | `orca/commands/init._write_config` | CLI: `init` | `core/config/files` loaders through `orca/config.load_config` |
 | systemd unit files | none | `cli_systemd_apply._write_unit_files` | CLI: `systemd install` | systemd; `service status` compares them with the running worker |
@@ -224,8 +225,10 @@ reservation, claim by id of exactly that candidate, and slot release when no row
 (reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
 and knows a job only as a process-backed record. Before each sleep the ORCA
 worker runs `_periodic_upkeep`: the queued notification, then the recovery pass
-when it is due and no reaped job is waiting to retry its finalization. One poll
-pass is therefore reap, cancel, admit, upkeep, sleep. An ordinary exception from one
+when it is due. Tracked jobs fence only their own admission slots, queue ids
+and reaction directories in that pass so unrelated rows still reconcile while
+a child finalizes or waits on engine recovery. One poll pass is therefore reap,
+cancel, admit, upkeep, sleep. An ordinary exception from one
 pass is logged and the pass is retried after the poll interval while running
 children stay supervised; KeyboardInterrupt, SystemExit and startup failures
 still end the worker. Tests substitute the worker's
@@ -357,6 +360,8 @@ instance and the parent's terminal state writers.
 
 ---
 
+MOInp uses a private engine-time copy in execution snapshot version 4. The bound `.inp` names `orca_auto_moinp_<bound-dependency-basename>`; the immutable dependency keeps its original basename, bytes, identity and 0400 mode. The runner creates a new single-link 0600 copy immediately before launch, in RAM scratch when enabled or in the same generation when scratch is disabled. Existing targets and symlink/hardlink aliases are refused. The `orca_auto_moinp_` prefix is reserved for engine copies. Scratch capacity includes the extra copy; publication verifies the immutable inputs separately and handles the engine-mutated copy as a runtime artifact under the existing transient-file filter. This applies to explicit top-level/SCF MOInp and automatic recovery seeds without changing guess policy, method, geometry or state. Older pending snapshots require explicit resubmission; historical receipts are preserved ([ADR 0021](adr/0021-private-engine-moinp-copies.md), [upgrade procedure](RELEASE.md)).
+
 ## 6. Architecture Decision Records (ADR)
 
 When to write an ADR, its rules and its template are in [the ADR guide](adr/README.md).
@@ -380,3 +385,6 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0017: Queue Detail kind vocabulary and Unknown fallback](adr/0017-queue-detail-kind-vocabulary.md)
 - [ADR 0018: Other operation evidence and Unknown Queue Detail](adr/0018-queue-detail-other-and-unknown.md)
 - [ADR 0019: Slack notifications as Block Kit cards](adr/0019-slack-block-kit-cards.md)
+- [ADR 0020: Recovery orbital eligibility and submitted guess intent](adr/0020-recovery-orbital-eligibility-and-guess-intent.md)
+
+- [ADR 0021: Private engine-time MOInp copies](adr/0021-private-engine-moinp-copies.md)

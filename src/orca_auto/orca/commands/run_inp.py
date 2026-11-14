@@ -13,6 +13,7 @@ import json
 import logging
 import sys
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ from orca_auto.core.statuses import STATUS_QUEUED
 from .. import submission
 from ..config import AppConfig
 from ..queue.entries import queue_entry_force
+from ..run_dir_guard import PinnedPublication
+from ..submission import SubmissionRequest
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +98,20 @@ def _emit_queued_submission(
         print(f"{key}: {rendered}")
 
 
+def _submission_request_from_args(args: Any) -> SubmissionRequest:
+    return SubmissionRequest(
+        path=str(getattr(args, "path", "") or ""),
+        input_name=getattr(args, "input", None),
+        priority=getattr(args, "priority", None),
+        force=bool(getattr(args, "force", False)),
+    )
+
+
 def cmd_run_inp(
     args: Any,
     *,
     cfg: AppConfig,
+    publication: PinnedPublication | None = None,
     report_error: Callable[[str], None] = _print_error_line,
     emit_json: Callable[[Mapping[str, Any]], None] = _print_json_document,
 ) -> int:
@@ -116,7 +129,10 @@ def cmd_run_inp(
         report_error(message)
         return 1
 
-    result = submission.submit_reaction_dir_to_queue(args, cfg=cfg)
+    request = _submission_request_from_args(args)
+    if publication is not None and publication.pinned_target is not None:
+        request = replace(request, path=str(publication.pinned_target))
+    result = submission.submit_reaction_dir_to_queue(request, cfg=cfg, publication=publication)
     if result.status != "submitted":
         return fail(result.stderr.rstrip() if result.stderr else "ORCA queue submission failed.")
 

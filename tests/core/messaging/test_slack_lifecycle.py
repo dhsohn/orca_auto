@@ -223,20 +223,24 @@ def test_slack_config_file_delivers_lifecycle_notifications_to_slack_only(
     assert payload["channel"] == _SLACK_CHANNEL
     assert title in payload["text"]
     assert _JOB_NAME in payload["text"]
-    blocks = payload["blocks"]
-    assert isinstance(blocks, list) and blocks
-    expected_header = f"✅ {title}" if kind == "finished" else title
-    assert blocks[0] == {
+    expected_header = f"✅ {title}" if kind == "finished" else f"ℹ️ {title}"
+    chrome = payload["blocks"]
+    assert isinstance(chrome, list) and chrome
+    assert chrome[0] == {
         "type": "header",
         "text": {"type": "plain_text", "text": expected_header, "emoji": False},
     }
-    assert blocks[1] == {
+    assert chrome[1] == {
         "type": "context",
         "elements": [{"type": "plain_text", "text": "orca_auto", "emoji": False}],
     }
-    assert blocks[2]["fields"][0] == {
+    [attachment] = payload["attachments"]
+    assert attachment["color"] == ("#2ECC71" if kind == "finished" else "#3498DB")
+    detail = attachment["blocks"]
+    assert isinstance(detail, list) and detail
+    assert detail[0]["text"] == {
         "type": "plain_text",
-        "text": f"Job\n{_JOB_NAME}",
+        "text": f"Job: {_JOB_NAME}",
         "emoji": False,
     }
     assert transport.sleeps == []

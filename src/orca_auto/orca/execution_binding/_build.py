@@ -15,6 +15,7 @@ from orca_auto.core.queue.snapshot_intent import (
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 
 from .. import input_references
+from ..engine_moinp import ENGINE_MOINP_PREFIX
 from ..file_identity import file_content_identity
 from ..input_blocks import parse_input
 from ..input_references import orca_input_requests_moread, orca_moinp_references
@@ -24,7 +25,9 @@ from ..input_validation import (
     validate_supported_xyz_geometry_syntax,
 )
 from ..operation_facts import parse_operation_facts
+from ..recovery_orbitals import recovery_guess_policy
 from ..resource_directives import resource_request_from_lines
+from . import _capture
 from ._cleanup import discard_unowned_generation
 from ._confinement import (
     _confined_reference_path,
@@ -138,7 +141,7 @@ def _plan_bound_dependencies(
     selected: _SelectedSnapshotInput,
     *,
     recovery: _RecoveryPlan | None,
-) -> tuple[list[_BoundDependency], set[Path]]:
+) -> tuple[list[_BoundDependency], set[Path], dict[str, Any]]:
     dependency_sources: set[Path] = set()
     geometry_dependencies: set[Path] = set()
     dependency_reference_kinds: dict[Path, set[str]] = {}
@@ -177,8 +180,12 @@ def _plan_bound_dependencies(
         job_dir=resolved_job_dir,
     )
 
-    recovery_checkpoint_source: Path | None = None
-    if recovery is not None and not selected.requests_moread:
+    recovery_checkpoint: _capture.CapturedFile | None = None
+    checkpoint_decision: dict[str, Any] = {}
+    policy = recovery_guess_policy(selected.lines)
+    if recovery is not None:
+        checkpoint_decision = {"policy": policy, "status": "skipped", "reason": policy}
+    if recovery is not None and policy == "automatic":
         # Count dependencies twice: once for materialized copies and once for
         # possible inline-geometry expansion of the bound input.
         submitted = recovery.submitted_dependency_identities
@@ -193,7 +200,7 @@ def _plan_bound_dependencies(
             )
             + 2 * len(selected.selected_payload)
         )
-        recovery_checkpoint_source = _validated_recovery_checkpoint(
+        recovery_checkpoint, checkpoint_decision = _validated_recovery_checkpoint(
             job_dir=resolved_job_dir,
             seed_dir=recovery.seed_dir,
             source_selected=source_selected,
@@ -251,21 +258,21 @@ def _plan_bound_dependencies(
                 source_payload=dependency_payload,
             )
         )
-    if recovery_checkpoint_source is not None:
+    if recovery_checkpoint is not None:
         bound_dependencies.append(
             _BoundDependency(
-                source=recovery_checkpoint_source,
-                effective_source=recovery_checkpoint_source,
+                source=recovery_checkpoint.path,
+                effective_source=recovery_checkpoint.path,
                 inline_same_stem_xyz=False,
                 private_override=recovery_checkpoint_private_name(source_selected),
-                source_payload=None,
+                source_payload=recovery_checkpoint.payload,
             )
         )
     # Roles follow canonical stored source paths, matching claim-time verification.
     bound_dependencies.sort(
         key=lambda item: item.effective_source.relative_to(resolved_job_dir).as_posix(),
     )
-    return bound_dependencies, geometry_dependencies
+    return bound_dependencies, geometry_dependencies, checkpoint_decision
 
 
 def _materialize_snapshot_inputs(
@@ -384,6 +391,7 @@ def _snapshot_record(
     resource_request: Mapping[str, int],
     executable: dict[str, Any],
     recovery: _RecoveryPlan | None,
+    checkpoint_decision: dict[str, Any],
 ) -> dict[str, Any]:
     """The queue-metadata record of one built generation, in its stored key order."""
 
@@ -420,6 +428,7 @@ def _snapshot_record(
             "previous_execution_dir": str(recovery.seed_dir),
             "seeded_roles": materialized.seeded_roles,
             "checkpoint_role": materialized.recovery_checkpoint_role,
+            "checkpoint_decision": checkpoint_decision,
             "submitted_dependency_identities": recovery.submitted_dependency_identities,
         }
     return snapshot
@@ -466,6 +475,8 @@ def build_orca_execution_snapshot(
     )
     if source_selected.suffix.lower() != ".inp":
         raise ValueError(f"ORCA selected input must be an .inp file: {source_selected}")
+    if source_selected.name.startswith(ENGINE_MOINP_PREFIX):
+        raise ValueError("ORCA selected input uses a reserved engine-copy basename")
 
     recovery_executable: str | None = None
     recovery: _RecoveryPlan | None = None
@@ -492,7 +503,7 @@ def build_orca_execution_snapshot(
     )
     generation_name, execution_dir, generation_identity = generation
     try:
-        bound_dependencies, geometry_dependencies = _plan_bound_dependencies(
+        bound_dependencies, geometry_dependencies, checkpoint_decision = _plan_bound_dependencies(
             resolved_job_dir,
             source_selected,
             selected,
@@ -541,6 +552,7 @@ def build_orca_execution_snapshot(
             resource_request=resource_request,
             executable=executable,
             recovery=recovery,
+            checkpoint_decision=checkpoint_decision,
         )
     except BaseException:
         discard_unowned_generation(

@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import signal
 import subprocess
-from argparse import Namespace
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -63,7 +62,7 @@ def queued_submission(tmp_path: Path) -> tuple[AppConfig, Path, QueueEntry, Path
     )
     cfg = load_config(str(config_path))
     queued = create_queued_submission(
-        cfg, Namespace(force=False, priority=10), job_dir, selected_inp=selected
+        cfg, job_dir, selected_inp=selected, priority=10, force=False
     ).entry
     return cfg, config_path, queued, executable
 

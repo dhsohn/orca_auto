@@ -534,7 +534,10 @@ def _publish_workspace(
     journal_written = False
     commit_durable = False
     try:
-        for source_name in _scratch_entries(workspace_dir_fd):
+        entries = _scratch_entries(workspace_dir_fd)
+        if set(staged_inputs).difference(entries):
+            raise EngineScratchError("ORCA removed a staged immutable input in scratch")
+        for source_name in entries:
             baseline = staged_inputs.get(source_name)
             if baseline is not None:
                 digest, size = _regular_file_sha256_at(
@@ -542,7 +545,14 @@ def _publish_workspace(
                     source_name,
                     display_path=workspace / source_name,
                 )
-                if digest == baseline.staged_sha256 and size == baseline.staged_size_bytes:
+                mode = stat.S_IMODE(
+                    os.stat(source_name, dir_fd=workspace_dir_fd, follow_symlinks=False).st_mode
+                )
+                if (
+                    digest == baseline.staged_sha256
+                    and size == baseline.staged_size_bytes
+                    and mode == baseline.mode
+                ):
                     continue
                 raise EngineScratchError(
                     f"ORCA modified a staged immutable input in scratch: {source_name}"

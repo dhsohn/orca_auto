@@ -981,7 +981,7 @@ def test_cli_run_dir_json_success_carries_ok(
     runs_root, job, config = _run_dir_fixture(tmp_path)
     from orca_auto.orca.commands import run_inp as run_inp_command
 
-    def _fake_submit(args: Any, *, cfg: Any) -> Any:
+    def _fake_submit(_request: Any, *, cfg: Any, publication: Any = None) -> Any:
         entry = make_queue_entry(queue_id="q-ok", task_id="orca-ok", reaction_dir=job)
         worker = SimpleNamespace(status="inactive", pid=None, log_file=None, detail=None)
         return SimpleNamespace(

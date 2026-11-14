@@ -10,7 +10,7 @@ from orca_auto.core.confined_io import (
     require_confined_regular_file,
 )
 
-from ..input_references import checkpoint_file_looks_intact
+from ..recovery_orbitals import checkpoint_output_readiness
 from . import _capture
 from ._inputs import _inline_geometry_atom_signature, _strict_xyz_atom_row, _xyz_atom_lines
 from ._models import _RecoveryPlan
@@ -216,32 +216,67 @@ def _validated_recovery_checkpoint(
     source_selected: Path,
     scanned_dependencies: Sequence[Path],
     estimated_source_bytes: int,
-) -> Path | None:
-    """Return the frozen runtime checkpoint to seed from, or None to skip.
+) -> tuple[_capture.CapturedFile | None, dict[str, Any]]:
+    """Capture the immediate predecessor's eligible bytes, with a decision receipt.
 
-    The candidate is the ``<stem>.gbw`` of the crashed generation. Skipping
-    (absent, empty, torn with a zero-filled head, over the snapshot byte
-    budgets, or a basename collision with a scanned dependency) degrades to
-    geometry-only recovery; it never fails the rebind. A symlinked or otherwise
-    non-regular candidate still fails closed via the confinement check.
+    Optional missing/unstable evidence degrades to geometry recovery. Unsafe
+    paths still fail closed. Neither a nonzero prefix nor completed GUESS proves
+    GBW validity; output and checkpoint writes are not an atomic transaction.
     """
+
+    decision: dict[str, Any] = {"policy": "automatic", "status": "skipped"}
+
+    def skip(reason: str) -> tuple[None, dict[str, Any]]:
+        return None, {**decision, "reason": reason}
 
     candidate = seed_dir / _recovery_checkpoint_source_name(source_selected)
     if not candidate.exists() and not candidate.is_symlink():
-        return None
+        return skip("checkpoint_absent")
     checkpoint = require_confined_regular_file(
         job_dir,
         candidate,
         label="ORCA recovery checkpoint",
     )
     size = checkpoint.stat().st_size
-    if size == 0 or size > _capture.input_limit():
-        return None
-    if not checkpoint_file_looks_intact(checkpoint):
-        return None
+    if size == 0:
+        return skip("checkpoint_empty")
+    if size > _capture.input_limit():
+        return skip("checkpoint_over_budget")
     if not _capture.fits_aggregate(estimated_source_bytes, size):
-        return None
+        return skip("checkpoint_over_budget")
     private_name = recovery_checkpoint_private_name(source_selected)
     if any(dependency.name == private_name for dependency in scanned_dependencies):
-        return None
-    return checkpoint
+        return skip("checkpoint_basename_collision")
+    output = seed_dir / f"{source_selected.stem}.out"
+    if not output.exists() and not output.is_symlink():
+        return skip("output_absent")
+    output = require_confined_regular_file(job_dir, output, label="ORCA recovery output")
+    output_size = output.stat().st_size
+    if output_size > _capture.input_limit() or not _capture.fits_aggregate(
+        estimated_source_bytes + size, output_size
+    ):
+        return skip("output_over_budget")
+    try:
+        captured_output = _capture.capture(output, require_single_link=True)
+    except (OSError, ValueError):
+        return skip("output_capture_failed")
+    readiness = checkpoint_output_readiness(captured_output.payload)
+    decision.update(
+        output=captured_output.identity(),
+        boundary_line=readiness.boundary_line,
+        evidence_line=readiness.evidence_line,
+    )
+    if not readiness.eligible:
+        return skip(readiness.reason)
+    try:
+        captured = _capture.capture(checkpoint, require_single_link=True)
+    except (OSError, ValueError):
+        return skip("checkpoint_capture_failed")
+    # A cheap negative filter only. No size threshold or guessed GBW offsets.
+    if not any(captured.payload[:16]):
+        return skip("checkpoint_empty_or_zero_prefix")
+    if not _capture.fits_aggregate(
+        estimated_source_bytes + captured_output.size_bytes, captured.size_bytes
+    ):
+        return skip("checkpoint_over_budget")
+    return captured, {**decision, "status": "eligible", "reason": readiness.reason}

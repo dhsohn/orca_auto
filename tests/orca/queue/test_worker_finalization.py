@@ -476,8 +476,8 @@ def test_completed_child_retains_capacity_until_terminal_evidence_is_ready(
     worker._check_completed_jobs()
     assert worker._running[entry.queue_id] is job
     assert get_slot(admission_dir(queue_root), token) is not None
-    assert job.pending_terminal_replay is not None
-    assert not job.pending_terminal_replay.state_prepared
+    assert job.finalization is not None and job.finalization.item is not None
+    assert not job.finalization.item.state_prepared
     assert worker.replay_state.pending_replays == {}
     assert terminal_replay_marker_from_entry(queue_row(queue_root, entry.queue_id))
     assert job_record(queue_root, entry.task_id) is None
@@ -553,10 +553,10 @@ def test_terminal_slot_release_failure_keeps_retry_owner_before_publication(
         worker._check_completed_jobs()
 
     assert worker._running[entry.queue_id] is job
-    assert job.terminal_finalize_pending
-    assert job.pending_terminal_replay is not None
-    assert job.pending_terminal_replay.state_prepared
-    assert job.pending_terminal_replay.queue_id in worker.replay_state.pending_replays
+    assert job.finalization is not None
+    assert job.finalization.item is not None
+    assert job.finalization.item.state_prepared
+    assert job.finalization.item.queue_id not in worker.replay_state.pending_replays
     assert get_slot(admission_dir(queue_root), token) is not None
     assert terminal_replay_marker_from_entry(queue_row(queue_root, entry.queue_id))
     assert job_record(queue_root, entry.task_id) is None
@@ -571,8 +571,7 @@ def test_terminal_slot_release_failure_keeps_retry_owner_before_publication(
     assert queue_row(queue_root, entry.queue_id).status == QueueStatus.COMPLETED
     assert entry.queue_id not in worker._running
     assert get_slot(admission_dir(queue_root), token) is None
-    assert job.pending_terminal_replay is None
-    assert not job.terminal_finalize_pending
+    assert job.finalization is None
     assert worker.replay_state.pending_replays == {}
     assert queue_row(queue_root, entry.queue_id).metadata.get("orca_terminal_replay") is None
     assert job_record(queue_root, entry.task_id) is not None
@@ -698,7 +697,7 @@ def test_unpublished_generation_without_a_directory_pauses_all_admission(
         process=fake_children.spawn(),
         admission_token="slot_unknown_directory",
     )
-    job.terminal_finalize_pending = True
+    job.begin_finalization()
     worker._running[job.queue_id] = job
 
     assert worker._fill_slots() == "blocked"
@@ -948,7 +947,7 @@ def test_exited_job_awaiting_finalize_retry_withholds_its_directory_without_an_i
         process=fake_children.spawn(exited=1),
         admission_token="slot_retry_only",
     )
-    job.terminal_finalize_pending = True
+    job.begin_finalization()
     worker._running[job.queue_id] = job
 
     assert worker._fill_slots() == "processed"

@@ -47,7 +47,6 @@ from orca_auto.core.utils.persistence import timestamped_token
 
 from ..app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from ..config import AppConfig
-from ..run_dir_guard import assert_run_dir_publication_allowed
 from . import adapter as queue_adapter
 from . import roots
 from .entries import TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY, same_generation
@@ -470,6 +469,7 @@ def run_enqueue_publication(
     force: bool,
     metadata: dict[str, Any],
     on_compensated_failure: Callable[[], None],
+    publication_check: Callable[[str], None] | None = None,
 ) -> EnqueuePublicationOutcome:
     """Durably enqueue one ORCA row and publish its queued record exactly once.
 
@@ -501,11 +501,15 @@ def run_enqueue_publication(
             force=force,
             task_id=task_id,
             metadata=enqueue_metadata,
-            before_commit_fn=lambda: assert_run_dir_publication_allowed(
-                "ORCA durable queue pre-commit"
+            before_commit_fn=(
+                (lambda: publication_check("ORCA durable queue pre-commit"))
+                if publication_check is not None
+                else None
             ),
-            after_commit_fn=lambda: assert_run_dir_publication_allowed(
-                "ORCA durable queue post-commit"
+            after_commit_fn=(
+                (lambda: publication_check("ORCA durable queue post-commit"))
+                if publication_check is not None
+                else None
             ),
         )
     except QueueAfterCommitError as exc:

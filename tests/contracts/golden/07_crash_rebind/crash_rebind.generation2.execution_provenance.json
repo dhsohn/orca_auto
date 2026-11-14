@@ -17,6 +17,11 @@
   "generation_owner_token": "<snapshot_intent:2>",
   "materialized_inputs": {},
   "recovery": {
+    "checkpoint_decision": {
+      "policy": "automatic",
+      "reason": "checkpoint_absent",
+      "status": "skipped"
+    },
     "checkpoint_role": "",
     "previous_execution_dir": "<tmp>/runs/crash_rebind/<generation:1>",
     "previous_generation_name": "<generation:1>",

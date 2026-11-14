@@ -31,6 +31,16 @@ class TerminalReplayWorkItem:
 
 
 @dataclass
+class JobFinalization:
+    """The parent saw this job's child stop and owns its settlement; the directory is withheld.
+
+    ``item`` lives here, and nowhere else, until the slot is released.
+    """
+
+    item: TerminalReplayWorkItem | None = None
+
+
+@dataclass
 class OrcaRunningJob:
     queue_root: Path
     queue_id: str
@@ -39,8 +49,12 @@ class OrcaRunningJob:
     admission_token: str
     task_id: str | None = None
     started_at: float = field(default_factory=time.monotonic)
-    pending_terminal_replay: TerminalReplayWorkItem | None = None
-    terminal_finalize_pending: bool = False
+    finalization: JobFinalization | None = None
+
+    def begin_finalization(self) -> JobFinalization:
+        if self.finalization is None:
+            self.finalization = JobFinalization()
+        return self.finalization
 
 
 @dataclass
@@ -70,4 +84,9 @@ class OrcaWorkerReplayState:
     generation_owner_active: dict[str, bool] = field(default_factory=dict)
 
 
-__all__ = ["OrcaRunningJob", "OrcaWorkerReplayState", "TerminalReplayWorkItem"]
+__all__ = [
+    "JobFinalization",
+    "OrcaRunningJob",
+    "OrcaWorkerReplayState",
+    "TerminalReplayWorkItem",
+]

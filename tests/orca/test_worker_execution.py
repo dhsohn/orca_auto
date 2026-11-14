@@ -12,16 +12,18 @@ import pytest
 from orca_auto.core.admission import admission_dir, get_slot, reserve_slot
 from orca_auto.core.queue import persistence as queue_persistence
 from orca_auto.core.queue import store as queue_store
+from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import lock as lock_utils
 from orca_auto.orca import worker_execution
-from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
+from orca_auto.orca.config import AppConfig
+from orca_auto.orca.orca_runner import StopCause, WorkerShutdownInterrupt
 from orca_auto.orca.queue import adapter
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_state
-from tests.conftest import claim_next_entry
+from tests.conftest import claim_next_entry, make_queue_entry
 from tests.queue_worker_helpers import queued_submission
 
 
@@ -144,6 +146,96 @@ def test_child_cancellation_probe_skips_contended_queue_lock(
     assert captured["stop_requested"]() is False
     assert lock_calls == [(tmp_path.resolve() / queue_store.QUEUE_LOCK_NAME, 0.0)]
     assert flock_calls == [fcntl.LOCK_EX | fcntl.LOCK_NB]
+
+
+def _exercise_child_stop_cause_classifier(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    cfg: AppConfig,
+    probe: Callable[[], bool],
+) -> StopCause:
+    captured: dict[str, Any] = {}
+    entry = make_queue_entry(reaction_dir=tmp_path / "job", status=QueueStatus.RUNNING)
+
+    def fake_execute(*_args: object, **kwargs: Any) -> int:
+        captured.update(kwargs)
+        return 4
+
+    monkeypatch.setattr(worker_execution, "_build_execution_context", lambda *_a, **_k: object())
+    monkeypatch.setattr(worker_execution, "execute_orca_run", fake_execute)
+    monkeypatch.setattr(
+        worker_execution,
+        "cancellation_probe",
+        lambda *_args, **_kwargs: probe,
+    )
+
+    worker_execution.process_dequeued_entry(cfg, entry, queue_root=tmp_path, admission_token="")
+    return captured["stop_cause"]()
+
+
+def test_child_stop_cause_classifier_reports_cancel_when_probe_true(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    app_cfg: Callable[..., AppConfig],
+) -> None:
+    cause = _exercise_child_stop_cause_classifier(monkeypatch, tmp_path, app_cfg(), lambda: True)
+    assert cause is StopCause.CANCEL_REQUESTED
+
+
+def test_child_stop_cause_classifier_reports_shutdown_when_probe_false(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    app_cfg: Callable[..., AppConfig],
+) -> None:
+    cause = _exercise_child_stop_cause_classifier(monkeypatch, tmp_path, app_cfg(), lambda: False)
+    assert cause is StopCause.WORKER_SHUTDOWN
+
+
+def test_child_stop_cause_classifier_reports_shutdown_on_probe_lock_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    app_cfg: Callable[..., AppConfig],
+) -> None:
+    def timed_out_probe() -> bool:
+        raise QueueLockTimeoutError("timed out")
+
+    cause = _exercise_child_stop_cause_classifier(monkeypatch, tmp_path, app_cfg(), timed_out_probe)
+    assert cause is StopCause.WORKER_SHUTDOWN
+
+
+def test_child_stop_cause_classifier_latches_cancel_before_probe_lock_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    app_cfg: Callable[..., AppConfig],
+) -> None:
+    calls = {"count": 0}
+    captured: dict[str, Any] = {}
+    entry = make_queue_entry(reaction_dir=tmp_path / "job", status=QueueStatus.RUNNING)
+
+    def stateful_probe() -> bool:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return True
+        raise QueueLockTimeoutError("timed out")
+
+    def fake_execute(*_args: object, **kwargs: Any) -> int:
+        captured.update(kwargs)
+        return 4
+
+    monkeypatch.setattr(worker_execution, "_build_execution_context", lambda *_a, **_k: object())
+    monkeypatch.setattr(worker_execution, "execute_orca_run", fake_execute)
+    monkeypatch.setattr(
+        worker_execution,
+        "cancellation_probe",
+        lambda *_args, **_kwargs: stateful_probe,
+    )
+
+    worker_execution.process_dequeued_entry(
+        cfg=app_cfg(), entry=entry, queue_root=tmp_path, admission_token=""
+    )
+    assert captured["stop_requested"]() is True
+    cause = captured["stop_cause"]()
+    assert cause is StopCause.CANCEL_REQUESTED
 
 
 def test_child_cancellation_probe_propagates_non_lock_timeout(

@@ -7,6 +7,7 @@ import stat
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from types import FrameType, SimpleNamespace, TracebackType
 from typing import Any, Self
@@ -32,17 +33,37 @@ from orca_auto.core.queue.processes import (
     retain_process_ownership_until_exit,
     terminate_process_group,
 )
+from orca_auto.core.utils import stable_fs
 from orca_auto.core.utils.persistence import open_pinned_readonly
 from orca_auto.core.utils.process import python_interpreter_argv
 
+from .engine_moinp import prepare_engine_moinp
 from .file_identity import confined_output_identity, file_content_identity, open_pinned_executable
 from .scratch import OrcaScratchPolicy
 
 logger = logging.getLogger(__name__)
 
 
+class StopCause(str, Enum):
+    """Diagnostic label for an ORCA run interrupt.
+
+    Values reflect what was visible when the stop was observed, not necessarily
+    what triggered the stop. ``cancel_requested`` means the queue cancel flag was
+    visible during ``stop_requested`` or a follow-up probe; a shutdown signal
+    without that observation stays ``worker_shutdown`` even when settlement later
+    marks the row cancelled.
+    """
+
+    WORKER_SHUTDOWN = "worker_shutdown"
+    CANCEL_REQUESTED = "cancel_requested"
+
+
 class WorkerShutdownInterrupt(KeyboardInterrupt):
     """Raised when a worker shutdown signal or request stops the current ORCA run."""
+
+    def __init__(self, *args: object, cause: StopCause = StopCause.WORKER_SHUTDOWN) -> None:
+        super().__init__(*args)
+        self.cause = cause
 
 
 class ShutdownSignalGuard:
@@ -150,6 +171,7 @@ class OrcaRunner:
         execution_dir_identity: dict[str, Any],
         verify_snapshot: Callable[..., object],
         stop_requested: Callable[[], bool],
+        stop_cause: Callable[[], StopCause] | None = None,
         scratch_policy: OrcaScratchPolicy | None,
         prepare_running_job: Callable[[], None],
         register_running_job: Callable[[Any | None], None],
@@ -164,6 +186,7 @@ class OrcaRunner:
         self._bound_durable_directory_identity = (device, inode)
         self._verify_snapshot = verify_snapshot
         self._shutdown_requested = stop_requested
+        self._stop_cause = stop_cause
         self._scratch_policy = scratch_policy
         self._prepare_running_job = prepare_running_job
         self._register_running_job = register_running_job
@@ -353,6 +376,17 @@ class OrcaRunner:
             label="ORCA selected input",
         )
         if self._scratch_policy is None:
+            descriptor, identity = stable_fs.open_pinned_directory(
+                durable_input.parent,
+                expected_identity=self._bound_durable_directory_identity,
+            )
+            try:
+                prepare_engine_moinp(durable_input, directory_fd=descriptor)
+                stable_fs.require_directory_path_identity(
+                    durable_input.parent, descriptor, identity
+                )
+            finally:
+                os.close(descriptor)
             return self._run_in_place(durable_input)
         workspace = self._take_prepared_workspace()
         if workspace is None:
@@ -364,6 +398,10 @@ class OrcaRunner:
         publication: ScratchPublication | None = None
         try:
             try:
+                with workspace.consume_private_input_reservation():
+                    prepare_engine_moinp(
+                        workspace.scratch_input, directory_fd=workspace.workspace_dir_fd
+                    )
                 result = self._run_in_place(
                     workspace.scratch_input,
                     working_directory_fd=workspace.workspace_dir_fd,
@@ -434,7 +472,23 @@ class OrcaRunner:
 
                 def _raise_if_shutdown_requested() -> None:
                     if shutdown_guard.received_signal is not None or self._shutdown_requested():
-                        raise WorkerShutdownInterrupt
+                        cause = StopCause.WORKER_SHUTDOWN
+                        if self._stop_cause is not None:
+                            try:
+                                classified = self._stop_cause()
+                                if isinstance(classified, StopCause):
+                                    cause = classified
+                                else:
+                                    logger.warning(
+                                        "stop_cause classifier returned invalid value %r",
+                                        classified,
+                                    )
+                            except Exception:  # noqa: BLE001
+                                logger.warning(
+                                    "stop_cause classifier failed; defaulting to worker_shutdown",
+                                    exc_info=True,
+                                )
+                        raise WorkerShutdownInterrupt(cause=cause)
 
                 proc: subprocess.Popen[str] | None = None
                 admission_registered = False
@@ -538,13 +592,19 @@ class OrcaRunner:
                         except subprocess.TimeoutExpired:
                             continue
                         break
-                except WorkerShutdownInterrupt:
+                except WorkerShutdownInterrupt as shutdown_exc:
                     self._retain_until_subprocess_tree_exits(proc)
-                    self._write_interrupt_notice(
-                        handle,
-                        "\n[orca_auto] interrupted by worker shutdown; "
-                        "terminated ORCA process tree\n",
-                    )
+                    if shutdown_exc.cause is StopCause.CANCEL_REQUESTED:
+                        notice = (
+                            "\n[orca_auto] interrupted by cancellation request; "
+                            "terminated ORCA process tree\n"
+                        )
+                    else:
+                        notice = (
+                            "\n[orca_auto] interrupted by worker shutdown; "
+                            "terminated ORCA process tree\n"
+                        )
+                    self._write_interrupt_notice(handle, notice)
                     raise
                 except BaseException:
                     # A failed wait/callback can race the leader's exit. Only

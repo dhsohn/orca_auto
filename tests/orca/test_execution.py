@@ -267,6 +267,7 @@ def test_the_run_builds_its_one_runner_from_the_bound_context(
     assert context.resource_request["max_memory_gb"] == 3
     assert callable(runner.pop("prepare_running_job"))
     assert callable(runner.pop("register_running_job"))
+    assert runner.pop("stop_cause") is None
     assert runner == {
         "orca_executable": str(fake_orca.resolve()),
         "executable_identity": snapshot["executable_identities"]["orca"],

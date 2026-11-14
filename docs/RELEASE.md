@@ -30,6 +30,27 @@ schemas; release needs no `machine-contracts` clone. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Pending MOInp execution-boundary upgrade (snapshot 4)
+
+[ADR 0021](adr/0021-private-engine-moinp-copies.md) changes the internal execution
+snapshot format and reserves the `orca_auto_moinp_` basename prefix. Select the
+release version under the public-contract policy above before shipping this
+change. The engine copy is created at launch; recorded bound GBWs stay 0400.
+
+Use the existing idle-window procedure: wait for zero active simulations and
+reservations, settle publication, stop the worker and submitters, and preserve
+the prior runtime and queue/artifacts. Inventory pending version 3 submissions
+before switching. Cancel them with the ordinary queue CLI and explicitly
+resubmit their reviewed source inputs after the switch; do not mutate queue
+metadata, chmod bound inputs, or reuse an old generation. An interrupted older
+snapshot cannot be rebound by the new runtime. Preserve it for review and
+explicit resubmission; terminal failures are never automatically retried.
+Historical completed observations and their receipts are not rewritten.
+
+The Linux full/package gates and the `production` and recovery acceptance in
+[the runbook](../tools/checkpoint_acceptance.md) must precede operational use.
+A passing MaxIter 1 consumption test does not establish completed family science.
+
 ## Upgrading to 10.2.4
 
 Version 10.2.4 fixes `index rebuild` (resource requests, molecule keys and directory keys restored from submission evidence; unusable reports and inputs set aside instead of stopping the rebuild), refuses FIFO and dangling-symlink store and state files, and non-UTF-8 store files, instead of hanging or treating them as empty, and verifies completion against bound inputs up to the generation budget. A report publication now stops when the output changes while it is being built. Submission now refuses `%method RunTyp` values the runtime cannot classify (including `Opt`, `Geom`, `Geometry` and `GeometryOpt`) and block settings that change the route's job (`%geom TS_search` on a non-TS optimization, `RunTyp` with a route optimization, TS search, IRC, NEB or MD); request these with route keywords such as `! Opt` or `! OptTS`. The 1,000-atom Hessian limit now also applies to frequency requests made only through `%freq AnFreq true` or `%freq NumFreq true`. Rows already queued are not re-checked. Public fields, statuses, CLI options and configuration keys are unchanged.

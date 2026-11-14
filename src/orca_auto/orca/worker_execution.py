@@ -33,7 +33,7 @@ from .execution_binding import (
     validated_resource_request,
     verify_orca_execution_snapshot,
 )
-from .orca_runner import WorkerShutdownInterrupt
+from .orca_runner import StopCause, WorkerShutdownInterrupt
 from .output_adoption import completed_out_or_none
 from .queue.adapter import (
     cancellation_probe,
@@ -244,15 +244,33 @@ def process_dequeued_entry(
         )
         raise
     if shutdown_requested is not None and shutdown_requested():
-        raise WorkerShutdownInterrupt
+        raise WorkerShutdownInterrupt(cause=StopCause.WORKER_SHUTDOWN)
+
+    cancel_observed_at_stop = False
 
     def stop_requested() -> bool:
-        return _cancellation_requested(probe) or (
-            shutdown_requested is not None and shutdown_requested()
-        )
+        nonlocal cancel_observed_at_stop
+        if _cancellation_requested(probe):
+            cancel_observed_at_stop = True
+            return True
+        if shutdown_requested is not None and shutdown_requested():
+            return True
+        return False
+
+    def classify_stop_cause() -> StopCause:
+        if cancel_observed_at_stop:
+            return StopCause.CANCEL_REQUESTED
+        try:
+            if probe():
+                return StopCause.CANCEL_REQUESTED
+        except QueueLockTimeoutError:
+            pass
+        return StopCause.WORKER_SHUTDOWN
 
     try:
-        return execute_orca_run(context, stop_requested=stop_requested)
+        return execute_orca_run(
+            context, stop_requested=stop_requested, stop_cause=classify_stop_cause
+        )
     except EngineScratchCapacityError as exc:
         return _defer_admission(entry, queue_root, reason=str(exc))
 

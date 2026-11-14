@@ -16,9 +16,11 @@ from orca_auto.orca.queue import enqueue_publication
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_metadata
+from orca_auto.orca.run_dir_guard import PinnedPublication
 from orca_auto.orca.run_lock import acquire_run_lock
-from orca_auto.orca.submission import submit_reaction_dir_to_queue
+from orca_auto.orca.submission import SubmissionRequest, submit_reaction_dir_to_queue
 from tests.conftest import make_app_cfg, make_queue_entry
+from tests.submission_helpers import legacy_submission_request
 
 DEFAULT_INP = "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
 
@@ -71,8 +73,8 @@ def submit_to_queue(monkeypatch: pytest.MonkeyPatch) -> Callable[[SimpleNamespac
     def install(result: SimpleNamespace) -> list[Any]:
         calls: list[Any] = []
 
-        def fake_submit(args: Any, *, cfg: Any) -> SimpleNamespace:
-            calls.append(args)
+        def fake_submit(request: SubmissionRequest, *, cfg: Any, **kwargs: Any) -> SimpleNamespace:
+            calls.append(request)
             return result
 
         monkeypatch.setattr(submission_mod, "submit_reaction_dir_to_queue", fake_submit)
@@ -105,6 +107,42 @@ def worker_seams(monkeypatch: pytest.MonkeyPatch) -> _WorkerSeams:
     monkeypatch.setattr(submission_mod, "read_worker_pid_file", read_worker_pid)
     monkeypatch.setattr(queue_notifications, "notify_queue_enqueued_event", notify)
     return seams
+
+
+def test_cmd_run_inp_forwards_publication_and_rewrites_pinned_request_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    public_parent = tmp_path / "public_rxn"
+    public_parent.mkdir()
+    pinned = public_parent / "pinned_rxn"
+    pinned.mkdir()
+    recorded: list[tuple[SubmissionRequest, PinnedPublication | None]] = []
+
+    def fake_submit(
+        request: SubmissionRequest,
+        *,
+        cfg: object,
+        publication: PinnedPublication | None = None,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        del cfg, kwargs
+        recorded.append((request, publication))
+        return SimpleNamespace(status="rejected", stderr="pinned probe", reason="")
+
+    monkeypatch.setattr(submission_mod, "submit_reaction_dir_to_queue", fake_submit)
+    submit_config = make_app_cfg(tmp_path)
+    args = SimpleNamespace(
+        config=str(tmp_path / "cfg.yaml"),
+        path=str(public_parent),
+        force=False,
+        priority=1,
+        json=False,
+    )
+    publication = PinnedPublication(lambda _stage: None, pinned_target=pinned)
+
+    assert cmd_run_inp(args, cfg=submit_config, publication=publication) == 1
+    assert recorded == [(SubmissionRequest(path=str(pinned), force=False, priority=1), publication)]
 
 
 def test_json_submission_emits_one_parseable_document(
@@ -183,7 +221,8 @@ def test_submit_reaction_dir_to_queue_reports_inactive_worker_without_autostart(
     root = tmp_path
 
     submission = submit_reaction_dir_to_queue(
-        _make_args(config, reaction_dir, priority=3), cfg=load_config(str(config))
+        legacy_submission_request(_make_args(config, reaction_dir, priority=3)),
+        cfg=load_config(str(config)),
     )
 
     entries = list_queue(root)
@@ -244,7 +283,8 @@ def test_submit_reaction_dir_to_queue_reports_running_worker_pid(
     worker_seams.worker_pid = 4321
 
     submission = submit_reaction_dir_to_queue(
-        _make_args(config, reaction_dir), cfg=load_config(str(config))
+        legacy_submission_request(_make_args(config, reaction_dir)),
+        cfg=load_config(str(config)),
     )
 
     assert submission.status == "submitted"
@@ -269,7 +309,8 @@ def test_submit_reaction_dir_to_queue_separates_inp_and_xyzfile_artifacts(
     (reaction_dir / "geom.xyz").write_text("2\ncomment\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
 
     submission = submit_reaction_dir_to_queue(
-        _make_args(config, reaction_dir), cfg=load_config(str(config))
+        legacy_submission_request(_make_args(config, reaction_dir)),
+        cfg=load_config(str(config)),
     )
 
     assert submission.status == "submitted"
@@ -305,7 +346,8 @@ def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
     monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", failing_upsert)
 
     submission = submit_reaction_dir_to_queue(
-        _make_args(config, reaction_dir, priority=3), cfg=load_config(str(config))
+        legacy_submission_request(_make_args(config, reaction_dir, priority=3)),
+        cfg=load_config(str(config)),
     )
 
     entries = list_queue(tmp_path)
@@ -333,7 +375,7 @@ def test_submit_reaction_dir_to_queue_reads_metadata_from_input_even_when_flags_
     )
 
     submission = submit_reaction_dir_to_queue(
-        _make_args(config, reaction_dir, max_cores=20, max_memory_gb=80),
+        legacy_submission_request(_make_args(config, reaction_dir, max_cores=20, max_memory_gb=80)),
         cfg=load_config(str(config)),
     )
 

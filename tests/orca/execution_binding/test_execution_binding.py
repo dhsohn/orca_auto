@@ -121,7 +121,7 @@ def test_orca_execution_snapshot_binds_selected_dependencies_and_executable(
         str((job_dir / "initial.hess").resolve()),
         str((job_dir / "input.xyz").resolve()),
     ]
-    assert snapshot["version"] == 3
+    assert snapshot["version"] == 4
     assert set(snapshot["source_inputs"]) == {
         "selected_source",
         "dependency_000000",
@@ -155,7 +155,7 @@ def test_orca_execution_snapshot_binds_selected_dependencies_and_executable(
     bound_text = verified_selected.read_text(encoding="utf-8")
     assert str(job_dir) not in bound_text
     assert "* xyzfile 0 1 input.xyz" in bound_text
-    assert '%moinp "guess.gbw"' in bound_text
+    assert '%moinp "orca_auto_moinp_guess.gbw"' in bound_text
     assert '%pointcharges "charges.pc"' in bound_text
     assert 'InHessName "initial.hess"' in bound_text
     assert ".inputs/" not in bound_text
@@ -294,7 +294,7 @@ def test_orca_execution_snapshot_rejects_same_stem_hessian_for_frequency(tmp_pat
 
 @pytest.mark.parametrize(
     "dependency_name",
-    ["h2.out", "h2.gbw", "job_state.json", "execution_provenance.json"],
+    ["h2.out", "h2.gbw", "job_state.json", "execution_provenance.json", "orca_auto_moinp_seed.gbw"],
 )
 def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
     tmp_path: Path,
@@ -1033,7 +1033,7 @@ def _intent_file(job_dir: Path, snapshot: dict[str, Any]) -> Path:
     return job_dir / ".orca_auto_snapshot_intents" / f"{snapshot['snapshot_intent_token']}.json"
 
 
-@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("version", [2, 3, 4])
 def test_retire_snapshot_intent_for_row_retires_a_matching_generation(
     tmp_path: Path, version: int
 ) -> None:
@@ -1404,7 +1404,9 @@ def test_orca_execution_snapshot_binds_spaced_percent_moinp(tmp_path: Path) -> N
     )
 
     assert snapshot["dependency_paths"] == [str((job_dir / "guess.gbw").resolve())]
-    assert '% moinp "guess.gbw"' in Path(snapshot["selected_inp"]).read_text(encoding="utf-8")
+    assert '% moinp "orca_auto_moinp_guess.gbw"' in Path(snapshot["selected_inp"]).read_text(
+        encoding="utf-8"
+    )
     assert Path(snapshot["materialized_inputs"]["dependency_000000"]["path"]).name == ("guess.gbw")
 
 

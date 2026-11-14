@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -40,8 +39,9 @@ def test_activity_borrows_state_only_from_its_queue_generation(
         f"runs_root: {runs_root}\norca:\n  paths:\n    orca_executable: {executable}\n"
     )
     cfg = load_config(str(config_path))
-    args = Namespace(force=False, priority=10)
-    previous = create_queued_submission(cfg, args, job_dir, selected_inp=selected).entry
+    previous = create_queued_submission(
+        cfg, job_dir, selected_inp=selected, priority=10, force=False
+    ).entry
     previous = claim_next_entry(runs_root)
     assert previous is not None
     state = new_state(job_dir, Path(previous.metadata["selected_inp"]))
@@ -64,7 +64,9 @@ def test_activity_borrows_state_only_from_its_queue_generation(
     assert adapter.update_metadata(
         runs_root, previous.queue_id, {TERMINAL_REPLAY_METADATA_KEY: None}
     )
-    current = create_queued_submission(cfg, args, job_dir, selected_inp=selected).entry
+    current = create_queued_submission(
+        cfg, job_dir, selected_inp=selected, priority=10, force=False
+    ).entry
     if claimed:
         current = claim_next_entry(runs_root)
         assert current is not None

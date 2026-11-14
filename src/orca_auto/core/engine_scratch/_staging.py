@@ -7,7 +7,9 @@ that the durable sources did not change while the engine ran.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+import os
+import stat
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,11 +120,25 @@ def _input_closure_size_bytes(
     captured_inputs: dict[str, _CapturedInput],
     *,
     normalize_primary_newline: bool,
+    private_input_copies: Mapping[str, str] | None = None,
 ) -> int:
     required = sum(len(item.payload) for item in captured_inputs.values())
     selected_payload = captured_inputs[selected_name].payload
     if normalize_primary_newline and selected_payload and not selected_payload.endswith(b"\n"):
         required += 1
+    # Copies are materialized by the domain runner just before launch, but their
+    # space must be reserved with the immutable closure, before run state exists.
+    for target, source in (private_input_copies or {}).items():
+        if (
+            Path(target).name != target
+            or target in {"", ".", ".."}
+            or target in captured_inputs
+            or source not in captured_inputs
+        ):
+            raise EngineScratchError("Invalid private engine input copy mapping")
+        required += len(captured_inputs[source].payload)
+    if required > INPUT_CLOSURE_MAX_BYTES:
+        raise EngineScratchError("engine input closure and private copies exceed staging limit")
     return required
 
 
@@ -175,7 +191,10 @@ def _verify_staged_sources_unchanged(
             item.name,
             display_path=durable_dir / item.name,
         )
-        if digest != item.source_sha256 or size != item.source_size_bytes:
+        mode = stat.S_IMODE(
+            os.stat(item.name, dir_fd=durable_dir_fd, follow_symlinks=False).st_mode
+        )
+        if digest != item.source_sha256 or size != item.source_size_bytes or mode != item.mode:
             raise EngineScratchError(
                 f"Durable engine input changed during scratch run: {item.source}"
             )

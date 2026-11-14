@@ -384,7 +384,7 @@ def test_cancel_state_failure_retains_slot_after_terminal_mark(
         assert recording_channel.sends == []
         [cancelled_entry] = list_queue(queue_root)
         assert cancelled_entry.status == QueueStatus.CANCELLED
-        assert job.pending_terminal_replay is not None
+        assert job.finalization is not None and job.finalization.item is not None
 
     worker._check_completed_jobs()
 

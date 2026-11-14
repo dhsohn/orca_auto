@@ -12,7 +12,7 @@ from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.execution_binding import (
     orca_execution_provenance,
 )
-from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
+from orca_auto.orca.orca_runner import StopCause, WorkerShutdownInterrupt
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_generation_token
 from orca_auto.orca.run_context import RunExecutionContext
@@ -133,6 +133,9 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     assert isinstance(execution, RunExecutionContext)
     assert execution.reaction_dir == reaction_dir.resolve()
     assert callable(calls["kwargs"].pop("stop_requested"))
+    stop_cause = calls["kwargs"].pop("stop_cause")
+    assert callable(stop_cause)
+    assert stop_cause() is StopCause.WORKER_SHUTDOWN
     assert calls["kwargs"] == {}
     assert execution.resource_request == {"max_cores": 1, "max_memory_gb": 1}
     assert execution.orca_executable == str((tmp_path / "fake-orca").resolve())
@@ -212,6 +215,9 @@ def test_process_dequeued_entry_returns_the_run_exit_code(
     assert isinstance(execution, RunExecutionContext)
     assert execution.reaction_dir == reaction_dir.resolve()
     assert callable(calls["kwargs"].pop("stop_requested"))
+    stop_cause = calls["kwargs"].pop("stop_cause")
+    assert callable(stop_cause)
+    assert stop_cause() is StopCause.WORKER_SHUTDOWN
     execution_provenance = execution.execution_provenance
     assert execution.cfg is cfg
     assert execution.resource_request == {"max_cores": 1, "max_memory_gb": 1}

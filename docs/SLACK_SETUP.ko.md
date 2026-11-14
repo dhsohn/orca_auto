@@ -47,7 +47,7 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 | 동작 | ORCA_auto의 처리 |
 | :--- | :--- |
 | 엔드포인트 | 고정 URL `https://slack.com/api/chat.postMessage`로 JSON을 보내며, 설정한 채널만 목적지입니다 |
-| 메시지 형태 | Block Kit 제목과 작업 필드. 동적 값과 대체 요약은 일반 텍스트로 표시합니다 |
+| 메시지 형태 | 최상위 Block Kit 제목·작성자, 필드가 있을 때만 심각도 색상 막대 attachment 하나. 이스케이프한 최상위 `text`는 알림·스크린 리더 폴백입니다 |
 | 리디렉션 | 어떤 호스트나 스킴으로도 따라가지 않습니다. 리디렉션은 `slack_http_<status>`로 보고되고 토큰은 다른 곳으로 전달되지 않습니다 |
 | 전송 확인 | 응답에 `"ok": true`, 설정한 ID와 같은 `channel`, 숫자·점·숫자 여섯 자리 형식의 `ts`가 있을 때만 전송된 것으로 봅니다 |
 | 요청 제한 | 올바른 `Retry-After`가 있는 HTTP 429만, 그 시간만큼 기다린 뒤 `max_attempts`회(최대 10회)와 총 대기 120초 안에서 재시도합니다 |
@@ -55,6 +55,10 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 | 소유권 | 큐 등록과 종료 메시지는 제한된 백그라운드 전송기가 보내기 전에 영속 상태에서 한 번만 점유됩니다. 시작 메시지는 워커 자식 프로세스가 한 번 보냅니다. 충돌, 전송 실패, 전송기 포화 시 메시지가 사라질 수 있으며 다시 보내지 않습니다. 전송은 작업 상태를 바꾸지 않습니다 |
 
 알림은 최선 노력(best effort) 방식이며 정확히 한 번 전달을 보장하지 않습니다. 계산 상태는 `orca_auto queue list`와 generation 보고서로 확인하세요.
+
+제목과 선택적 작성자는 최상위 `blocks`에 두고, 필드 섹션은 색상 막대가 있는 attachment 하나에만 넣습니다(왼쪽 막대: 정보·알 수 없는 심각도 파랑, 성공 초록, 경고 황색, 오류 빨강). 제목에는 각각 ℹ️, ✅, ⚠️, ❌ 기호를 붙입니다. 필드가 없으면 attachment를 보내지 않습니다. 동적 라벨과 값은 `emoji: false`인 `plain_text`만 사용하며 Markdown·멘션·링크 파싱은 계속 비활성화합니다. 필드 순서를 유지하고, `inline=True`이면서 `label: value`가 한 줄·40자 이하인 필드만 2열로 묶습니다. 긴 작업명·큐 ID·디렉터리 등 나머지 필드는 전폭 `Label: value` 행으로 표시합니다. 크롬과 attachment 블록이 50블록 예산을 함께 쓰며 생략한 내용은 `…`로 표시합니다.
+
+색상 막대가 필요할 때 `attachment.blocks`를 사용하라는 [공식 마이그레이션 안내](https://docs.slack.dev/legacy/legacy-messaging/migrating-outmoded-message-compositions-to-blocks/)에 따라 Slack 네이티브 attachment를 명시적으로 선택했습니다. [Attachment는 Slack의 레거시 기능](https://docs.slack.dev/legacy/legacy-messaging/legacy-secondary-message-attachments/)이며 시각적 우선순위가 낮습니다. Discord와 똑같은 테두리나 모든 클라이언트의 동일한 표시를 보장하지 않습니다. Payload 테스트는 구조·이스케이프·제한을 검증합니다. 수정한 카드의 실제 Slack 수락, 데스크톱·모바일 화면과 알림 미리보기는 아직 검증하지 않았습니다. [ADR 0019](adr/0019-slack-block-kit-cards.md)를 참고하세요.
 
 ## 5. 변경 사항 적용 및 테스트
 

@@ -8,8 +8,38 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Live terminal settlement now releases the admission slot before handing the
+  work item to in-memory replay bookkeeping, so a failed release retries with
+  the item owned only on the job.
+- Worker shutdown no longer maps a signal-killed child's poll result through
+  a synthetic exit code when the run state is still resumable (crash-recovery
+  rebind or a resumed attempt before it turns running). Signal-killed children
+  with a non-resumable terminal state owned by this task still finalize through
+  the ordinary completion path with the true negative exit code recorded on the
+  row.
+- The periodic recovery pass no longer skips entirely while any tracked child
+  has exited; it fences only tracked jobs' slots, queue ids and reaction
+  directories so unrelated orphaned rows and terminal replays still advance.
+
+### Added
+
+- ORCA child runs may record an optional `stop_cause` scratch-publication field
+  (`worker_shutdown` or `cancel_requested`) when scratch provenance exists for
+  an interrupt. In-place runs, stops before launch, and paths without scratch
+  publication omit the field. The public `outcome` vocabulary remains
+  `worker_shutdown`. `published_at` is stamped after process termination and
+  publication, not at stop-observation time.
+
 ### Changed
 
+- The ORCA `.out` trailer written on interrupt now says "interrupted by
+  cancellation request" when the queue cancel flag was visible at stop
+  observation, and "interrupted by worker shutdown" otherwise (including a
+  shutdown signal before cancel was observed, or queue lock contention on a
+  signal-only stop). Attempt interrupt logs now use the `stop_cause` enum value
+  (for example `worker_shutdown`) instead of the earlier spaced wording.
 - A terminal replay that the worker skips on consecutive reconcile passes,
   because the row is not the confirmed generation owner of its directory, is
   now logged once at WARNING with the row, task and directory. It was logged

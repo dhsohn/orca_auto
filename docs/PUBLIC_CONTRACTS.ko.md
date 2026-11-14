@@ -84,6 +84,12 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 ---
 
+자동 복구 궤도 주입은 직전 generation의 마지막으로 인식한 단계 경계 뒤에 GUESS 완료 근거가 있어야 합니다. 명시적 재사용·새 초기 추정·AutoStart 해제·상태 제어는 보존하며, 모호한 SCF 정책에서는 자동 주입을 생략합니다. 선택적 근거가 없거나 부적격이면 기존 기하 복구 정책을 따르고 새 복구 메타데이터의 `checkpoint_decision`에 이유를 기록합니다. 이는 GBW 유효성 검증이 아닌 재사용 적격성 근거입니다. 의존 파일 모드는 0400을 유지하며 이전 generation과 이미 바인딩된 입력을 보존합니다([ADR 0020](adr/0020-recovery-orbital-eligibility-and-guess-intent.md)).
+
+ORCA 6.1.1에서 인식한 최종 에너지 평가·수치 진동수·변위 기하의 기울기 계산·IRC 시작은 이전 GUESS 근거를 무효화합니다. 출력 축소 안내도 같은 경계이며, 재사용하려면 캡처한 출력의 마지막 경계 뒤에 새 GUESS 완료 근거가 있어야 합니다. 별도 `.lastscf` 내용이나 축약된 IRC 수렴 요약은 이 근거를 대신하지 않습니다.
+
+실행 스냅샷 버전 4의 MOInp는 엔진 실행 시점의 전용 사본을 사용합니다. 바인딩된 `.inp`는 `orca_auto_moinp_<bound-dependency-basename>`을 가리키며 불변 의존 파일은 원래 basename·바이트·식별자와 0400 모드를 유지합니다. 러너는 실행 직전에 별도 inode의 단일 링크 0600 사본을 만듭니다. RAM scratch를 켜면 scratch에, 끄면 같은 generation에 만듭니다. 기존 대상과 symlink·hardlink 별칭은 거부하며 `orca_auto_moinp_` 접두사는 엔진 사본용으로 예약합니다. Scratch 용량에는 추가 사본도 포함하고, 발행은 불변 입력을 별도로 검증한 뒤 엔진이 변경한 사본을 기존 임시 파일 필터를 따르는 런타임 산출물로 처리합니다. 최상위·SCF 블록의 명시적 MOInp와 자동 복구 seed 모두에 적용하며 초기 추정 정책·방법·기하·전자 상태는 변경하지 않습니다. 과거 버전의 대기 스냅샷은 명시적으로 재제출해야 하며 과거 영수증은 보존합니다([ADR 0021](adr/0021-private-engine-moinp-copies.md), [업그레이드 절차](RELEASE.md)).
+
 ## 4. 구조화된 관측 결과 (`machine.json`) 스키마
 
 계산이 완료되면 해당 generation 디렉터리에 구조화 데이터 파일 `machine.json`이 생성됩니다:

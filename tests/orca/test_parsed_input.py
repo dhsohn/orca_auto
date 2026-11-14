@@ -130,19 +130,19 @@ def test_submission_reads_its_input_version_through_one_parse(
     # The job type, Detail, geometry path, molecule key and resource request
     # of a submission all read one parse; the Detail adds its presentation
     # version. Before, each reader tokenized the input again.
-    from types import SimpleNamespace
-
     from orca_auto.orca import submission
     from tests.conftest import make_app_cfg
 
     text = _input(200)
     selected = tmp_path / "job.inp"
     selected.write_text(text, encoding="utf-8")
-    monkeypatch.setattr(submission, "assert_run_dir_publication_allowed", lambda _label: None)
     calls = _counting_tokenizer(monkeypatch)
 
     prepared = submission._prepare_submission_inputs(
-        make_app_cfg(tmp_path), SimpleNamespace(priority=None, force=False), selected
+        make_app_cfg(tmp_path),
+        selected,
+        priority=None,
+        force=False,
     )
 
     # The formula is read later, from the bound generation.

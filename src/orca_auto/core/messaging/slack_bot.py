@@ -42,7 +42,7 @@ from orca_auto.core.config.schema import (
 )
 
 from .channel import SendResult
-from .render_slack import render_slack_blocks, render_slack_text
+from .render_slack import render_slack_attachment, render_slack_chrome_blocks, render_slack_text
 from .richtext import Message
 
 _LOGGER = logging.getLogger(__name__)
@@ -108,16 +108,21 @@ class SlackBotChannel:
         return self.config.slack_notification_enabled
 
     def _payload(self, message: Message) -> dict[str, object]:
-        return {
+        chrome = render_slack_chrome_blocks(message)
+        payload: dict[str, object] = {
             "channel": self.config.default_channel_id,
             "text": render_slack_text(message),
-            "blocks": render_slack_blocks(message),
+            "blocks": chrome,
             # Plain text: no Markdown, no name/channel linking, no previews.
             "mrkdwn": False,
             "parse": "none",
             "unfurl_links": False,
             "unfurl_media": False,
         }
+        attachment = render_slack_attachment(message, chrome_block_count=len(chrome))
+        if attachment is not None:
+            payload["attachments"] = [attachment]
+        return payload
 
     def _post_once(self, data: bytes) -> SendResult:
         request = Request(

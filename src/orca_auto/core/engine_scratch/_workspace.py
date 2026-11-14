@@ -12,7 +12,8 @@ import os
 import secrets
 import shutil
 import stat
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
@@ -148,23 +149,46 @@ class EngineScratchWorkspace:
                         output_dir,
                         durable_dir_identity,
                     )
-                    live_task_memory_bytes = _sweep_scratch_root(root, root_fd)
+                    live_task_memory_bytes, peer_reserved_bytes = _sweep_scratch_root(root, root_fd)
                     captured_inputs = _capture_input_closure(
                         input_dir_fd,
                         durable.parent,
                         durable.name,
                         dependency_names_from_primary=policy.dependency_names_from_primary,
                     )
+                    private_input_copies = (
+                        policy.private_input_copies_from_primary(
+                            captured_inputs[durable.name].payload
+                        )
+                        if policy.private_input_copies_from_primary is not None
+                        else {}
+                    )
                     required_bytes = _input_closure_size_bytes(
                         durable.name,
                         captured_inputs,
                         normalize_primary_newline=policy.normalize_primary_newline,
+                        private_input_copies=private_input_copies,
                     )
+                    private_input_bytes = sum(
+                        len(captured_inputs[source].payload)
+                        for source in private_input_copies.values()
+                    )
+                    allocation_unit = os.fstatvfs(root_fd).f_frsize
+                    private_input_reserved_bytes = sum(
+                        (
+                            (len(captured_inputs[source].payload) + allocation_unit - 1)
+                            // allocation_unit
+                        )
+                        * allocation_unit
+                        for source in private_input_copies.values()
+                    )
+                    required_bytes += private_input_reserved_bytes - private_input_bytes
                     free_bytes = _filesystem_free_bytes(root_fd)
-                    if free_bytes < policy.min_free_bytes + required_bytes:
+                    if free_bytes < policy.min_free_bytes + required_bytes + peer_reserved_bytes:
                         raise EngineScratchCapacityError(
                             "engine scratch has insufficient free space: "
                             f"free={free_bytes}, required_inputs={required_bytes}, "
+                            f"peer_reserved_inputs={peer_reserved_bytes}, "
                             f"minimum_free={policy.min_free_bytes}"
                         )
                     # Live workspaces may still grow to their own task-memory
@@ -196,6 +220,7 @@ class EngineScratchWorkspace:
                         output_dir,
                         workspace_dir_fd=workspace_dir_fd,
                         max_task_memory_bytes=policy.max_task_memory_bytes,
+                        private_input_reserved_bytes=private_input_reserved_bytes,
                     )
                     staged = _stage_input_closure(
                         durable,
@@ -203,7 +228,9 @@ class EngineScratchWorkspace:
                         captured_inputs=captured_inputs,
                         normalize_primary_newline=policy.normalize_primary_newline,
                     )
-                    if _filesystem_free_bytes(root_fd) < policy.min_free_bytes:
+                    if _filesystem_free_bytes(root_fd) < (
+                        policy.min_free_bytes + peer_reserved_bytes + private_input_reserved_bytes
+                    ):
                         raise EngineScratchCapacityError(
                             "engine scratch fell below its minimum free-space reserve while staging"
                         )
@@ -257,6 +284,49 @@ class EngineScratchWorkspace:
                                     f"capacity refusal: {workspace}"
                                 ) from removal_error
                     raise
+        finally:
+            os.close(root_fd)
+
+    @contextmanager
+    def consume_private_input_reservation(self) -> Iterator[None]:
+        """Materialize deferred copies while peers cannot spend their budget.
+
+        On success the actual files replace the manifest's reservation before
+        the root lock is released. On failure the conservative reservation stays
+        until workspace cleanup, including partial-copy publication/cleanup.
+        """
+        self._require_open()
+        root_fd, _observed_identity = _open_pinned_directory(
+            self.policy.root,
+            label="engine scratch root",
+            expected_identity=self.scratch_root_identity,
+        )
+        try:
+            with file_lock_at(
+                root_fd,
+                _SCRATCH_ROOT_LOCK_FILE_NAME,
+                display_path=self.policy.root / _SCRATCH_ROOT_LOCK_FILE_NAME,
+                timeout_seconds=_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS,
+            ):
+                _require_directory_path_identity(
+                    self.policy.root,
+                    root_fd,
+                    self.scratch_root_identity,
+                    label="engine scratch root",
+                )
+                _require_directory_path_identity(
+                    self.path,
+                    self.workspace_dir_fd,
+                    self.workspace_identity,
+                    label="engine scratch workspace",
+                )
+                yield
+                _write_workspace_manifest(
+                    self.durable_output_dir,
+                    workspace_dir_fd=self.workspace_dir_fd,
+                    max_task_memory_bytes=self.policy.max_task_memory_bytes,
+                    private_input_reserved_bytes=0,
+                )
         finally:
             os.close(root_fd)
 
@@ -362,13 +432,14 @@ class EngineScratchWorkspace:
             raise EngineScratchError("engine scratch workspace is already closed")
 
 
-def _sweep_scratch_root(root: Path, root_fd: int) -> int:
-    """Finish interrupted cleanups and return the summed task-memory caps of live workspaces.
+def _sweep_scratch_root(root: Path, root_fd: int) -> tuple[int, int]:
+    """Finish cleanups and sum live task-memory caps and deferred input reservations.
 
     Any workspace whose ownership cannot be resolved, or whose owner is gone,
     is preserved for inspection and blocks the new launch.
     """
     live_task_memory_bytes = 0
+    reserved_input_bytes = 0
     for name in os.listdir(root_fd):
         if _CLEANUP_TOMBSTONE_NAME_RE.fullmatch(name):
             # A tombstone is a workspace renamed for deletion whose rmtree was
@@ -388,7 +459,8 @@ def _sweep_scratch_root(root: Path, root_fd: int) -> int:
         if report.blocks_launch:
             raise EngineScratchError(report.detail)
         live_task_memory_bytes += report.max_task_memory_bytes or 0
-    return live_task_memory_bytes
+        reserved_input_bytes += report.private_input_reserved_bytes
+    return live_task_memory_bytes, reserved_input_bytes
 
 
 def _remove_owned_workspace(

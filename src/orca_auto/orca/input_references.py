@@ -3,8 +3,7 @@
 Sits on :mod:`.input_blocks` and :mod:`.input_syntax`. This module owns every
 reading of "which files does this input pull in": the semantic ``MOInp``
 occurrences (top-level ``%moinp`` and ``%scf MOInp``) that
-:func:`set_moinp` rewrites and :func:`orca_input_requests_moread` reads,
-whether a referenced ``.gbw`` checkpoint is intact enough to seed from, and
+:func:`set_moinp` rewrites and :func:`orca_input_requests_moread` reads, and
 the fail-closed :func:`scan_orca_file_references` scanner. Execution binding
 binds every reference the scanner returns into the generation, and claim-time
 verification compares the bound input's references with the snapshot; neither
@@ -35,7 +34,6 @@ from .input_syntax import (
 
 MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
 MAX_ORCA_INPUT_REFERENCES = 128
-CHECKPOINT_HEAD_BYTES = 16
 
 _NEB_FILE_REFERENCE_KEYS = frozenset({"product", "ts"})
 _SIMPLE_FILE_REFERENCE_KEYS = frozenset({"%moinp", "%pointcharges"})
@@ -153,27 +151,6 @@ def nonempty_file(path: Path) -> bool:
         return path.exists() and path.stat().st_size > 0
     except OSError:
         return False
-
-
-def checkpoint_file_looks_intact(path: Path) -> bool:
-    """Whether a ``.gbw`` checkpoint is worth seeding orbitals from.
-
-    A crash while ORCA writes its checkpoint can leave a file of the right
-    size whose blocks were never flushed: the filesystem then reads them back
-    as zeros. ORCA's checkpoint starts with a non-zero header, so a leading
-    window without a single non-zero byte is a torn file, not orbitals;
-    seeding it with ``MORead`` would make the restarted run fail on a corrupt
-    guess instead of degrading to a geometry-only restart. Only the leading
-    bytes are inspected; a short non-zero file still counts as a checkpoint.
-    """
-    if not nonempty_file(path):
-        return False
-    try:
-        with path.open("rb") as handle:
-            head = handle.read(CHECKPOINT_HEAD_BYTES)
-    except OSError:
-        return False
-    return any(head)
 
 
 def _scf_body_token_rows(parsed: ParsedInput) -> list[tuple[int, list[OrcaLineToken]]]:
@@ -521,7 +498,6 @@ __all__ = [
     "MAX_ORCA_INPUT_REFERENCES",
     "MOINP_RE",
     "OrcaFileReference",
-    "checkpoint_file_looks_intact",
     "nonempty_file",
     "orca_input_requests_moread",
     "orca_moinp_references",

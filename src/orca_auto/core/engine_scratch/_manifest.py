@@ -42,6 +42,7 @@ def _write_workspace_manifest(
     *,
     workspace_dir_fd: int,
     max_task_memory_bytes: int,
+    private_input_reserved_bytes: int = 0,
 ) -> None:
     boot_id = process_utils.linux_boot_id()
     owner_ticks = process_utils.current_process_start_ticks()
@@ -54,6 +55,7 @@ def _write_workspace_manifest(
         "owner_boot_id": boot_id,
         "durable_dir": str(durable_dir.resolve()),
         "max_task_memory_bytes": max_task_memory_bytes,
+        "private_input_reserved_bytes": private_input_reserved_bytes,
     }
     _atomic_write_bytes_at(
         workspace_dir_fd,
@@ -107,11 +109,14 @@ def _classify_workspace_manifest(
     """
 
     task_memory = payload.get("max_task_memory_bytes") if payload is not None else None
+    reserved = payload.get("private_input_reserved_bytes", 0) if payload is not None else None
     if (
         payload is None
         or payload.get("schema_version") != _WORKSPACE_MANIFEST_SCHEMA_VERSION
         or type(task_memory) is not int
         or task_memory < 1
+        or type(reserved) is not int
+        or reserved < 0
     ):
         return (
             SCRATCH_STATE_INVALID_MANIFEST,
@@ -251,6 +256,8 @@ def _inspect_workspace_entry(
             owner_boot_id=_manifest_str(payload, "owner_boot_id"),
             durable_dir=_manifest_str(payload, "durable_dir"),
             max_task_memory_bytes=_manifest_int(payload, "max_task_memory_bytes"),
+            private_input_reserved_bytes=_manifest_int(payload, "private_input_reserved_bytes")
+            or 0,
             size_bytes=size_bytes,
             size_walk_truncated=size_truncated,
             blocks_launch=state != SCRATCH_STATE_LIVE,
