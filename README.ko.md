@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v10.2.4/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
+  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v11.0.0/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@ ORCA_auto는 **ORCA 계산을 큐에 넣고, 터미널을 닫은 뒤에도 진�
 **Python 3.11 이상**, **Linux 또는 WSL2**, 별도로 설치한 **ORCA**가 필요합니다. 백그라운드 워커는 **systemd**로 관리합니다.
 
 ```bash
-python -m pip install orca_auto==10.2.4
+python -m pip install orca_auto==11.0.0
 ```
 
 [설치 안내](https://github.com/dhsohn/orca_auto/blob/main/docs/INSTALLATION.ko.md)에서 실행 환경을 준비한 뒤, [빠른 시작](https://github.com/dhsohn/orca_auto/blob/main/docs/QUICKSTART.ko.md)을 따라 설정 파일 생성 → 워커 등록 → 입력 디렉터리 제출 → 결과 확인 순서로 진행하세요.
@@ -36,6 +36,7 @@ python -m pip install orca_auto==10.2.4
 
 | 현재 버전 | 읽을 안내 | 주요 변경 |
 | --- | --- | --- |
+| 10.x | [11.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-110) | 실행 스냅샷 v4, `orca_auto_moinp_` 접두사 예약; 대기 중인 v3 제출 취소 후 검토된 입력 재제출, idle 구간 런타임 전환; 기록 보존 |
 | 10.2.x | [10.2.4](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-1024) | 인덱스 재구성, 저장소 읽기, 완료 판정 입력 수정. 상태 마이그레이션 없음 |
 | 10.1.x | [10.2](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-102) | 큐 Detail 표시 확장, 불완전한 최종 좌표 거부 |
 | 10.0.x | [10.1](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-101) | 마지막 진동수 섹션으로 근거 판정 |
