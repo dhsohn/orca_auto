@@ -11,7 +11,17 @@ import pytest
 from orca_auto.core.config import CommonResourceConfig, MessengerConfig
 from orca_auto.orca import submission as run_inp
 from orca_auto.orca.queue import notifications as queue_notifications
+from orca_auto.orca.submission import SubmissionRequest
 from tests.conftest import make_app_cfg, write_config_file, write_fake_orca
+
+
+def legacy_submission_request(args: Any) -> SubmissionRequest:
+    return SubmissionRequest(
+        path=str(getattr(args, "path", "") or ""),
+        input_name=getattr(args, "input", None),
+        priority=getattr(args, "priority", None),
+        force=bool(getattr(args, "force", False)),
+    )
 
 
 def real_submission(
@@ -19,7 +29,7 @@ def real_submission(
     monkeypatch: pytest.MonkeyPatch,
     *,
     messenger: MessengerConfig | None = None,
-) -> tuple[Path, Any]:
+) -> tuple[Path, Any, SubmissionRequest]:
     """A real ``orca_auto.yaml`` under ``tmp_path`` that ``load_config`` reads for every call."""
 
     config = write_config_file(
@@ -47,4 +57,5 @@ def real_submission(
         force=False,
         priority=7,
     )
-    return reaction_dir, args
+    request = legacy_submission_request(args)
+    return reaction_dir, args, request

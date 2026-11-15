@@ -46,7 +46,7 @@ def _join_senders() -> None:
 
 
 def test_slow_queued_delivery_does_not_delay_submission_or_reservation(tmp_path, monkeypatch):
-    _root, args = real_submission(tmp_path, monkeypatch)
+    _root, args, request = real_submission(tmp_path, monkeypatch)
     entered, release = threading.Event(), threading.Event()
     sends = []
 
@@ -64,7 +64,7 @@ def test_slow_queued_delivery_does_not_delay_submission_or_reservation(tmp_path,
     from orca_auto.orca.notifications import notify_queue_enqueued_event
 
     monkeypatch.setattr(notifications, "notify_queue_enqueued_event", notify_queue_enqueued_event)
-    result = submission.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = submission.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
     assert result.status == "submitted"
     assert not entered.is_set()  # CLI only hands off a durable intent.
     cfg = load_config(args.config)

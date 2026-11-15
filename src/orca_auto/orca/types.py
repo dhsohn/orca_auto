@@ -25,6 +25,7 @@ class ScratchPublicationRecord(TypedDict, total=False):
     attempt_index: int
     inp_path: str
     outcome: str
+    stop_cause: str
     published_at: str
     publication: dict[str, Any]
 

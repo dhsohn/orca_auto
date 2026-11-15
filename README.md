@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v10.2.4/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
+  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v11.0.0/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@ ORCA_auto **queues ORCA calculations and keeps them running after you close the 
 Requires **Python 3.11+**, **Linux or WSL2**, and a separately installed **ORCA** engine. Background workers run under **systemd**.
 
 ```bash
-python -m pip install orca_auto==10.2.4
+python -m pip install orca_auto==11.0.0
 ```
 
 Prepare your environment with the [installation guide](https://github.com/dhsohn/orca_auto/blob/main/docs/INSTALLATION.md), then follow the [quickstart](https://github.com/dhsohn/orca_auto/blob/main/docs/QUICKSTART.md): create a configuration, register the worker, submit an input directory and inspect the result.
@@ -36,6 +36,7 @@ Follow the guide for your installed version.
 
 | Installed version | Guide | Main change |
 | --- | --- | --- |
+| 10.x | [11.0](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-110) | Execution snapshot v4; reserved `orca_auto_moinp_` prefix; cancel pending v3 submissions and resubmit reviewed inputs; preserve history; idle-window runtime cutover |
 | 10.2.x | [10.2.4](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-1024) | Index rebuild, store-read and completion-input fixes; no state migration |
 | 10.1.x | [10.2](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-102) | Expanded queue Detail labels; incomplete final coordinates rejected |
 | 10.0.x | [10.1](https://github.com/dhsohn/orca_auto/blob/main/docs/RELEASE.md#upgrading-to-101) | The last frequency section determines frequency evidence |

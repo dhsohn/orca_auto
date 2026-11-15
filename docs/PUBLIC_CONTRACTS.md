@@ -84,6 +84,12 @@ Admission state always lives in `<runs_root>/.admission`, and its limit is `sche
 
 ---
 
+Automatic recovery orbitals require affirmative completed-GUESS evidence after the immediate predecessor's latest recognized phase boundary. Explicit reuse, fresh guesses, AutoStart opt-outs and state controls are preserved; ambiguous SCF policy suppresses automatic seeding. Missing or ineligible optional evidence falls back to the existing geometry policy, with a `checkpoint_decision` reason in new recovery metadata. This is eligibility evidence, not GBW validation. Dependency mode stays 0400, and prior generations and already-bound inputs are preserved ([ADR 0020](adr/0020-recovery-orbital-eligibility-and-guess-intent.md)).
+
+Recognized ORCA 6.1.1 final-energy evaluation, numerical-frequency, displaced-gradient and IRC starts invalidate earlier GUESS evidence. Reduced-output notices also invalidate it; reuse requires a fresh completed GUESS after the latest boundary in the captured output. Redirected `.lastscf` contents and reduced IRC convergence summaries are not substitutes for that evidence.
+
+MOInp uses a private engine-time copy in execution snapshot version 4. The bound `.inp` names `orca_auto_moinp_<bound-dependency-basename>`; the immutable dependency keeps its original basename, bytes, identity and 0400 mode. The runner creates a new single-link 0600 copy immediately before launch, in RAM scratch when enabled or in the same generation when scratch is disabled. Existing targets and symlink/hardlink aliases are refused. The `orca_auto_moinp_` prefix is reserved for engine copies. Scratch capacity includes the extra copy; publication verifies the immutable inputs separately and handles the engine-mutated copy as a runtime artifact under the existing transient-file filter. This applies to explicit top-level/SCF MOInp and automatic recovery seeds without changing guess policy, method, geometry or state. Older pending snapshots require explicit resubmission; historical receipts are preserved ([ADR 0021](adr/0021-private-engine-moinp-copies.md), [upgrade procedure](RELEASE.md)).
+
 ## 4. Machine Observation (`machine.json`) Schema
 
 Upon completion, each job publishes a structured `machine.json` artifact in its generation directory:

@@ -29,6 +29,7 @@ from orca_auto.orca import orca_runner
 from orca_auto.orca.orca_runner import (
     OrcaRunner,
     ShutdownSignalGuard,
+    StopCause,
     WorkerShutdownInterrupt,
 )
 from orca_auto.orca.scratch import OrcaScratchPolicy
@@ -73,7 +74,10 @@ def pinned_test_executable(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def open_test_executable(runner: OrcaRunner) -> int:
         if runner.orca_executable == _TEST_EXECUTABLE:
-            return os.open("/bin/true", os.O_RDONLY)
+            for candidate in ("/bin/true", "/usr/bin/true"):
+                if Path(candidate).is_file():
+                    return os.open(candidate, os.O_RDONLY)
+            raise FileNotFoundError("no stub executable for pinned ORCA tests")
         return original_open(runner)
 
     monkeypatch.setattr(OrcaRunner, "_open_pinned_executable", open_test_executable)
@@ -309,14 +313,17 @@ def test_ram_scratch_publishes_checkpoint_before_shutdown_propagates(
     )
 
 
-def test_ram_scratch_executes_through_pinned_workspace_after_root_replacement(
+def test_ram_scratch_rejects_engine_launch_when_scratch_root_is_replaced(
     ram_scratch: Path,
     durable_inp: Path,
     make_fake_orca: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executable = make_fake_orca("#!/bin/sh\nprintf 'ORCA TERMINATED NORMALLY\\n'\n")
     durable = durable_inp.parent
+    launch_sentinel = durable / "engine_started"
+    executable = make_fake_orca(
+        f"#!/bin/sh\nprintf started > {launch_sentinel}\nprintf 'ORCA TERMINATED NORMALLY\\n'\n"
+    )
     moved_root = ram_scratch / "orca_auto-moved"
 
     runner = make_orca_runner(executable, durable, scratch_policy=_scratch_policy(ram_scratch))
@@ -335,13 +342,17 @@ def test_ram_scratch_executes_through_pinned_workspace_after_root_replacement(
     with pytest.raises(EngineScratchError, match="workspace pathname identity changed"):
         runner.run(durable_inp)
 
+    assert not launch_sentinel.exists()
     moved_workspace = next(
         path for path in moved_root.iterdir() if path.name.startswith("attempt-")
     )
-    assert "ORCA TERMINATED NORMALLY" in (moved_workspace / "test.out").read_text(encoding="utf-8")
     replacement_workspace = ram_scratch / "orca_auto" / moved_workspace.name
+    assert replacement_workspace.is_dir()
+    assert not (moved_workspace / "test.out").exists()
     assert not (replacement_workspace / "test.out").exists()
     assert not (durable / "test.out").exists()
+    assert not (moved_workspace / durable_inp.name).with_suffix(".gbw").exists()
+    assert not (replacement_workspace / durable_inp.name).with_suffix(".gbw").exists()
 
 
 # -- snapshot verification --------------------------------------------------
@@ -491,6 +502,58 @@ def test_run_sigterm_terminates_orca_tree(
     assert mock_signal.call_args_list[0].args[0] == signal.SIGTERM
     assert call(signal.SIGTERM, signal.SIG_DFL) in mock_signal.call_args_list
     assert call(signal.SIGINT, signal.SIG_DFL) in mock_signal.call_args_list
+
+
+def test_sigterm_with_cancel_stop_cause_sets_interrupt_cause(
+    mock_popen: MagicMock, mock_signal: MagicMock, inp: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_proc = _mock_process()
+
+    def _wait(*_args: object, **_kwargs: object) -> int:
+        _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
+        raise subprocess.TimeoutExpired(cmd="orca", timeout=0.2)
+
+    mock_proc.wait.side_effect = _wait
+    mock_popen.return_value = mock_proc
+
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        stop_cause=lambda: StopCause.CANCEL_REQUESTED,
+    )
+    monkeypatch.setattr(runner, "_terminate_subprocess_tree", lambda _proc: True)
+    with pytest.raises(WorkerShutdownInterrupt) as caught:
+        runner.run(inp)
+
+    assert caught.value.cause is StopCause.CANCEL_REQUESTED
+    assert "interrupted by cancellation request" in inp.with_suffix(".out").read_text()
+
+
+def test_stop_cause_classifier_failure_defaults_to_worker_shutdown(
+    mock_popen: MagicMock, mock_signal: MagicMock, inp: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_proc = _mock_process()
+
+    def _wait(*_args: object, **_kwargs: object) -> int:
+        _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
+        raise subprocess.TimeoutExpired(cmd="orca", timeout=0.2)
+
+    mock_proc.wait.side_effect = _wait
+    mock_popen.return_value = mock_proc
+
+    def _broken_classifier() -> StopCause:
+        raise RuntimeError("classifier failed")
+
+    runner = make_orca_runner(
+        _TEST_EXECUTABLE,
+        inp.parent,
+        stop_cause=_broken_classifier,
+    )
+    monkeypatch.setattr(runner, "_terminate_subprocess_tree", lambda _proc: True)
+    with pytest.raises(WorkerShutdownInterrupt) as caught:
+        runner.run(inp)
+
+    assert caught.value.cause is StopCause.WORKER_SHUTDOWN
 
 
 # -- admission lifecycle ----------------------------------------------------

@@ -288,7 +288,7 @@ def test_cancel_failure_retains_slot_and_retry_owner(
         assert current is not None
         assert current.status is QueueStatus.RUNNING
     if failure in {"recover", "mark"}:
-        assert job.terminal_finalize_pending
+        assert job.finalization is not None
 
 
 def test_reconciliation_keeps_scoped_and_legacy_live_slot_protection(

@@ -35,7 +35,8 @@ from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import enqueue_publication, publication_repair
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue import notifications as queue_notifications
-from orca_auto.orca.run_dir_guard import use_run_dir_publication_guard
+from orca_auto.orca.run_dir_guard import PinnedPublication
+from orca_auto.orca.submission import SubmissionRequest
 from tests.conftest import claim_next_entry, make_app_cfg
 from tests.submission_helpers import real_submission
 
@@ -62,7 +63,7 @@ def test_submit_without_selectable_inp_fails_cleanly(
     monkeypatch.setattr(submission_mod, "create_queued_submission", raise_value_error)
 
     result = submission_mod.submit_reaction_dir_to_queue(
-        SimpleNamespace(), cfg=make_app_cfg(tmp_path)
+        SubmissionRequest(path=""), cfg=make_app_cfg(tmp_path)
     )
 
     assert result.status == "failed"
@@ -271,13 +272,13 @@ def test_submission_records_route_detail_for_the_queue_table_without_changing_jo
     from orca_auto.activity_labels import queue_detail_text
     from orca_auto.activity_rendering import queue_list_table
 
-    _reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    _reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     job_dir = tmp_path / job_dir_name
     job_dir.mkdir()
     source = job_dir / inp_name
     payload = f"{route}\n{_H2}".encode()
     source.write_bytes(payload)
-    args.path = str(job_dir)
+    request = replace(request, path=str(job_dir))
     reads: list[Path] = []
     real_read = run_inp.read_stable_regular_file
 
@@ -287,7 +288,7 @@ def test_submission_records_route_detail_for_the_queue_table_without_changing_jo
 
     monkeypatch.setattr(run_inp, "read_stable_regular_file", read_once)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted", result.stderr
     # The detail kind comes from the one read of the source, which stays unchanged.
@@ -345,7 +346,7 @@ def test_submitted_esd_input_keeps_job_type_and_never_renders_sp(
     from orca_auto.activity_labels import queue_detail_text
     from orca_auto.activity_rendering import queue_list_table
 
-    _reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    _reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     # A single-point-looking name: neither it nor the method-only start of the
     # route may make an ESD job read as SP.
     job_dir = tmp_path / "MeOPh_sp_esd"
@@ -355,7 +356,7 @@ def test_submitted_esd_input_keeps_job_type_and_never_renders_sp(
     source = job_dir / "sp.inp"
     payload = inp_text.encode()
     source.write_bytes(payload)
-    args.path = str(job_dir)
+    request = replace(request, path=str(job_dir))
     reads: list[Path] = []
     real_read = run_inp.read_stable_regular_file
 
@@ -365,7 +366,7 @@ def test_submitted_esd_input_keeps_job_type_and_never_renders_sp(
 
     monkeypatch.setattr(run_inp, "read_stable_regular_file", read_once)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted", result.stderr
     assert [path.resolve() for path in reads] == [source.resolve()]
@@ -398,7 +399,7 @@ def test_submission_cleans_created_snapshot_on_pre_enqueue_failure(
     failure_stage: str,
     failure_type: type[BaseException],
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     source = (reaction_dir / "rxn.inp").read_bytes()
     snapshots: list[dict[str, Any]] = []
     original_build = run_inp.build_orca_execution_snapshot
@@ -431,9 +432,10 @@ def test_submission_cleans_created_snapshot_on_pre_enqueue_failure(
     with pytest.raises(failure_type, match="injected pre-enqueue failure"):
         run_inp.create_queued_submission(
             load_config(args.config),
-            args,
             reaction_dir,
             selected_inp=reaction_dir / "rxn.inp",
+            priority=request.priority,
+            force=request.force,
         )
     assert len(snapshots) == 1
     assert not Path(snapshots[0]["execution_dir"]).exists()
@@ -448,7 +450,7 @@ def test_internal_snapshot_failure_is_not_invalid_user_input(
     snapshot: dict[str, Any] | None,
     error: str,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     source_input = (reaction_dir / "rxn.inp").read_bytes()
     cleanup_calls: list[object] = []
     monkeypatch.setattr(
@@ -460,7 +462,7 @@ def test_internal_snapshot_failure_is_not_invalid_user_input(
         lambda *args, **kwargs: cleanup_calls.append((args, kwargs)),
     )
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "failed"
     assert result.reason == "queue_submission_failed"
@@ -475,7 +477,7 @@ def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    _reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     original_save = queue_store.save_entries
     first_save = True
 
@@ -488,7 +490,7 @@ def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
 
     monkeypatch.setattr(queue_store, "save_entries", save_then_raise)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted"
     assert result.queued_result is not None
@@ -508,11 +510,11 @@ def test_submission_normalizes_resources_only_in_private_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     source_inp = reaction_dir / "rxn.inp"
     source_payload = source_inp.read_bytes()
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted"
     assert source_inp.read_bytes() == source_payload
@@ -532,7 +534,7 @@ def test_notification_delivery_failure_does_not_park_queue_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _reaction_dir, args = real_submission(
+    _reaction_dir, args, request = real_submission(
         tmp_path,
         monkeypatch,
         messenger=MessengerConfig(
@@ -543,7 +545,7 @@ def test_notification_delivery_failure_does_not_park_queue_publication(
         queue_notifications, "notify_queue_enqueued_event", lambda *_args, **_kwargs: False
     )
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted"
     assert result.queued_result is not None
@@ -563,7 +565,7 @@ def test_truncated_discord_response_does_not_park_queue_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _reaction_dir, args = real_submission(
+    _reaction_dir, args, request = real_submission(
         tmp_path,
         monkeypatch,
         messenger=MessengerConfig(
@@ -599,7 +601,7 @@ def test_truncated_discord_response_does_not_park_queue_publication(
         lambda *_args, **_kwargs: _TruncatedResponse(),
     )
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted"
     assert result.queued_result is not None
@@ -619,7 +621,7 @@ def test_submission_rejects_distinct_sources_with_same_basename_before_enqueue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     reactant = reaction_dir / "reactant" / "input.xyz"
     product = reaction_dir / "product" / "input.xyz"
     reactant.parent.mkdir()
@@ -632,7 +634,7 @@ def test_submission_rejects_distinct_sources_with_same_basename_before_enqueue(
         encoding="utf-8",
     )
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "failed"
     assert result.reason == "invalid_submission_input"
@@ -650,8 +652,8 @@ def test_closed_job_directory_resubmits_to_a_new_sibling_generation_without_forc
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
-    first_result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
+    first_result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
     assert first_result.status == "submitted"
     [first] = queue_adapter.list_queue(tmp_path)
     assert queue_adapter.mark_completed(tmp_path, first.queue_id)
@@ -661,7 +663,7 @@ def test_closed_job_directory_resubmits_to_a_new_sibling_generation_without_forc
         {queue_entries.TERMINAL_REPLAY_METADATA_KEY: None},
     )
 
-    second_result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    second_result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert second_result.status == "submitted"
     first_after, second = queue_adapter.list_queue(tmp_path)
@@ -678,7 +680,7 @@ def test_complete_transition_after_commit_returns_submitted_with_truthful_warnin
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    _reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     original_save = queue_store.save_entries
     raised = False
 
@@ -694,7 +696,7 @@ def test_complete_transition_after_commit_returns_submitted_with_truthful_warnin
 
     monkeypatch.setattr(queue_store, "save_entries", save_complete_then_raise)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted"
     assert result.queued_result is not None
@@ -711,14 +713,14 @@ def test_enqueue_save_without_commit_fails_cleanly_without_queue_row(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
 
     def raise_without_save(_root: Path, _entries: Any) -> None:
         raise RuntimeError("enqueue write failed before commit")
 
     monkeypatch.setattr(queue_store, "save_entries", raise_without_save)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "failed"
     assert result.reason == "queue_submission_failed"
@@ -731,15 +733,17 @@ def test_public_run_dir_guard_aborts_orca_before_durable_queue_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     stages: list[str] = []
 
     def reject_publication(stage: str) -> None:
         stages.append(stage)
         raise RuntimeError("run-dir target moved into reserved smoke results")
 
-    with use_run_dir_publication_guard(reject_publication):
-        result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    publication = PinnedPublication(reject_publication)
+    result = run_inp.submit_reaction_dir_to_queue(
+        request, cfg=load_config(args.config), publication=publication
+    )
 
     assert result.status == "failed"
     assert result.reason == "queue_submission_failed"
@@ -774,7 +778,7 @@ def test_public_run_dir_guard_compensates_orca_post_commit_rejection(
     monkeypatch: pytest.MonkeyPatch,
     guard_error: BaseException,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     stages: list[str] = []
 
     def reject_after_commit(stage: str) -> None:
@@ -782,8 +786,10 @@ def test_public_run_dir_guard_compensates_orca_post_commit_rejection(
         if stage.endswith("post-commit"):
             raise guard_error
 
-    with use_run_dir_publication_guard(reject_after_commit):
-        result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    publication = PinnedPublication(reject_after_commit)
+    result = run_inp.submit_reaction_dir_to_queue(
+        request, cfg=load_config(args.config), publication=publication
+    )
 
     assert result.status == "failed"
     assert result.reason == "queue_submission_failed"
@@ -822,7 +828,7 @@ def test_orca_compensation_failure_fences_row_without_publication(
     monkeypatch: pytest.MonkeyPatch,
     compensation_error: BaseException,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     stages: list[str] = []
     save_count = 0
     original_save = queue_store.save_entries
@@ -849,8 +855,10 @@ def test_orca_compensation_failure_fences_row_without_publication(
     monkeypatch.setattr(enqueue_publication, "_recover_committed_enqueue", reject_normal_recovery)
     monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", reject_publication)
 
-    with use_run_dir_publication_guard(reject_after_commit):
-        result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    publication = PinnedPublication(reject_after_commit)
+    result = run_inp.submit_reaction_dir_to_queue(
+        request, cfg=load_config(args.config), publication=publication
+    )
 
     assert result.status == "failed"
     assert result.reason == "queue_enqueue_outcome_unknown"
@@ -890,7 +898,7 @@ def test_ambiguous_postcommit_rows_fail_closed_and_remain_unclaimable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    _reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     original_save = queue_store.save_entries
     first_save = True
 
@@ -905,7 +913,7 @@ def test_ambiguous_postcommit_rows_fail_closed_and_remain_unclaimable(
 
     monkeypatch.setattr(queue_store, "save_entries", save_ambiguous_then_raise)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "failed"
     assert result.reason == "queue_enqueue_outcome_unknown"
@@ -922,7 +930,7 @@ def test_duplicate_error_after_commit_is_recovered_as_same_submission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     original_enqueue = queue_adapter.enqueue
 
     def enqueue_then_report_duplicate(*enqueue_args: Any, **enqueue_kwargs: Any) -> Any:
@@ -931,7 +939,7 @@ def test_duplicate_error_after_commit_is_recovered_as_same_submission(
 
     monkeypatch.setattr(queue_adapter, "enqueue", enqueue_then_report_duplicate)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted"
     assert result.queued_result is not None
@@ -949,7 +957,7 @@ def test_cancellation_waits_for_publication_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    _reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     publication_started = threading.Event()
     allow_publication = threading.Event()
     cancel_finished = threading.Event()
@@ -966,7 +974,7 @@ def test_cancellation_waits_for_publication_boundary(
 
     submit_thread = threading.Thread(
         target=lambda: submission_result.append(
-            run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+            run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
         )
     )
     submit_thread.start()
@@ -1019,7 +1027,7 @@ def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
     monkeypatch.setattr(submission_mod, "create_queued_submission", raise_unjudgeable)
 
     result = submission_mod.submit_reaction_dir_to_queue(
-        SimpleNamespace(), cfg=make_app_cfg(tmp_path)
+        SubmissionRequest(path=""), cfg=make_app_cfg(tmp_path)
     )
 
     assert result.status == "failed"
@@ -1032,7 +1040,7 @@ def test_unjudgeable_dead_running_row_during_submit_leaves_no_generation(
 ) -> None:
     # The directory's RUNNING row appears after the conflict check; its dead
     # worker's slot protection cannot be read, so the enqueue fails closed.
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     queue_adapter.enqueue(tmp_path, str(reaction_dir), task_id="task-dead-worker")
     running = claim_next_entry(tmp_path)
     assert running is not None and running.status == QueueStatus.RUNNING
@@ -1041,7 +1049,7 @@ def test_unjudgeable_dead_running_row_during_submit_leaves_no_generation(
     admission_file.write_text("{not json", encoding="utf-8")
     monkeypatch.setattr(run_inp, "find_submission_conflict", lambda *_args: None)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "failed"
     assert result.reason == "submission_conflict"
@@ -1057,7 +1065,7 @@ def test_an_input_edited_during_submission_yields_one_consistent_snapshot(
     # The selected input is read once. Saves that land after that read, where
     # earlier versions read the file again, reach neither the queue metadata
     # nor the snapshot digests nor the bound copy.
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     selected = reaction_dir / "rxn.inp"
     original = b"! Opt\n%pal nprocs 2 end\n%maxcore 1000\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
     selected.write_bytes(original)
@@ -1082,7 +1090,7 @@ def test_an_input_edited_during_submission_yields_one_consistent_snapshot(
     monkeypatch.setattr(run_inp, "read_stable_regular_file", read_then_edit)
     monkeypatch.setattr(run_inp, "build_orca_execution_snapshot", edit_then_build)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted", result.stderr
     assert next(edits, None) is None
@@ -1103,7 +1111,7 @@ def test_an_input_edited_during_submission_yields_one_consistent_snapshot(
 def _submit_with_geometry_swapped_before_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, inp: str, before: str, after: str
 ) -> dict[str, Any]:
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     (reaction_dir / "rxn.inp").write_text(inp, encoding="utf-8")
     geometry = reaction_dir / "geom.xyz"
     geometry.write_text(before, encoding="utf-8")
@@ -1115,7 +1123,7 @@ def _submit_with_geometry_swapped_before_binding(
 
     monkeypatch.setattr(run_inp, "build_orca_execution_snapshot", swap_then_build)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted", result.stderr
     [entry] = queue_adapter.list_queue(tmp_path)
@@ -1181,7 +1189,7 @@ def test_the_molecule_formula_is_read_once_from_the_captured_geometry(
 ) -> None:
     from orca_auto.orca import molecule_key as molecule_key_mod
 
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     (reaction_dir / "rxn.inp").write_text("! SP\n* xyzfile 0 1 geom.xyz\n", encoding="utf-8")
     (reaction_dir / "geom.xyz").write_text(_H2_XYZ, encoding="utf-8")
     reads: list[Path] = []
@@ -1193,7 +1201,7 @@ def test_the_molecule_formula_is_read_once_from_the_captured_geometry(
 
     monkeypatch.setattr(molecule_key_mod, "_parse_xyz_file", recorded)
 
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
 
     assert result.status == "submitted", result.stderr
     [entry] = queue_adapter.list_queue(tmp_path)
@@ -1223,10 +1231,10 @@ def test_the_molecule_key_is_one_value_from_submission_to_settlement_and_rebuild
     from orca_auto.orca.queue.job_records import upsert_terminal_job_record
     from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
 
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     (reaction_dir / "rxn.inp").write_text(inp, encoding="utf-8")
     cfg = load_config(args.config)
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=cfg)
     assert result.status == "submitted", result.stderr
     [entry] = queue_adapter.list_queue(tmp_path)
     [submitted] = list_job_location_records(tmp_path)
@@ -1267,13 +1275,13 @@ def test_a_moved_job_keeps_its_directory_fallback_key_on_a_rebuild(
     from orca_auto.orca.queue.job_records import upsert_terminal_job_record
     from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
 
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     (reaction_dir / "rxn.inp").unlink()
     (reaction_dir / "calc.inp").write_text(
         "! SP\n* xyz 0 1\nH .0 .0 .0\nH .0 .0 .74\n*\n", encoding="utf-8"
     )
     cfg = load_config(args.config)
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=cfg)
     assert result.status == "submitted", result.stderr
     [entry] = queue_adapter.list_queue(tmp_path)
     record_cancelled_run_state(
@@ -1310,9 +1318,9 @@ def test_a_rebuild_from_scratch_restores_the_submitted_resource_request(
     from orca_auto.orca.queue.job_records import upsert_terminal_job_record
     from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
 
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     cfg = load_config(args.config)
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=cfg)
     assert result.status == "submitted", result.stderr
     [entry] = queue_adapter.list_queue(tmp_path)
     submitted_request = entry.metadata["resource_request"]
@@ -1350,9 +1358,9 @@ def test_a_terminal_upsert_without_an_index_restores_the_rebuilds_request(
     from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
     from orca_auto.orca.state_reading import state_path
 
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     cfg = load_config(args.config)
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=cfg)
     assert result.status == "submitted", result.stderr
     [entry] = queue_adapter.list_queue(tmp_path)
     record_cancelled_run_state(
@@ -1392,9 +1400,9 @@ def test_a_terminal_upsert_ignores_a_state_naming_another_job(
     from orca_auto.orca.queue.job_records import upsert_terminal_job_record
     from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
 
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
     cfg = load_config(args.config)
-    result = run_inp.submit_reaction_dir_to_queue(args, cfg=cfg)
+    result = run_inp.submit_reaction_dir_to_queue(request, cfg=cfg)
     assert result.status == "submitted", result.stderr
     [entry] = queue_adapter.list_queue(tmp_path)
     record_cancelled_run_state(

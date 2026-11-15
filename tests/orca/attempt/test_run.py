@@ -12,7 +12,7 @@ from orca_auto.core.engine_scratch import (
     attach_scratch_provenance_to_exception,
 )
 from orca_auto.orca.attempt import run as attempt_run
-from orca_auto.orca.orca_runner import RunResult, WorkerShutdownInterrupt
+from orca_auto.orca.orca_runner import RunResult, StopCause, WorkerShutdownInterrupt
 from orca_auto.orca.state import new_state
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.types import RunStartedNotification, RunState
@@ -163,6 +163,31 @@ def test_worker_shutdown_persists_committed_scratch_publication(
     assert publication["attempt_index"] == 1
     assert publication["outcome"] == "worker_shutdown"
     assert publication["publication"]["published_files"] == ["rxn.gbw", "rxn.out"]
+
+
+def test_cancel_stop_cause_persists_on_scratch_publication(
+    tmp_path: Path, attempt: Attempt
+) -> None:
+    selected_inp = _write_input(tmp_path, text="! SP\n")
+
+    def run(inp_path: Path) -> RunResult:
+        exc = WorkerShutdownInterrupt(cause=StopCause.CANCEL_REQUESTED)
+        attach_scratch_provenance_to_exception(
+            exc,
+            ScratchPublication(
+                paths=(inp_path.with_suffix(".gbw"), inp_path.with_suffix(".out")),
+                omitted_transient_files=(),
+                omitted_transient_bytes=0,
+            ),
+        )
+        raise exc
+
+    with pytest.raises(WorkerShutdownInterrupt):
+        attempt(selected_inp, run)
+
+    publication = _saved_state(tmp_path)["scratch_publications"][0]
+    assert publication["outcome"] == "worker_shutdown"
+    assert publication["stop_cause"] == "cancel_requested"
 
 
 def test_analyzer_exception_persists_committed_scratch_publication(

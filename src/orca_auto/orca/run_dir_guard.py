@@ -4,50 +4,23 @@ import os
 import stat
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
 from orca_auto.core.paths.reserved import relative_reaches_reserved_generation
 
 RunDirPublicationGuard = Callable[[str], None]
-_ACTIVE_RUN_DIR_PUBLICATION_GUARD: ContextVar[RunDirPublicationGuard | None] = ContextVar(
-    "orca_auto_run_dir_publication_guard",
-    default=None,
-)
-_ACTIVE_RUN_DIR_PINNED_TARGET: ContextVar[Path | None] = ContextVar(
-    "orca_auto_run_dir_pinned_target",
-    default=None,
-)
 
 
-@contextmanager
-def use_run_dir_publication_guard(
-    guard: RunDirPublicationGuard,
-    *,
-    pinned_target: str | Path | None = None,
-) -> Iterator[None]:
-    guard_token = _ACTIVE_RUN_DIR_PUBLICATION_GUARD.set(guard)
-    target_token = _ACTIVE_RUN_DIR_PINNED_TARGET.set(
-        Path(pinned_target) if pinned_target is not None else None
-    )
-    try:
-        yield
-    finally:
-        _ACTIVE_RUN_DIR_PINNED_TARGET.reset(target_token)
-        _ACTIVE_RUN_DIR_PUBLICATION_GUARD.reset(guard_token)
+@dataclass(frozen=True)
+class PinnedPublication:
+    """Explicit publication guard for synchronous ``run-dir`` submission."""
 
+    check: RunDirPublicationGuard
+    pinned_target: Path | None = None
 
-def assert_run_dir_publication_allowed(stage: str) -> None:
-    guard = _ACTIVE_RUN_DIR_PUBLICATION_GUARD.get()
-    if guard is not None:
-        guard(stage)
-
-
-def active_run_dir_pinned_target() -> Path | None:
-    """Return the fd-backed public target while synchronous submission is active."""
-
-    return _ACTIVE_RUN_DIR_PINNED_TARGET.get()
+    def allow(self, stage: str) -> None:
+        self.check(stage)
 
 
 def validate_production_run_dir_target(

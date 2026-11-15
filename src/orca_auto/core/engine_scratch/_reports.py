@@ -55,6 +55,8 @@ class ScratchWorkspaceReport:
     blocks_launch: bool
     detail: str | None
     publication_journal: PublicationJournalStatus | None = None
+    # Internal admission accounting, not a new scratch-list payload field.
+    private_input_reserved_bytes: int = 0
 
     def as_payload(self) -> dict[str, Any]:
         return {

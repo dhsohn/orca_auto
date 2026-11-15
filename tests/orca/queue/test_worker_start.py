@@ -409,8 +409,9 @@ def test_idle_state_reconciliation_is_throttled(
     sleep_calls: list[float] = []
 
     class _Worker(OrcaQueueWorker):
-        def _reconcile_worker_state(self) -> None:
+        def _reconcile_worker_state(self) -> bool:
             reconcile_calls.append(now[0])
+            return True
 
     monkeypatch.setattr(queue_worker_mod.time, "monotonic", lambda: now[0])
     worker = _Worker(worker_cfg, str(queue_root / "config.yaml"), sleep_fn=sleep_calls.append)
@@ -502,7 +503,7 @@ def test_run_reports_startup_failure_and_removes_pid_file(
     del preserved_signals
 
     class _StartupFailingWorker(OrcaQueueWorker):
-        def _reconcile_worker_state(self) -> None:
+        def _reconcile_worker_state(self) -> bool:
             raise TimeoutError("admission lock held by service restart")
 
     worker = _StartupFailingWorker(worker_cfg, str(queue_root / "config.yaml"))

@@ -18,6 +18,7 @@ from orca_auto.core.confined_io import (
 )
 from orca_auto.core.utils.persistence import durable_mkdir
 
+from ..engine_moinp import ENGINE_MOINP_PREFIX
 from . import _capture
 from ._models import _RouteOutputs
 
@@ -154,7 +155,7 @@ def _validate_dependency_basename(
         and name.startswith(stem)
         and any(pattern.fullmatch(name, len(stem)) is not None for pattern in neb_patterns)
     )
-    if neb_output or name in runtime_owned_names:
+    if neb_output or name in runtime_owned_names or name.startswith(ENGINE_MOINP_PREFIX):
         raise ValueError(
             "ORCA referenced input basename conflicts with a generation runtime/output file: "
             f"{name}; rename the referenced file so this job cannot overwrite it"

@@ -31,7 +31,7 @@
       "selected_input_path": "<tmp>/runs/crash_rebind/h2o.inp",
       "selected_input_xyz": "",
       "execution_snapshot": {
-        "version": 3,
+        "version": 4,
         "job_dir_identity": {
           "device": "<device:int>",
           "inode": "<inode:int>"
@@ -79,6 +79,11 @@
           "previous_execution_dir": "<tmp>/runs/crash_rebind/<generation:1>",
           "seeded_roles": {},
           "checkpoint_role": "",
+          "checkpoint_decision": {
+            "policy": "automatic",
+            "status": "skipped",
+            "reason": "checkpoint_absent"
+          },
           "submitted_dependency_identities": {}
         }
       },

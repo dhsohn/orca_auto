@@ -18,8 +18,8 @@ from tests.submission_helpers import real_submission
 
 
 def test_repair_reproduces_submission_record_after_source_changes(tmp_path, monkeypatch):
-    reaction_dir, args = real_submission(tmp_path, monkeypatch)
-    result = submission.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+    reaction_dir, args, request = real_submission(tmp_path, monkeypatch)
+    result = submission.submit_reaction_dir_to_queue(request, cfg=load_config(args.config))
     assert result.status == "submitted"
     cfg = load_config(args.config)
     index = tmp_path / "job_locations.json"

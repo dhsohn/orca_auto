@@ -20,12 +20,12 @@ from ...core.engine_scratch import (
 from ..completion_rules import detect_completion_mode
 from ..file_identity import confined_output_identity, verify_confined_output_identity
 from ..notifications import dispatch_notification, notification_channel, notify_run_started_event
-from ..orca_runner import OrcaRunner, WorkerShutdownInterrupt
+from ..orca_runner import OrcaRunner, StopCause, WorkerShutdownInterrupt
 from ..out_analyzer import OutAnalysis, analyze_output, apply_exit_code
 from ..run_context import RunExecutionContext
 from ..state import now_utc_iso, save_state
 from ..statuses import AnalyzerStatus, RunStatus
-from ..types import AttemptRecord, RunState
+from ..types import AttemptRecord, RunState, ScratchPublicationRecord
 from .reporting import (
     build_run_started_notification,
     decide_attempt_outcome,
@@ -107,20 +107,22 @@ def _record_exception_scratch_publication(
     selected_inp: Path,
     exc: BaseException,
     outcome: str,
+    stop_cause: str | None = None,
 ) -> None:
     provenance = scratch_provenance_from_exception(exc)
     if not provenance:
         return
     publications = state.setdefault("scratch_publications", [])
-    publications.append(
-        {
-            "attempt_index": execution_index,
-            "inp_path": str(selected_inp),
-            "outcome": outcome,
-            "published_at": now_utc_iso(),
-            "publication": provenance,
-        }
-    )
+    record: ScratchPublicationRecord = {
+        "attempt_index": execution_index,
+        "inp_path": str(selected_inp),
+        "outcome": outcome,
+        "published_at": now_utc_iso(),
+        "publication": provenance,
+    }
+    if stop_cause is not None:
+        record["stop_cause"] = stop_cause
+    publications.append(record)
     save_state(reaction_dir, state)
 
 
@@ -205,6 +207,9 @@ def run_attempt(
             runner=runner,
         )
     except WorkerShutdownInterrupt as exc:
+        cause = exc.cause
+        if not isinstance(cause, StopCause):
+            cause = StopCause.WORKER_SHUTDOWN
         _record_exception_scratch_publication(
             reaction_dir,
             state,
@@ -212,8 +217,9 @@ def run_attempt(
             selected_inp=selected_inp,
             exc=exc,
             outcome="worker_shutdown",
+            stop_cause=cause.value,
         )
-        logger.warning("Interrupted by worker shutdown during attempt %d", execution_index)
+        logger.warning("Interrupted by %s during attempt %d", cause.value, execution_index)
         raise
     except Exception as exc:  # noqa: BLE001
         _record_exception_scratch_publication(

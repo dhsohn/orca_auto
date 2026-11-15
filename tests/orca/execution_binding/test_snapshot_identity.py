@@ -149,7 +149,7 @@ _CURRENT = "current"
 
 @pytest.mark.parametrize(
     "variant",
-    [_CURRENT, "version2", "version_text", "retired_marker", "not_a_mapping"],
+    [_CURRENT, "version2", "version3", "version_text", "retired_marker", "not_a_mapping"],
 )
 def test_build_verify_and_rebind_share_the_version_gate(tmp_path: Path, variant: str) -> None:
     job_dir, selected, executable = _job(tmp_path, "same_stem_opt")
@@ -157,6 +157,7 @@ def test_build_verify_and_rebind_share_the_version_gate(tmp_path: Path, variant:
     candidate: Any = {
         _CURRENT: snapshot,
         "version2": {**snapshot, "version": 2},
+        "version3": {**snapshot, "version": 3},
         "version_text": {**snapshot, "version": "3"},
         "retired_marker": {**snapshot, "max_retries": 2},
         "not_a_mapping": ["execution_snapshot"],

@@ -127,6 +127,11 @@
         "previous_execution_dir": "<tmp>/runs/sigterm/<generation:1>",
         "seeded_roles": {},
         "checkpoint_role": "",
+        "checkpoint_decision": {
+          "policy": "automatic",
+          "status": "skipped",
+          "reason": "checkpoint_absent"
+        },
         "submitted_dependency_identities": {}
       },
       "bound_selected_identity": {

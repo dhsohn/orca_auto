@@ -73,6 +73,7 @@ graph TD
 | `<runs_root>/queue_worker.pid` | 워커 수명 동안 잡는 `queue_worker.pid.lock` | `core/queue/worker/pid_file.py` | 부모: 수명 잠금 아래의 `OrcaQueueWorker._write_pid_file`과 `_remove_pid_file`. PID 조회는 파일을 변경하지 않음([ADR 0011](adr/0011-read-only-pid-lookups.md)) | `orca/commands/queue.existing_worker_pid`, `submission`, `orphans` |
 | RAM scratch manifest `<scratch_root>/attempt-*/.orca_auto_scratch.json` | `<scratch_root>/.orca_auto_scratch.lock` | `core/engine_scratch/_manifest._write_workspace_manifest` | 자식: `EngineScratchWorkspace.create`(`OrcaRunner.prepare`). CLI: `scratch clear`가 비활성 워크스페이스를 제거 | `engine_scratch/_inspect`(실행 전 점검, `scratch list`) |
 | `<generation_dir>`로의 scratch 회수와 `.orca_auto_scratch_publication.json` 저널 | `run.lock` | `core/engine_scratch/_publication._publish_workspace` | 자식: `EngineScratchWorkspace.publish`를 거치는 `OrcaRunner` | 다음 실행의 `_recover_incomplete_publication` |
+| generation 또는 scratch의 `orca_auto_moinp_<basename>` | `run.lock` / 소유 scratch workspace | `orca/engine_moinp.prepare_engine_moinp`가 전용 사본 생성; scratch 발행이 복사 | 자식: 실행 직전 `OrcaRunner` | ORCA, 스냅샷 검증, 수락 영수증 |
 | `<runs_root>/logs/<queue_id>.log` | 없음 | `core/queue/processes.start_background_process`(자식의 stdout·stderr) | 부모: `OrcaQueueWorker._start_background_process`. CLI: `queue list clear`가 제거 | `queue list`가 경로를 표시 |
 | `orca_auto.yaml` | 없음 | `orca/commands/init._write_config` | CLI: `init` | `orca/config.load_config`를 거치는 `core/config/files` 로더 |
 | systemd 유닛 파일 | 없음 | `cli_systemd_apply._write_unit_files` | CLI: `systemd install` | systemd. `service status`가 실행 중인 워커와 비교 |
@@ -222,9 +223,10 @@ graph TD
 바로 그 후보의 ID 기준 인수, 인수한 행이 없으면 슬롯 해제 순입니다. 선택·검증·인수는 하나의 루프입니다. `roots.claim_entry`는 다른 행으로 바꿔 인수하지 않으므로, 후보가 거부되면(격리, 보류, 동시 변경으로 잃음) 루프가 다음 후보를 선택하고 인수 전에 검증합니다. `check_queue_publication`은 `ELIGIBLE`, `SETTLED`(격리됐거나 더는 pending이 아님), `WITHHELD`를 반환하며 `ELIGIBLE`만 행을 수용합니다. 모든 pending 행을 검증하는 전체 발행 복구는 한 번의 슬롯 채우기에서 첫 실행권 할당 때만 수행하고, 그 결과는 그 할당의 첫 후보가 복구가 통과시킨 행 그대로일 때만 씁니다. 나머지 후보는 모두 따로 검증합니다. 기반 클래스 `core.queue.worker.loop.QueueWorkerLoop`는
 루프 순서(회수, 취소, 수용, 대기), 셧다운 sweep, 시그널 핸들러를 관리하며 작업을
 프로세스 기반 레코드로만 다룹니다. ORCA 워커는 대기 직전에 `_periodic_upkeep`을
-실행합니다. 제출 알림을 보낸 뒤, 정리 주기가 되었고 종료 확정 재시도를 기다리는 회수
-작업이 없으면 복구 패스를 실행합니다. 따라서 한 번의 폴링 패스는 회수, 취소, 수용,
-주기 작업, 대기 순으로 진행됩니다. 특정 패스에서 일반 예외가 발생하면 로그를 남긴 후 다음
+실행합니다. 제출 알림을 보낸 뒤, 정리 주기가 되면 복구 패스를 실행합니다. 추적 중인
+작업은 그 패스에서 자신의 입장 슬롯·큐 ID·반응 디렉터리만 격리하므로, 자식이 종료
+확정 중이거나 엔진 복구를 기다리는 동안에도 무관한 행은 계속 정리됩니다. 따라서 한
+번의 폴링 패스는 회수, 취소, 수용, 주기 작업, 대기 순으로 진행됩니다. 특정 패스에서 일반 예외가 발생하면 로그를 남긴 후 다음
 폴링 간격에 해당 패스를 재시도하며, 실행 중인 자식 프로세스는 계속 감독합니다. `KeyboardInterrupt`,
 `SystemExit` 및 초기화 실패 시에는 워커를 즉시 종료합니다. 테스트는 워커의 `_start_background_process`와
 `sleep_fn`을 교체하고, 설정 탐색·`/dev/shm`·인수는 `tests/conftest.py`의 공용 fixture로
@@ -338,6 +340,8 @@ ORCA 자식 프로세스는 큐 항목 조회, 중단된 generation 복구, 부�
 
 ---
 
+실행 스냅샷 버전 4의 MOInp는 엔진 실행 시점의 전용 사본을 사용합니다. 바인딩된 `.inp`는 `orca_auto_moinp_<bound-dependency-basename>`을 가리키며 불변 의존 파일은 원래 basename·바이트·식별자와 0400 모드를 유지합니다. 러너는 실행 직전에 별도 inode의 단일 링크 0600 사본을 만듭니다. RAM scratch를 켜면 scratch에, 끄면 같은 generation에 만듭니다. 기존 대상과 symlink·hardlink 별칭은 거부하며 `orca_auto_moinp_` 접두사는 엔진 사본용으로 예약합니다. Scratch 용량에는 추가 사본도 포함하고, 발행은 불변 입력을 별도로 검증한 뒤 엔진이 변경한 사본을 기존 임시 파일 필터를 따르는 런타임 산출물로 처리합니다. 최상위·SCF 블록의 명시적 MOInp와 자동 복구 seed 모두에 적용하며 초기 추정 정책·방법·기하·전자 상태는 변경하지 않습니다. 과거 버전의 대기 스냅샷은 명시적으로 재제출해야 하며 과거 영수증은 보존합니다([ADR 0021](adr/0021-private-engine-moinp-copies.md), [업그레이드 절차](RELEASE.md)).
+
 ## 6. 아키텍처 결정 기록 (ADR)
 
 ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.md)에 있습니다(영어).
@@ -361,3 +365,6 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0017: 큐 Detail kind 어휘와 Unknown 폴백](adr/0017-queue-detail-kind-vocabulary.md)
 - [ADR 0018: Other 연산 근거와 Unknown 큐 Detail](adr/0018-queue-detail-other-and-unknown.md)
 - [ADR 0019: Block Kit 카드 형식의 Slack 알림](adr/0019-slack-block-kit-cards.md)
+- [ADR 0020: 복구 궤도 적격성과 제출된 초기 추정 의도](adr/0020-recovery-orbital-eligibility-and-guess-intent.md)
+
+- [ADR 0021: 엔진 실행 시점의 전용 MOInp 사본](adr/0021-private-engine-moinp-copies.md)

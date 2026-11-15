@@ -9,6 +9,7 @@ from orca_auto.core.engine_scratch import (
 )
 
 from . import input_references
+from .engine_moinp import engine_moinp_sources_from_payload
 
 
 def _orca_dependency_names(payload: bytes) -> Sequence[str]:
@@ -16,7 +17,12 @@ def _orca_dependency_names(payload: bytes) -> Sequence[str]:
         lines = payload.decode("utf-8", errors="strict").splitlines()
     except UnicodeError as exc:
         raise EngineScratchError("ORCA input is not UTF-8 text") from exc
-    return tuple(reference.value for reference in input_references.scan_orca_file_references(lines))
+    copies = engine_moinp_sources_from_payload(payload)
+    moinp = input_references.orca_moinp_references(lines)
+    return tuple(
+        copies[reference.value] if reference in moinp else reference.value
+        for reference in input_references.scan_orca_file_references(lines)
+    )
 
 
 class OrcaScratchPolicy(EngineScratchPolicy):
@@ -33,6 +39,7 @@ class OrcaScratchPolicy(EngineScratchPolicy):
             max_task_memory_bytes=max_task_memory_bytes,
             dependency_names_from_primary=_orca_dependency_names,
             normalize_primary_newline=True,
+            private_input_copies_from_primary=engine_moinp_sources_from_payload,
         )
 
 

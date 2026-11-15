@@ -36,10 +36,7 @@ from orca_auto.orca.queue.enqueue_publication import (
     EnqueuePublicationOutcomeUnknown,
     run_enqueue_publication,
 )
-from orca_auto.orca.run_dir_guard import (
-    active_run_dir_pinned_target,
-    assert_run_dir_publication_allowed,
-)
+from orca_auto.orca.run_dir_guard import PinnedPublication
 
 from .config import AppConfig
 from .execution_binding import (
@@ -72,11 +69,15 @@ ORCA_GENERATED_INP_RE = re.compile(
 )
 
 
-def _snapshot_cleanup_job_dir(reaction_dir: Path, snapshot: Any) -> Path:
+def _snapshot_cleanup_job_dir(
+    reaction_dir: Path,
+    snapshot: Any,
+    pinned_target: Path | None = None,
+) -> Path:
     identity = snapshot.get("job_dir_identity") if isinstance(snapshot, dict) else None
     if not isinstance(identity, dict):
         return reaction_dir
-    candidates = (reaction_dir, active_run_dir_pinned_target())
+    candidates = (reaction_dir, pinned_target)
     for candidate in candidates:
         if candidate is None:
             continue
@@ -124,6 +125,14 @@ class QueuePublicationCancelledError(RuntimeError):
     """Raised when cancellation revokes publication before its side effects."""
 
 
+@dataclass(frozen=True)
+class SubmissionRequest:
+    path: str
+    input_name: str | None = None
+    priority: object = None
+    force: bool = False
+
+
 def select_latest_inp(reaction_dir: Path) -> Path:
     resolved_reaction_dir = reaction_dir.expanduser().resolve()
     all_candidates = list(reaction_dir.glob("*.inp"))
@@ -151,12 +160,14 @@ def select_latest_inp(reaction_dir: Path) -> Path:
     return candidates[0]
 
 
-def resolve_submission_target(args: Any, *, cfg: AppConfig) -> SubmissionTarget | None:
+def resolve_submission_target(
+    request: SubmissionRequest, *, cfg: AppConfig
+) -> SubmissionTarget | None:
     """Validate the job directory and select its input using the command's config.
 
     A refused directory or input is logged and returns None.
     """
-    raw = getattr(args, "path", None)
+    raw = request.path
     if not isinstance(raw, str) or not raw.strip():
         logger.error("job directory path is required")
         return None
@@ -169,7 +180,7 @@ def resolve_submission_target(args: Any, *, cfg: AppConfig) -> SubmissionTarget 
             raise ValueError(
                 f"Job directory must be under allowed root: {allowed_root}. got={reaction_dir}"
             )
-        input_name = getattr(args, "input", None)
+        input_name = request.input_name
         if input_name is None:
             selected_inp = select_latest_inp(reaction_dir)
         else:
@@ -255,7 +266,12 @@ class _PreparedSubmissionInputs:
 
 
 def _prepare_submission_inputs(
-    cfg: Any, args: Any, selected_inp: Path
+    cfg: AppConfig,
+    selected_inp: Path,
+    *,
+    priority: object = None,
+    force: bool = False,
+    publication: PinnedPublication | None = None,
 ) -> _PreparedSubmissionInputs:
     """Stage 1: read the selected input once and derive everything from its bytes.
 
@@ -263,9 +279,9 @@ def _prepare_submission_inputs(
     the bound copy all describe these bytes, even when the file changes while
     the submission runs.
     """
-    priority = normalize_queue_priority(getattr(args, "priority", None))
-    force = bool(getattr(args, "force", False))
-    assert_run_dir_publication_allowed("ORCA target mutation preflight")
+    normalized_priority = normalize_queue_priority(priority)
+    if publication is not None:
+        publication.allow("ORCA target mutation preflight")
     source_payload = read_stable_regular_file(selected_inp)
     text = source_payload.decode("utf-8", errors="ignore")
     lines = text.splitlines()
@@ -301,7 +317,7 @@ def _prepare_submission_inputs(
         detail_kind=detail_kind,
         molecule_tag=molecule_tag,
         prepared_input=prepared_input,
-        priority=priority,
+        priority=normalized_priority,
         force=force,
     )
 
@@ -350,20 +366,26 @@ def _bound_molecule_key(inputs: _PreparedSubmissionInputs, execution_snapshot: A
     ).key
 
 
-def _cleanup_submission_snapshot(reaction_dir: Path, execution_snapshot: Any) -> None:
+def _cleanup_submission_snapshot(
+    reaction_dir: Path,
+    execution_snapshot: Any,
+    pinned_target: Path | None = None,
+) -> None:
     """Compensation: remove a generation the queue never took ownership of."""
     cleanup_unowned_orca_execution_snapshot(
-        _snapshot_cleanup_job_dir(reaction_dir, execution_snapshot),
+        _snapshot_cleanup_job_dir(reaction_dir, execution_snapshot, pinned_target),
         execution_snapshot,
     )
 
 
 def create_queued_submission(
-    cfg: Any,
-    args: Any,
+    cfg: AppConfig,
     reaction_dir: Path,
     *,
     selected_inp: Path,
+    priority: object = None,
+    force: bool = False,
+    publication: PinnedPublication | None = None,
 ) -> QueuedSubmissionResult:
     """Submit one ORCA input directory to the durable queue.
 
@@ -374,7 +396,15 @@ def create_queued_submission(
     a compensated publication failure removes it through the driver.
     """
     queue_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
-    inputs = _prepare_submission_inputs(cfg, args, selected_inp)
+    pinned_target = publication.pinned_target if publication is not None else None
+    publication_check = publication.check if publication is not None else None
+    inputs = _prepare_submission_inputs(
+        cfg,
+        selected_inp,
+        priority=priority,
+        force=force,
+        publication=publication,
+    )
     intent_token = timestamped_token("snapshot_intent", token_bytes=16)
     execution_snapshot = _build_execution_snapshot(
         cfg, reaction_dir, inputs, queue_root=queue_root, intent_token=intent_token
@@ -397,7 +427,7 @@ def create_queued_submission(
             expected_states={SNAPSHOT_INTENT_STATE_CREATING},
         )
     except BaseException:
-        _cleanup_submission_snapshot(reaction_dir, execution_snapshot)
+        _cleanup_submission_snapshot(reaction_dir, execution_snapshot, pinned_target)
         raise
     outcome = run_enqueue_publication(
         cfg,
@@ -406,8 +436,9 @@ def create_queued_submission(
         priority=inputs.priority,
         force=inputs.force,
         metadata=queue_metadata,
+        publication_check=publication_check,
         on_compensated_failure=lambda: _cleanup_submission_snapshot(
-            reaction_dir, execution_snapshot
+            reaction_dir, execution_snapshot, pinned_target
         ),
     )
     entry = outcome.entry
@@ -432,8 +463,13 @@ def create_queued_submission(
     )
 
 
-def submit_reaction_dir_to_queue(args: Any, *, cfg: AppConfig) -> DirectQueueSubmission:
-    target = resolve_submission_target(args, cfg=cfg)
+def submit_reaction_dir_to_queue(
+    request: SubmissionRequest,
+    *,
+    cfg: AppConfig,
+    publication: PinnedPublication | None = None,
+) -> DirectQueueSubmission:
+    target = resolve_submission_target(request, cfg=cfg)
     if target is None:
         return DirectQueueSubmission(
             status="failed",
@@ -461,9 +497,11 @@ def submit_reaction_dir_to_queue(args: Any, *, cfg: AppConfig) -> DirectQueueSub
     try:
         queued = create_queued_submission(
             target.cfg,
-            args,
             target.reaction_dir,
             selected_inp=target.selected_inp,
+            priority=request.priority,
+            force=request.force,
+            publication=publication,
         )
     except (DuplicateEntryError, DeadRunningRowUnjudgeableError) as exc:
         # Both are this directory's own queue row standing in the way: an

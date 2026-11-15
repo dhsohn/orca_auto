@@ -384,7 +384,12 @@ def _replay_current_terminal_entries(
         )
         pending_replays[queue_id] = item
         try:
-            item = settlement.settle(cfg, item, has_row=True, pending_replays=pending_replays)
+            item = settlement.settle(
+                cfg,
+                item,
+                has_row=True,
+                retain=lambda it: pending_replays.__setitem__(it.queue_id, it),
+            )
         except Exception:
             logger.exception(
                 "Failed to replay terminal side effects for reconciled ORCA job %s",
@@ -427,7 +432,12 @@ def _retry_terminal_replays_without_queue_entries(
                 pending_replays.pop(key, None)
             continue
         try:
-            settlement.settle(cfg, item, has_row=False, pending_replays=pending_replays)
+            settlement.settle(
+                cfg,
+                item,
+                has_row=False,
+                retain=lambda it: pending_replays.__setitem__(it.queue_id, it),
+            )
         except Exception:
             logger.exception(
                 "Failed to retry terminal side effects after queue entry disappeared: %s",
@@ -437,10 +447,122 @@ def _retry_terminal_replays_without_queue_entries(
             pending_replays.pop(key, None)
 
 
+@dataclass(frozen=True)
+class _FencedReplaySnapshot:
+    pending_replays: dict[str, TerminalReplayWorkItem]
+    reconcile_statuses: dict[str, str]
+    retry_keys: set[str]
+    stalled_replay_keys: set[str]
+    blocked_marker_keys: set[str]
+    generation_owners: dict[str, str]
+    generation_owner_active: dict[str, bool]
+
+
+def _fenced_queue_ids(
+    after_entries: list[QueueEntry],
+    pending_replays: Mapping[str, TerminalReplayWorkItem],
+    fenced_reaction_keys: frozenset[str],
+) -> set[str]:
+    queue_ids: set[str] = set()
+    for entry in after_entries:
+        reaction_key = settlement.reaction_dir_key(entry)
+        if reaction_key and reaction_key in fenced_reaction_keys:
+            queue_ids.add(entry.queue_id)
+    for queue_id, item in pending_replays.items():
+        if item.reaction_key in fenced_reaction_keys:
+            queue_ids.add(queue_id)
+    return queue_ids
+
+
+def _snapshot_fenced_replay_state(
+    replay_state: OrcaWorkerReplayState,
+    fenced_queue_ids: set[str],
+    fenced_reaction_keys: frozenset[str],
+) -> _FencedReplaySnapshot:
+    cursor = replay_state.reconcile_statuses or {}
+    return _FencedReplaySnapshot(
+        pending_replays={
+            queue_id: item
+            for queue_id, item in replay_state.pending_replays.items()
+            if queue_id in fenced_queue_ids or item.reaction_key in fenced_reaction_keys
+        },
+        reconcile_statuses={
+            queue_id: cursor[queue_id] for queue_id in fenced_queue_ids if queue_id in cursor
+        },
+        retry_keys=fenced_queue_ids & replay_state.retry_keys,
+        stalled_replay_keys=fenced_queue_ids & replay_state.stalled_replay_keys,
+        blocked_marker_keys=fenced_queue_ids & replay_state.blocked_marker_keys,
+        generation_owners={
+            key: owner
+            for key, owner in replay_state.generation_owners.items()
+            if key in fenced_reaction_keys
+        },
+        generation_owner_active={
+            key: active
+            for key, active in replay_state.generation_owner_active.items()
+            if key in fenced_reaction_keys
+        },
+    )
+
+
+def _filter_unfenced_after_entries(
+    after_entries: list[QueueEntry],
+    fenced_reaction_keys: frozenset[str],
+) -> list[QueueEntry]:
+    unfenced: list[QueueEntry] = []
+    for entry in after_entries:
+        reaction_key = settlement.reaction_dir_key(entry)
+        if reaction_key is not None and reaction_key in fenced_reaction_keys:
+            continue
+        unfenced.append(entry)
+    return unfenced
+
+
+def _restore_fenced_replay_state(
+    replay_state: OrcaWorkerReplayState,
+    snapshot: _FencedReplaySnapshot,
+    fenced_queue_ids: set[str],
+    before_statuses: Mapping[str, str],
+    previous_statuses: Mapping[str, str],
+    after_entries: list[QueueEntry],
+    after_statuses: dict[str, str],
+    retry_keys: set[str],
+    pending_replays: dict[str, TerminalReplayWorkItem],
+) -> None:
+    after_by_id = {entry.queue_id: entry.status.value for entry in after_entries}
+    merged_statuses = dict(after_statuses)
+    for queue_id in fenced_queue_ids:
+        carried = (
+            snapshot.reconcile_statuses.get(queue_id)
+            or previous_statuses.get(queue_id)
+            or before_statuses.get(queue_id)
+            or after_by_id.get(queue_id)
+        )
+        if carried is not None:
+            merged_statuses[queue_id] = carried
+    replay_state.reconcile_statuses = merged_statuses
+    replay_state.retry_keys = (retry_keys - fenced_queue_ids) | snapshot.retry_keys
+    replay_state.stalled_replay_keys = (replay_state.stalled_replay_keys - fenced_queue_ids) | (
+        snapshot.stalled_replay_keys
+    )
+    replay_state.blocked_marker_keys = (replay_state.blocked_marker_keys - fenced_queue_ids) | (
+        snapshot.blocked_marker_keys
+    )
+    for queue_id, item in snapshot.pending_replays.items():
+        pending_replays[queue_id] = item
+    replay_state.pending_replays = pending_replays
+    for reaction_key, owner in snapshot.generation_owners.items():
+        replay_state.generation_owners[reaction_key] = owner
+    for reaction_key, active in snapshot.generation_owner_active.items():
+        replay_state.generation_owner_active[reaction_key] = active
+
+
 def reconcile_terminal_replays(
     cfg: AppConfig,
     replay_state: OrcaWorkerReplayState,
     before_rows: list[QueueEntry],
+    *,
+    fenced_reaction_keys: frozenset[str] = frozenset(),
 ) -> None:
     """Replay every observed terminal transition; the last step of the worker's recovery pass.
 
@@ -464,29 +586,58 @@ def reconcile_terminal_replays(
         else replay_state.reconcile_statuses
     )
     after_entries = roots.list_orca_rows(cfg)
+    fenced_queue_ids = _fenced_queue_ids(
+        after_entries, replay_state.pending_replays, fenced_reaction_keys
+    )
+    fenced_snapshot = (
+        _snapshot_fenced_replay_state(replay_state, fenced_queue_ids, fenced_reaction_keys)
+        if fenced_reaction_keys
+        else None
+    )
+    after_entries_active = (
+        _filter_unfenced_after_entries(after_entries, fenced_reaction_keys)
+        if fenced_reaction_keys
+        else after_entries
+    )
     pending_replays = dict(replay_state.pending_replays)
-    replay_state.blocked_marker_keys = _collect_durable_terminal_replays(
+    if fenced_reaction_keys:
+        for queue_id in list(pending_replays):
+            item = pending_replays[queue_id]
+            if queue_id in fenced_queue_ids or item.reaction_key in fenced_reaction_keys:
+                pending_replays.pop(queue_id)
+    collected_blocked_marker_keys = _collect_durable_terminal_replays(
         queue_root,
-        after_entries,
+        after_entries_active,
         pending_replays,
         replay_state.blocked_marker_keys,
     )
+    if fenced_snapshot is not None:
+        replay_state.blocked_marker_keys = (
+            collected_blocked_marker_keys | fenced_snapshot.blocked_marker_keys
+        )
+    else:
+        replay_state.blocked_marker_keys = collected_blocked_marker_keys
     superseded_replay_keys = _drop_superseded_terminal_replays(pending_replays)
 
     current_generation_keys, latest_generation_by_reaction, superseded_generation_keys = (
         _select_replay_generation_owners(
-            after_entries,
+            after_entries_active,
             before_statuses,
             previous_statuses,
             pending_replays,
             replay_state,
         )
     )
+    if fenced_snapshot is not None:
+        for reaction_key, owner in fenced_snapshot.generation_owners.items():
+            replay_state.generation_owners[reaction_key] = owner
+        for reaction_key, active in fenced_snapshot.generation_owner_active.items():
+            replay_state.generation_owner_active[reaction_key] = active
 
     after_statuses, retry_keys, replay_state.stalled_replay_keys = _replay_current_terminal_entries(
         cfg,
         queue_root,
-        after_entries,
+        after_entries_active,
         before_statuses,
         previous_statuses,
         replay_state.retry_keys,
@@ -503,9 +654,22 @@ def reconcile_terminal_replays(
         latest_generation_by_reaction,
     )
 
-    replay_state.pending_replays = pending_replays
-    replay_state.reconcile_statuses = after_statuses
-    replay_state.retry_keys = retry_keys
+    if fenced_snapshot is not None:
+        _restore_fenced_replay_state(
+            replay_state,
+            fenced_snapshot,
+            fenced_queue_ids,
+            before_statuses,
+            previous_statuses,
+            after_entries,
+            after_statuses,
+            retry_keys,
+            pending_replays,
+        )
+    else:
+        replay_state.pending_replays = pending_replays
+        replay_state.reconcile_statuses = after_statuses
+        replay_state.retry_keys = retry_keys
 
 
 __all__ = ["reconcile_terminal_replays"]

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +26,7 @@ class EngineScratchPolicy:
     max_task_memory_bytes: int
     dependency_names_from_primary: Callable[[bytes], Sequence[str]] | None = None
     normalize_primary_newline: bool = False
+    private_input_copies_from_primary: Callable[[bytes], Mapping[str, str]] | None = None
 
     def __post_init__(self) -> None:
         root = self.root.expanduser().resolve(strict=False)

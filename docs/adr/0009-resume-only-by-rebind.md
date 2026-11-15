@@ -1,6 +1,6 @@
 # ADR 0009: Resume only by rebinding into a fresh generation
 
-- Status: Accepted
+- Status: Extended by ADR 0020
 - Date: 2026-09-28
 - Supersedes: [ADR 0002](0002-no-automatic-retry-of-failed-calculations.md)
 

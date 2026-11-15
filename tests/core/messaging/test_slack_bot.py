@@ -264,6 +264,16 @@ def test_unusable_retry_after_fails_closed_without_waiting(
             "slack_api_error",
             id="ok-false",
         ),
+        pytest.param(
+            _FakeSlackResponse(_body(ok=False, error="invalid_attachments")),
+            "slack_api_error",
+            id="attachment-rejected-no-text-only-resend",
+        ),
+        pytest.param(
+            _FakeSlackResponse(_body(ok=False, error="invalid_blocks")),
+            "slack_api_error",
+            id="blocks-rejected-no-text-only-resend",
+        ),
     ],
 )
 def test_ambiguous_or_permanent_failures_are_not_retried(

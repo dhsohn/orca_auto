@@ -26,9 +26,9 @@ from orca_auto.core.utils.persistence import fsync_directory
 
 from ._cleanup import discard_unowned_generation
 
-# Directory ownership is shared by historical v2 and current v3 snapshots;
+# Directory ownership is shared by historical v2/v3 and current v4 snapshots;
 # engine admission separately rejects retired execution contracts.
-_DIRECTORY_IDENTITY_SNAPSHOT_VERSIONS = (2, 3)
+_DIRECTORY_IDENTITY_SNAPSHOT_VERSIONS = (2, 3, 4)
 
 
 def _execution_directory(job_dir: Path, generation_name: str) -> Path:
@@ -106,7 +106,7 @@ def retire_snapshot_intent_for_row(queue_root: str | Path, entry: Any) -> None:
     """Retire a reserved row's snapshot intent before its child starts.
 
     A row whose snapshot names no intent has nothing to retire. The generation
-    identity is read only from v2 and v3 snapshots; the core refuses a missing
+    identity is read only from v2, v3 and v4 snapshots; the core refuses a missing
     one after it has read the intent, so an already retired intent never
     fails a row.
     """

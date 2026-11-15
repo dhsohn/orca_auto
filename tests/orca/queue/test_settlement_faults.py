@@ -82,7 +82,7 @@ _LIVE = {
     "none": _SETTLED,
     "prepare": Kept("unprepared", None, False, True, True, False, True, None, False, False),
     "bind": Kept("prepared", None, False, True, True, False, True, "unclaimed", False, False),
-    "release": Kept("bound", "bound", False, True, True, True, True, "unclaimed", False, False),
+    "release": Kept("bound", None, False, True, True, True, True, "unclaimed", False, False),
     "finish": Kept(None, "bound", False, True, True, True, False, "unclaimed", False, False),
     "clear": Kept(None, "bound", False, True, True, True, False, "claimed", True, True),
 }
@@ -128,7 +128,7 @@ def _observe(
     rxn = Path(entry.metadata["reaction_dir"])
     job = worker._running.get(entry.queue_id)
     if job is not None:
-        assert job.terminal_finalize_pending
+        assert job.finalization is not None
     assert set(worker.replay_state.pending_replays) <= {entry.queue_id}
     assert worker.replay_state.retry_keys <= {entry.queue_id}
     withheld = worker._unresolved_terminal_reaction_keys()
@@ -145,7 +145,11 @@ def _observe(
     assert record is None or record["status"] == status
     assert len(channel.sends) <= 1
     return Kept(
-        supervised=None if job is None else _item(job.pending_terminal_replay, status),
+        supervised=(
+            None
+            if job is None or job.finalization is None
+            else _item(job.finalization.item, status)
+        ),
         replay=_item(worker.replay_state.pending_replays.get(entry.queue_id), status),
         retry=entry.queue_id in worker.replay_state.retry_keys,
         withheld=bool(withheld),

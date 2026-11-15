@@ -10,10 +10,10 @@ from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca.config import load_config
 from orca_auto.orca.run_dir_guard import (
+    PinnedPublication,
     _pinned_run_dir_target,
     _RunDirPublicationContract,
     _RunDirTargetChangedError,
-    use_run_dir_publication_guard,
     validate_production_run_dir_target,
 )
 from orca_auto.terminal import emit_error, emit_json
@@ -65,26 +65,26 @@ def cmd_run_dir(args: Any) -> int:
                 emit_error(exc, json_output=json_output)
                 return 1
 
-            args.path = str(pinned_target)
-            with use_run_dir_publication_guard(
+            publication = PinnedPublication(
                 publication_contract,
                 pinned_target=pinned_target,
-            ):
-                from orca_auto.orca.commands.run_inp import cmd_run_inp
+            )
+            from orca_auto.orca.commands.run_inp import cmd_run_inp
 
-                _configure_orca_logging(args)
-                args.config = config_path
-                # With --log-file the submission logger writes nowhere the operator
-                # looks; the terminal error line (and the JSON error document) must
-                # not depend on how logging was configured.
-                return int(
-                    cmd_run_inp(
-                        args,
-                        cfg=cfg,
-                        report_error=lambda message: emit_error(message, json_output=json_output),
-                        emit_json=emit_json,
-                    )
+            _configure_orca_logging(args)
+            args.config = config_path
+            # With --log-file the submission logger writes nowhere the operator
+            # looks; the terminal error line (and the JSON error document) must
+            # not depend on how logging was configured.
+            return int(
+                cmd_run_inp(
+                    args,
+                    cfg=cfg,
+                    publication=publication,
+                    report_error=lambda message: emit_error(message, json_output=json_output),
+                    emit_json=emit_json,
                 )
+            )
     except _RunDirTargetChangedError as exc:
         emit_error(exc, json_output=json_output)
         return 1

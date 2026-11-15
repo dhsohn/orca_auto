@@ -8,19 +8,93 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
-### Changed
+## [11.0.0] - 2026-11-15
 
-- A terminal replay that the worker skips on consecutive reconcile passes,
-  because the row is not the confirmed generation owner of its directory, is
-  now logged once at WARNING with the row, task and directory. It was logged
-  only at DEBUG while the directory stayed fenced as "terminal publication
-  pending".
+Version 11.0 is a major release. The entries marked *public contract* change the
+internal execution snapshot format and refuse launch or crash recovery on older
+pending snapshots; the other changes are fixes or compatible additions. Upgrading
+needs an idle window; see [Upgrading to 11.0](docs/RELEASE.md#upgrading-to-110).
+
+- *public contract*: New submissions use execution snapshot version 4
+  ([ADR 0021](docs/adr/0021-private-engine-moinp-copies.md)). Immutable
+  dependency files remain at 0400 with their original basenames and bytes. MOInp
+  tokens in the bound `.inp` name reserved engine copies
+  `orca_auto_moinp_<bound-dependency-basename>` created at 0600 immediately
+  before ORCA starts. The `orca_auto_moinp_` prefix is reserved for those copies
+  and must not appear on submitted inputs. Scratch publication treats the
+  mutable copy as a runtime artifact under the existing transient-file filter and
+  verifies immutable inputs separately. Version 3 snapshots on pending rows
+  cannot be executed or crash-rebound; cancel them and explicitly resubmit
+  reviewed source inputs in a fresh generation. Historical completed
+  observations and receipts are not rewritten.
+- Automatic recovery considers only the immediate predecessor's output and
+  requires affirmative completed-GUESS evidence after the latest recognized
+  phase boundary ([ADR 0020](docs/adr/0020-recovery-orbital-eligibility-and-guess-intent.md)).
+  Explicit MORead/MOInp, fresh guesses, AutoStart opt-outs and unfamiliar SCF
+  state controls are preserved; ambiguous policy suppresses automatic orbital
+  seeding. This is eligibility evidence, not GBW or general chemical validation.
+
+### Fixed
+
+- Live terminal settlement now releases the admission slot before handing the
+  work item to in-memory replay bookkeeping, so a failed release retries with
+  the item owned only on the job.
+- Worker shutdown no longer maps a signal-killed child's poll result through
+  a synthetic exit code when the run state is still resumable (crash-recovery
+  rebind or a resumed attempt before it turns running). Signal-killed children
+  with a non-resumable terminal state owned by this task still finalize through
+  the ordinary completion path with the true negative exit code recorded on the
+  row.
+- The periodic recovery pass no longer skips entirely while any tracked child
+  has exited; it fences only tracked jobs' slots, queue ids and reaction
+  directories so unrelated orphaned rows and terminal replays still advance.
+
+### Added
+
+- ORCA child runs may record an optional `stop_cause` scratch-publication field
+  (`worker_shutdown` or `cancel_requested`) when scratch provenance exists for
+  an interrupt. In-place runs, stops before launch, and paths without scratch
+  publication omit the field. The public `outcome` vocabulary remains
+  `worker_shutdown`. `published_at` is stamped after process termination and
+  publication, not at stop-observation time.
 - Slack notifications are now Block Kit cards: a header with the event and
   its severity, the author and the job fields, every dynamic value as plain
   text ([ADR 0019](docs/adr/0019-slack-block-kit-cards.md)). The plain-text
   message is still sent, unchanged, as the fallback for notification
   previews and screen readers. Delivery, retries and configuration are
   unchanged; a rejected block payload is not resent as text.
+
+### Changed
+
+- RAM scratch capacity reservations include the additional private MOInp engine
+  copy staged beside the immutable 0400 source before run state is written.
+- `run-dir` and `run-inp` submission share a frozen `SubmissionRequest` through
+  directory resolution, input selection and enqueue; CLI flags map into that
+  structure without changing public options.
+- The ORCA `.out` trailer written on interrupt now says "interrupted by
+  cancellation request" when the queue cancel flag was visible at stop
+  observation, and "interrupted by worker shutdown" otherwise (including a
+  shutdown signal before cancel was observed, or queue lock contention on a
+  signal-only stop). Attempt interrupt logs now use the `stop_cause` enum value
+  (for example `worker_shutdown`) instead of the earlier spaced wording.
+- A terminal replay that the worker skips on consecutive reconcile passes,
+  because the row is not the confirmed generation owner of its directory, is
+  now logged once at WARNING with the row, task and directory. It was logged
+  only at DEBUG while the directory stayed fenced as "terminal publication
+  pending".
+
+### Validation scope
+
+- Pre-release validation of the runtime behavior included Linux `make check`
+  (4774 passed, 8 skipped; 93.15% coverage), package and fake-engine smoke checks,
+  eight real-ORCA smoke cases, four GBW consumption controls, and three water
+  recovery cases in each of RAM scratch and ordinary-disk modes. Package and
+  engine checks were reused only where their product inputs were unchanged.
+  The earlier ordinary-disk interruption missed its intended phase; its evidence
+  was retained and a fresh session passed after correcting the acceptance
+  helper's shutdown delay. Water controls establish recovery mechanics, not
+  full original-family chemistry, electronic-state equivalence or general GBW
+  compatibility. Tests and package builds do not publish a release.
 
 ## [10.2.4] - 2026-11-04
 

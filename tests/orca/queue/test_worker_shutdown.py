@@ -18,6 +18,7 @@ from orca_auto.core.admission import admission_dir, get_slot, list_slots
 from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.processes import ManagedProcess, terminate_process_group
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.orca.attempt.resume import recover_crashed_state
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue, mark_failed
 from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
@@ -207,8 +208,9 @@ def test_shutdown_finalizes_cancel_requested_job(
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.CANCELLED}
     written = load_state(rxn)
     assert written is not None
-    assert written["final_result"] is not None
-    assert written["final_result"]["status"] == "cancelled"
+    final_result = written.get("final_result")
+    assert final_result is not None
+    assert final_result.get("status") == "cancelled"
 
 
 def test_shutdown_settles_a_cancelled_child_that_marked_its_own_row(
@@ -261,8 +263,9 @@ def test_shutdown_settles_a_cancelled_child_that_marked_its_own_row(
     written = load_state(rxn)
     assert written is not None
     assert (written["job_id"], written["status"]) == (entry.task_id, "cancelled")
-    assert written["final_result"] is not None
-    assert written["final_result"]["status"] == "cancelled"
+    final_result = written.get("final_result")
+    assert final_result is not None
+    assert final_result.get("status") == "cancelled"
     assert row.metadata["run_id"] == written["run_id"]
     record = job_record(queue_root, entry.task_id)
     assert record is not None and record["status"] == "cancelled"
@@ -321,6 +324,73 @@ def test_shutdown_finalizes_a_child_that_finished_failed(
 
     assert entry.queue_id not in worker._running
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
+
+
+def test_shutdown_finalizes_a_completed_child_that_exits_negative(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # Same as a grace-window finish, but stop escalates to SIGKILL (-9) after
+    # the child already persisted its terminal run state.
+    rxn = queue_root / "mol_shut_done_neg"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    save_child_state(
+        rxn,
+        entry.task_id,
+        "completed",
+        {"status": "completed", "reason": "normal_termination", "analyzer_status": "completed"},
+    )
+    worker._running[entry.queue_id] = running_job(
+        worker,
+        entry,
+        rxn,
+        fake_children.spawn(exit_code=-signal.SIGKILL),
+        "slot_shut_done_neg",
+        task_id=None,
+    )
+
+    worker._shutdown_all()
+
+    assert entry.queue_id not in worker._running
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
+    written = load_state(rxn)
+    assert written is not None
+    assert written["status"] == "completed"
+    shutdown_final = written.get("final_result")
+    assert shutdown_final is not None
+    assert shutdown_final.get("status") == "completed"
+
+
+def test_shutdown_finalizes_a_failed_child_that_exits_negative(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_shut_failed_neg"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    save_child_state(
+        rxn,
+        entry.task_id,
+        "failed",
+        {"status": "failed", "reason": "retry_limit_reached", "analyzer_status": "incomplete"},
+    )
+    worker._running[entry.queue_id] = running_job(
+        worker,
+        entry,
+        rxn,
+        fake_children.spawn(exit_code=-signal.SIGKILL),
+        "slot_shut_failed_neg",
+        task_id=None,
+    )
+
+    worker._shutdown_all()
+
+    assert entry.queue_id not in worker._running
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
+    written = load_state(rxn)
+    assert written is not None
+    assert written["status"] == "failed"
 
 
 def test_shutdown_leaves_a_self_requeued_child_pending(
@@ -582,7 +652,60 @@ def test_shutdown_ignores_a_terminal_state_left_by_an_earlier_task(
         {"status": "completed", "reason": "normal_termination"},
     )
     worker._running[entry.queue_id] = running_job(
-        worker, entry, rxn, fake_children.spawn(exit_code=0), "slot_stale_state", task_id=None
+        worker,
+        entry,
+        rxn,
+        fake_children.spawn(exit_code=-signal.SIGKILL),
+        "slot_stale_state",
+        task_id=None,
+    )
+
+    worker._shutdown_all()
+
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+
+
+def test_shutdown_requeues_during_crash_recovery_rebind_window(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_shut_rebind"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    save_child_state(rxn, entry.task_id, "running")
+    assert recover_crashed_state(rxn) is True
+    worker._running[entry.queue_id] = running_job(
+        worker,
+        entry,
+        rxn,
+        fake_children.spawn(exit_code=-signal.SIGTERM),
+        "slot_shut_rebind",
+        task_id=None,
+    )
+
+    worker._shutdown_all()
+
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+
+
+def test_shutdown_requeues_during_resume_window_with_negative_exit(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_shut_resume"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    state = new_state(rxn, rxn / "job.inp")
+    state["job_id"] = entry.task_id
+    state["status"] = "failed"
+    save_state(rxn, state)
+    worker._running[entry.queue_id] = running_job(
+        worker,
+        entry,
+        rxn,
+        fake_children.spawn(exit_code=-signal.SIGKILL),
+        "slot_shut_resume",
+        task_id=None,
     )
 
     worker._shutdown_all()

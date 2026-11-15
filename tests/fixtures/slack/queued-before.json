@@ -1,0 +1,53 @@
+{
+  "channel": "C0SYNTHETIC1",
+  "text": "orca_auto: ORCA queued\nJob: synthetic_professor_pt_mode_retry_20261113\nQueue ID: q_20261113_151926_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\nPriority: 10\nDirectory: /runs/synthetic_professor_pt_mode_retry_20261113",
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "ORCA queued",
+        "emoji": false
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "plain_text",
+          "text": "orca_auto",
+          "emoji": false
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "fields": [
+        {
+          "type": "plain_text",
+          "text": "Job\nsynthetic_professor_pt_mode_retry_20261113",
+          "emoji": false
+        },
+        {
+          "type": "plain_text",
+          "text": "Queue ID\nq_20261113_151926_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "emoji": false
+        },
+        {
+          "type": "plain_text",
+          "text": "Priority\n10",
+          "emoji": false
+        },
+        {
+          "type": "plain_text",
+          "text": "Directory\n/runs/synthetic_professor_pt_mode_retry_20261113",
+          "emoji": false
+        }
+      ]
+    }
+  ],
+  "mrkdwn": false,
+  "parse": "none",
+  "unfurl_links": false,
+  "unfurl_media": false
+}

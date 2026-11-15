@@ -52,8 +52,9 @@ def code(value: object) -> Span:
 class Field:
     """A ``label: value`` row. Maps to an embed field on Discord.
 
-    ``inline`` is a Discord layout hint: inline fields sit side by side (up to
-    three per row) instead of each spanning the full width.
+    ``inline`` allows compact fields to sit side by side: up to three per row
+    on Discord, or two on Slack when the text fits its compact length limit.
+    Otherwise the field spans the full width.
     """
 
     label: str

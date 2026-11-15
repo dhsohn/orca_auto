@@ -19,9 +19,11 @@ import os
 import sys
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from orca_auto.core.admission import (
+    AdmissionSlot,
     SlotOwnership,
     admission_dir,
     list_all_slots,
@@ -58,12 +60,13 @@ from orca_auto.core.queue.worker.pid_file import (
     worker_pid_file_path,
     write_worker_pid_file,
 )
-from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING, TERMINAL_STATUSES
+from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca.execution_binding import retire_snapshot_intent_for_row
 from orca_auto.orca.worker_execution import build_worker_child_command
 
 from ..app_ids import ORCA_ADMISSION_SOURCE, ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE_LAUNCH_GATED
+from ..attempt.resume import is_resumable_state
 from ..config import AppConfig
 from ..state_reading import load_state, payload_matches_expected_job_id
 from . import publication_repair, replay, roots, settlement
@@ -81,12 +84,20 @@ from .job_records import upsert_row_job_record
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .notifications import notify_queued_jobs
 from .orphans import reconcile_orphaned_running_entries
+from .terminal_marker import terminal_status_from_run_state
 
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5
 _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
 _WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
+
+
+@dataclass(frozen=True)
+class _RecoveryFence:
+    slot_tokens: frozenset[str]
+    queue_ids: frozenset[str]
+    reaction_keys: frozenset[str]
 
 
 def _try_reserve_admission_slot(
@@ -127,7 +138,11 @@ def _child_run_concluded(job: OrcaRunningJob) -> bool:
     expected_job_id = (job.task_id or "").strip() or current.task_id or None
     if not state or not payload_matches_expected_job_id(state, expected_job_id):
         return False
-    return str(state.get("status") or "").strip().lower() in TERMINAL_STATUSES
+    # Crash recovery closes the previous attempt's root state as failed
+    # ``crashed_recovery`` before this child runs, and a resumed run clears its
+    # final result before setting it running (ADR 0009); neither is this
+    # child's conclusion.
+    return terminal_status_from_run_state(state) is not None and not is_resumable_state(state)
 
 
 def _host_core_count() -> int | None:
@@ -174,6 +189,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         self._publication_withheld_ids: frozenset[str] = frozenset()
         # True once this fill pass has repaired every queued publication.
         self._fill_pass_repaired = False
+        self._recovery_fence_skip_logged: set[tuple[str, str]] = set()
 
     # -- pid file and singleton lock ----------------------------------------
 
@@ -275,13 +291,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         # once that child exits (or is killed), its queue entry/engine record is
         # recovered without repeatedly scanning every runtime root on each
         # short queue-poll cycle.
-        # Do not race a completed in-memory job whose finalization is being
-        # retained for retry after an error.
-        completed_retry_pending = any(
-            self._poll_job(job) is not None for _queue_id, job in self._running_jobs()
-        )
-        if not completed_retry_pending:
-            self._reconcile_worker_state_if_due()
+        self._reconcile_worker_state_if_due()
 
     def _running_jobs(self) -> list[tuple[str, OrcaRunningJob]]:
         return list(self._running.items())
@@ -289,8 +299,8 @@ class OrcaQueueWorker(QueueWorkerLoop):
     # -- recovery -----------------------------------------------------------
 
     def _reconcile_worker_state_now(self) -> None:
-        self._reconcile_worker_state()
-        self._worker_state_last_reconcile = time.monotonic()
+        if self._reconcile_worker_state():
+            self._worker_state_last_reconcile = time.monotonic()
 
     def _reconcile_worker_state_if_due(self) -> None:
         last_reconcile = self._worker_state_last_reconcile
@@ -300,7 +310,55 @@ class OrcaQueueWorker(QueueWorkerLoop):
         ):
             self._reconcile_worker_state_now()
 
-    def _reconcile_worker_state(self) -> None:
+    def _build_recovery_fence(self) -> tuple[_RecoveryFence | None, list[tuple[str, str]]]:
+        slot_tokens: set[str] = set()
+        queue_ids: set[str] = set()
+        reaction_keys: set[str] = set()
+        failures: list[tuple[str, str]] = []
+        for queue_id, job in self._running.items():
+            slot_tokens.add(job.admission_token)
+            queue_ids.add(queue_id)
+            reaction_dir = job.reaction_dir.strip()
+            if not reaction_dir:
+                failures.append((queue_id, "blank_reaction_dir"))
+                continue
+            try:
+                reaction_key = settlement.reaction_key_for_dir(reaction_dir)
+            except (OSError, RuntimeError):
+                failures.append((queue_id, "reaction_dir_resolve_failed"))
+                continue
+            if not reaction_key:
+                failures.append((queue_id, "missing_reaction_key"))
+                continue
+            reaction_keys.add(reaction_key)
+        if failures:
+            return None, failures
+        return (
+            _RecoveryFence(
+                frozenset(slot_tokens),
+                frozenset(queue_ids),
+                frozenset(reaction_keys),
+            ),
+            [],
+        )
+
+    def _log_recovery_fence_failures(self, failures: list[tuple[str, str]]) -> None:
+        for queue_id, reason in failures:
+            key = (queue_id, reason)
+            if key in self._recovery_fence_skip_logged:
+                continue
+            self._recovery_fence_skip_logged.add(key)
+            logger.warning(
+                "ORCA worker recovery pass skipped (fail closed): tracked job reaction "
+                "directory cannot be resolved safely: queue_id=%s reason=%s",
+                queue_id,
+                reason,
+            )
+
+    def _clear_resolved_recovery_fence_warnings(self) -> None:
+        self._recovery_fence_skip_logged.clear()
+
+    def _reconcile_worker_state(self) -> bool:
         """One recovery pass after a lost parent or child, in this order.
 
         Snapshot intents (when due), slots reserved but never attached, engine
@@ -310,22 +368,42 @@ class OrcaQueueWorker(QueueWorkerLoop):
         of every transition observed since that queue read or an earlier pass,
         so a row terminalized here or by a child whose parent died still gets
         its location record and notification.
+
+        Returns whether the pass ran. When a tracked job's reaction directory
+        cannot be resolved, the pass is skipped (fail closed) and the reconcile
+        clock is not advanced.
         """
+        fence, failures = self._build_recovery_fence()
+        if fence is None:
+            self._log_recovery_fence_failures(failures)
+            return False
+        self._clear_resolved_recovery_fence_warnings()
+
+        def owned_slots(slot: AdmissionSlot) -> bool:
+            return self._owns_slot(slot) and slot.token not in fence.slot_tokens
+
         self._reconcile_snapshot_intents_if_due()
         self._release_unattached_admission_slots()
-        recover_orphaned_engine_slots(self.admission_root, strict=False, owned=self._owns_slot)
+        recover_orphaned_engine_slots(self.admission_root, strict=False, owned=owned_slots)
         before_rows = roots.list_orca_rows(self.cfg)
         protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
-            list_slots(self.admission_root, owned=self._owns_slot)
+            list_slots(self.admission_root, owned=owned_slots)
         )
-        reconcile_stale_slots(self.admission_root, owned=self._owns_slot)
+        protected_queue_ids = set(protected_queue_ids) | set(fence.queue_ids)
+        reconcile_stale_slots(self.admission_root, owned=owned_slots)
         reconcile_orphaned_running_entries(
             self.queue_root,
             ignore_worker_pid=True,
             protected_queue_keys=protected_queue_keys,
             protected_queue_ids=protected_queue_ids,
         )
-        replay.reconcile_terminal_replays(self.cfg, self.replay_state, before_rows)
+        replay.reconcile_terminal_replays(
+            self.cfg,
+            self.replay_state,
+            before_rows,
+            fenced_reaction_keys=fence.reaction_keys,
+        )
+        return True
 
     def _release_unattached_admission_slots(self) -> None:
         """Release slots this worker reserved but never attached to a job.
@@ -495,11 +573,12 @@ class OrcaQueueWorker(QueueWorkerLoop):
         items = list(self.replay_state.pending_replays.values())
         reaction_dirs: list[str] = []
         for _queue_id, job in self._running_jobs():
-            job_item = job.pending_terminal_replay
-            if job_item is not None:
-                items.append(job_item)
-            elif job.terminal_finalize_pending:
-                reaction_dirs.append(job.reaction_dir)
+            fin = job.finalization
+            if fin is not None:
+                if fin.item is not None:
+                    items.append(fin.item)
+                else:
+                    reaction_dirs.append(job.reaction_dir)
         keys: set[str] = set()
         for item in items:
             if not item.reaction_key:
@@ -753,8 +832,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
     def _release_terminal_job(self, job: OrcaRunningJob) -> None:
         """Release capacity before clearing the state needed to retry a failed release."""
         self._release_admission_slot(job.admission_token)
-        job.pending_terminal_replay = None
-        job.terminal_finalize_pending = False
+        job.finalization = None
 
     def _settle_live(self, job: OrcaRunningJob, item: TerminalReplayWorkItem) -> None:
         """Settle a generation this worker supervised: prepare, bind, release, then finish.
@@ -763,25 +841,34 @@ class OrcaQueueWorker(QueueWorkerLoop):
         is released, so a failure up to the release retries the settlement with
         the slot kept and the directory withheld from admission.
         """
-        job.pending_terminal_replay = item
+        fin = job.begin_finalization()
+        fin.item = item
         if settlement.is_superseded(item):
             settlement.retire_marker(item)
             self._release_terminal_job(job)
             return
-        item = settlement.prepare(item)
-        job.pending_terminal_replay = item
-        item = settlement.bind_row(item)
-        job.pending_terminal_replay = item
-        # The queue marker survives a restart. This in-memory handoff also fences
-        # same-directory admission before the next periodic reconciliation.
-        self.replay_state.pending_replays[item.queue_id] = item
-        self._release_terminal_job(job)
+
+        def retain(updated: TerminalReplayWorkItem) -> None:
+            fin.item = updated
+
+        def release(updated: TerminalReplayWorkItem) -> None:
+            self._release_terminal_job(job)
+            # The queue marker survives a restart. This in-memory handoff also fences
+            # same-directory admission before the next periodic reconciliation.
+            self.replay_state.pending_replays[updated.queue_id] = updated
+
         try:
-            settlement.finish(self.cfg, item)
-        except Exception:
+            settlement.settle(
+                self.cfg,
+                item,
+                has_row=True,
+                retain=retain,
+                release=release,
+            )
+        except settlement.PublicationPending as pending:
             logger.exception(
                 "Terminal publication remains pending after releasing execution capacity: %s",
-                item.queue_id,
+                pending.item.queue_id,
             )
         else:
             self.replay_state.pending_replays.pop(item.queue_id, None)
@@ -803,9 +890,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
         # not publish a terminal queue state (or make the capacity reusable) until
         # that identity has been recovered.  Raising here deliberately leaves the
         # completed job in ``_running`` so the worker retries the whole finalization.
-        job.terminal_finalize_pending = True
+        fin = job.begin_finalization()
         recover_slot_engine_process(self.admission_root, job.admission_token)
-        pending_item = job.pending_terminal_replay
+        pending_item = fin.item
         if pending_item is not None:
             self._settle_live(job, pending_item)
             return
@@ -870,7 +957,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         terminated = terminate_process_group(job.process)
         if terminated is True and job.process.poll() is not None:
             if mark_finalize_pending:
-                job.terminal_finalize_pending = True
+                job.begin_finalization()
             recover_slot_engine_process(self.admission_root, job.admission_token)
         return terminated is True
 
@@ -984,7 +1071,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             )
             return
         exit_code = job.process.poll()
-        if exit_code is not None and exit_code >= 0 and _child_run_concluded(job):
+        if exit_code is not None and _child_run_concluded(job):
             # Finished work keeps its durable terminal owner if publication fails;
             # the next worker start retries it without requeueing the calculation.
             try:

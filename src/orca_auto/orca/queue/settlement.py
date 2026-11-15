@@ -19,7 +19,7 @@ state explicitly.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -338,6 +338,14 @@ def _publish(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
         )
 
 
+class PublicationPending(RuntimeError):
+    """Prepare and bind (and the release, when given) succeeded; only publication is left."""
+
+    def __init__(self, item: TerminalReplayWorkItem) -> None:
+        super().__init__(f"terminal publication pending: queue_id={item.queue_id}")
+        self.item = item
+
+
 def finish(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
     """Publish the location record and the advisory notification, then retire the marker.
 
@@ -352,22 +360,31 @@ def settle(
     item: TerminalReplayWorkItem,
     *,
     has_row: bool,
-    pending_replays: dict[str, TerminalReplayWorkItem],
+    retain: Callable[[TerminalReplayWorkItem], None],
+    release: Callable[[TerminalReplayWorkItem], None] | None = None,
 ) -> TerminalReplayWorkItem:
-    """Settle a generation found by the restart pipeline: prepare, bind, finish.
+    """Prepare, bind, optionally release capacity, then finish one terminal generation.
 
-    Each step's item replaces the retained one in ``pending_replays``, so a
-    failure retries from the last step that succeeded. Without a queue row
-    (``has_row=False``) there is nothing to bind and no marker to retire.
+    Each successful step replaces the item via ``retain``. The live worker passes
+    ``release`` between bind and finish; replay callers omit it. A failure during
+    ``finish`` (or ``_publish`` when ``has_row=False``) raises ``PublicationPending``.
     """
     item = prepare(item)
-    pending_replays[item.queue_id] = item
+    retain(item)
     if not has_row:
-        _publish(cfg, item)
+        try:
+            _publish(cfg, item)
+        except Exception as exc:
+            raise PublicationPending(item) from exc
         return item
     item = bind_row(item)
-    pending_replays[item.queue_id] = item
-    finish(cfg, item)
+    retain(item)
+    if release is not None:
+        release(item)
+    try:
+        finish(cfg, item)
+    except Exception as exc:
+        raise PublicationPending(item) from exc
     return item
 
 
@@ -379,6 +396,7 @@ __all__ = [
     "mark_terminal_row",
     "new_work_item",
     "prepare",
+    "PublicationPending",
     "reaction_dir_key",
     "reaction_key_for_dir",
     "retire_marker",

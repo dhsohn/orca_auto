@@ -31,7 +31,7 @@
       "selected_input_path": "<tmp>/runs/scratch_deferral/h2o.inp",
       "selected_input_xyz": "",
       "execution_snapshot": {
-        "version": 3,
+        "version": 4,
         "job_dir_identity": {
           "device": "<device:int>",
           "inode": "<inode:int>"
@@ -85,7 +85,7 @@
       "worker_log": "<tmp>/runs/logs/<q:1>.log",
       "_orca_auto_queued_record_sync_blocked": null,
       "admission_deferral": {
-        "reason": "engine scratch has insufficient free space: free=<bytes>, required_inputs=154, minimum_free=<bytes>",
+        "reason": "engine scratch has insufficient free space: free=<bytes>, required_inputs=154, peer_reserved_inputs=0, minimum_free=<bytes>",
         "not_before": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>"
       }
     }

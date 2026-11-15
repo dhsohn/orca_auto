@@ -30,7 +30,11 @@ from orca_auto.core.messaging import (
     text,
 )
 from orca_auto.core.messaging.discord_bot import DiscordBotChannel
-from orca_auto.core.messaging.render_slack import render_slack_blocks, render_slack_text
+from orca_auto.core.messaging.render_slack import (
+    render_slack_chrome_blocks,
+    render_slack_detail_blocks,
+    render_slack_text,
+)
 
 # Obviously synthetic values: no real Slack workspace, token or channel.
 _SLACK_TOKEN = "xoxb-synthetic-test-token"
@@ -186,21 +190,21 @@ def test_render_slack_blocks_groups_short_fields_and_preserves_literal_text() ->
         title="ORCA started",
         groups=(
             group(
-                field_row("Job", text("<!channel>")),
-                field_row("Attempt", raw("#3")),
+                field_row("Job", text("<!channel>"), inline=True),
+                field_row("Attempt", raw("#3"), inline=True),
                 field_row("Directory", code(directory)),
             ),
         ),
         author="orca_auto",
     )
-    blocks = render_slack_blocks(message)
-    assert blocks[0]["type"] == "header"
-    compact, wide = blocks[2:]
+    chrome = render_slack_chrome_blocks(message)
+    assert chrome[0]["type"] == "header"
+    compact, wide = render_slack_detail_blocks(message, chrome_block_count=len(chrome))
     assert compact["fields"] == [
         {"type": "plain_text", "text": "Job\n<!channel>", "emoji": False},
         {"type": "plain_text", "text": "Attempt\n#3", "emoji": False},
     ]
-    assert wide["text"]["text"] == f"Directory\n{directory}"
+    assert wide["text"]["text"] == f"Directory: {directory}"
 
 
 def test_render_slack_blocks_enforces_block_budget_and_marks_omissions() -> None:
@@ -208,9 +212,10 @@ def test_render_slack_blocks_enforces_block_budget_and_marks_omissions() -> None
         title="T",
         groups=(group(*(field_row(f"field-{index}", text("v" * 90)) for index in range(60))),),
     )
-    blocks = render_slack_blocks(message)
-    assert len(blocks) == 50
-    assert blocks[-1]["text"]["text"] == "More: …"
+    chrome = render_slack_chrome_blocks(message)
+    detail = render_slack_detail_blocks(message, chrome_block_count=len(chrome))
+    assert len(chrome) + len(detail) == 50
+    assert detail[-1]["text"]["text"] == "More: …"
 
 
 def test_render_slack_text_keeps_legacy_escape_behavior() -> None:
@@ -313,8 +318,27 @@ def test_configured_slack_channel_posts_one_message_to_chat_post_message(
     assert body["channel"] == _SLACK_CHANNEL
     assert "ORCA completed" in body["text"]
     assert "water-opt" in json.dumps(body)
-    assert body["blocks"][0]["text"]["text"].startswith("✅ ORCA completed")
+    assert set(body) == {
+        "channel",
+        "text",
+        "blocks",
+        "attachments",
+        "mrkdwn",
+        "parse",
+        "unfurl_links",
+        "unfurl_media",
+    }
+    assert body["blocks"][0]["text"]["text"] == "✅ ORCA completed"
     assert body["blocks"][1]["elements"][0]["text"] == "orca_auto"
+    [attachment] = body["attachments"]
+    assert set(attachment) == {"color", "blocks"}
+    assert attachment["color"] == "#2ECC71"
+    assert attachment["blocks"][0]["text"]["text"] == "Job: water-opt"
+    assert "ORCA completed" not in json.dumps(attachment["blocks"])
+    assert body["mrkdwn"] is False
+    assert body["parse"] == "none"
+    assert body["unfurl_links"] is False
+    assert body["unfurl_media"] is False
     assert _SLACK_TOKEN not in json.dumps(body)
     # Neither the token nor the message payload is logged.
     assert _SLACK_TOKEN not in caplog.text

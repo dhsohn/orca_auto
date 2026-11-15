@@ -86,6 +86,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     from orca_auto.orca import submission as orca_submission
     from orca_auto.orca.config import CommonResourceConfig
     from orca_auto.orca.queue import publication_repair
+    from orca_auto.orca.submission import SubmissionRequest
     from tests.conftest import make_app_cfg, write_config_file, write_fake_orca
 
     root = tmp_path / "orca"
@@ -126,7 +127,14 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     )
 
     def submit() -> Outcome:
-        result = orca_submission.submit_reaction_dir_to_queue(args, cfg=load_config(args.config))
+        result = orca_submission.submit_reaction_dir_to_queue(
+            SubmissionRequest(
+                path=str(args.path),
+                priority=args.priority,
+                force=args.force,
+            ),
+            cfg=load_config(args.config),
+        )
         queued = result.queued_result
         detail = str(result.stderr or "")
         if queued is not None and queued.worker_info.detail:

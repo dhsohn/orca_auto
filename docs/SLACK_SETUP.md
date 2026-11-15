@@ -47,7 +47,7 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 | Behavior | What ORCA_auto does |
 | :--- | :--- |
 | Endpoint | Posts JSON to the fixed URL `https://slack.com/api/chat.postMessage`; the configured channel is the only destination |
-| Message shape | Block Kit header and job fields, with plain text for dynamic values and the fallback summary |
+| Message shape | Top-level Block Kit header and author context, plus one colored attachment with job fields when present; escaped top-level `text` is the notification and screen-reader fallback |
 | Redirects | Never followed, to any host or scheme; a redirect is reported as `slack_http_<status>` and the token is not sent on |
 | Confirmation | A send counts as delivered only when the response has `"ok": true`, `channel` equal to the configured ID and a `ts` of digits, a dot and six digits |
 | Rate limits | Only HTTP 429 with a well-formed `Retry-After` is retried, after that wait, within `max_attempts` sends (at most 10) and 120 seconds of total waiting |
@@ -55,6 +55,10 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 | Ownership | The queued and finished messages are claimed once in durable state before a bounded background sender delivers them; the started message is sent once by the worker child. A crash, a failed send or a full sender can lose a message, which is never resent. Delivery never changes job state |
 
 Notifications are best effort, not exactly-once. Use `orca_auto queue list` and the generation reports to confirm calculation status.
+
+The header and optional author sit in top-level `blocks`; field sections live in a single attachment with a left color bar (blue for info and unknown severity, green for success, amber for warning, red for error). The heading adds ℹ️, ✅, ⚠️ or ❌ respectively. Messages without fields omit the attachment. Dynamic labels and values use only `plain_text` with `emoji: false`; Markdown, mentions and link parsing remain disabled. Fields keep their order. Only an `inline=True` field whose `label: value` is a single line of at most 40 characters can share two columns; all other fields use full-width `Label: value` rows, including long job names, queue IDs and directories. Chrome and attachment blocks share the 50-block budget; omitted content is marked with `…`.
+
+This explicitly uses Slack's native attachment wrapper because the [official migration guide](https://docs.slack.dev/legacy/legacy-messaging/migrating-outmoded-message-compositions-to-blocks/) recommends `attachment.blocks` when a color bar is needed. [Attachments are a legacy Slack feature](https://docs.slack.dev/legacy/legacy-messaging/legacy-secondary-message-attachments/) with lower visual priority; this choice does not promise an identical Discord frame or rendering across clients. Payload tests cover the structure, escaping and limits. The corrected card's live Slack acceptance, desktop/mobile appearance and notification previews remain unverified; see [ADR 0019](adr/0019-slack-block-kit-cards.md).
 
 ## 5. Apply changes and test
 

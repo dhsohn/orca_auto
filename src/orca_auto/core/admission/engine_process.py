@@ -322,8 +322,9 @@ def recover_slot_engine_process(
                 f"Admission slot {token} is pending under a live owner"
             )
         # The owner died with its launch pending.  Resolving that here, and not
-        # only in the periodic orphan sweep, matters because a parent that
-        # retries this recovery for a finished child suspends that sweep.
+        # only in the periodic orphan sweep, matters on paths that still suspend
+        # the sweep; the ORCA queue worker now fences only tracked jobs in the
+        # periodic recovery pass instead of skipping the whole pass.
         error = _clear_dead_owner_pending_launch(root, slot)
         if error is not None:
             raise EngineProcessRecordPendingError(error)

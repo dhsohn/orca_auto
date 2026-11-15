@@ -58,3 +58,38 @@ Run both the full repository gate (`make check`) and the distribution gate (`mak
 For 10.2.3 acceptance (source revision `482b4631bf354b402c12d42c4192c3bdaab363a7`, ORCA 6.1.1), water HF/STO-3G Opt calculations with `%freq AnFreq true` and `%freq NumFreq true` ran through the durable queue and worker (1 core, 512 MB maxcore), converging at `-74.965901189921 Eh` with nine frequencies and zero imaginary modes and passing `machine.json`, artifact-receipt, HTML and SI checks. This single water case does not establish general numerical-Hessian atom/mode association or extend supported ORCA versions.
 
 For 10.2.4 acceptance (source revision `96b03e4531b10cf83addfaf926cb1327fbfdf4b1`, ORCA 6.1.1), the eight environment-gated real-ORCA cases in `tests/integration/test_orca_worker_smoke.py` passed. Water HF/STO-3G Opt calculations with a route-line `Freq` request and with `%freq AnFreq true` ran through the durable queue and worker (1 core, 512 MB maxcore), converging at `-74.965901189921 Eh` with nine frequencies and zero imaginary modes and passing `machine.json`, artifact-receipt, HTML and SI checks. `index rebuild` from scratch on those runs recorded their requested resources. The run held one shared operational admission reservation, left operational configuration and engine bytes unchanged, and released the reservation. It does not extend supported ORCA versions or numerical-Hessian coverage.
+
+## Recovery checkpoint acceptance
+
+[ADR 0020](adr/0020-recovery-orbital-eligibility-and-guess-intent.md) adds conservative
+GUESS readiness and submitted-guess preservation.
+`tests/orca/test_recovery_orbitals.py` exercises the scientific binding stages
+without Linux queue ownership, using authentic 6.1.1 output milestones and
+synthetic interruption/capture cases. The existing recovery, worker and scratch
+regressions remain required on Linux; a Mac xattr or `/proc` limitation is not a
+passing queue gate.
+
+The [bounded acceptance runbook](../tools/checkpoint_acceptance.md) describes
+`tools/checkpoint_acceptance.py`: a four-cell content/mode matrix through normal
+shared admission, followed by actual pre/post-GUESS worker shutdown and fresh
+rebind cases. It requires owner-supplied runtime identities, verified donors,
+reviewed diagnostic inputs, and an external config with notifications disabled.
+A missing donor, missed interruption phase, timeout or capacity refusal is
+inconclusive, with no automatic retry. A GUESS diagnostic is distinct from
+scientific completion and scratch publication; validate every completed SP and
+its machine/artifact receipts. The existing eight real-ORCA smoke cases remain
+required and do not replace this recovery acceptance. Authoring or locally
+testing the harness does not establish a real-engine acceptance result.
+
+The baseline permission comparison and candidate production acceptance are
+separate experiments. [ADR 0021](adr/0021-private-engine-moinp-copies.md) uses
+`production` to require immutable 0400 dependency identities plus independent
+0600 engine copies, successful actual O_RDWR opens, consumption and committed
+publication. Run separate fresh candidate plans for scratch and no-scratch.
+The owner-supplied 2026-11-14 baseline establishes V400/P400 EACCES, V600 GUESS
+completion followed by SCF entry, and P600 failure before GUESS completion after
+a successful open. All four machine receipts validated; none timed out or
+established a completed SP. These observations do not constitute candidate
+acceptance. The water control prepared by `tools/prepare_checkpoint_mechanics.py`
+is an optional distinct recovery-mechanics scope, preserving method and
+numerical settings without claiming incident-family geometry or SCF equivalence.

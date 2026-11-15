@@ -30,7 +30,7 @@ from orca_auto.core.engine_scratch import EngineScratchCapacityError
 
 from .attempt.resume import load_or_create_state, recover_crashed_state
 from .attempt.run import run_attempt
-from .orca_runner import OrcaRunner
+from .orca_runner import OrcaRunner, StopCause
 from .output_adoption import existing_completed_exit
 from .run_context import RunExecutionContext, bind_queue_identity
 from .run_lock import acquire_run_lock
@@ -82,6 +82,7 @@ def execute_locked_run(
     context: RunExecutionContext,
     *,
     stop_requested: Callable[[], bool],
+    stop_cause: Callable[[], StopCause] | None = None,
 ) -> int:
     with acquire_run_lock(context.reaction_dir):
         recover_crashed_state(context.reaction_dir)
@@ -101,6 +102,7 @@ def execute_locked_run(
                 execution_dir_identity=snapshot["execution_dir_identity"],
                 verify_snapshot=context.verify_snapshot,
                 stop_requested=stop_requested,
+                stop_cause=stop_cause,
                 scratch_policy=(
                     OrcaScratchPolicy(
                         root=Path(cfg.scratch.root),
@@ -137,13 +139,14 @@ def execute_orca_run(
     context: RunExecutionContext,
     *,
     stop_requested: Callable[[], bool],
+    stop_cause: Callable[[], StopCause] | None = None,
 ) -> int:
     logger.info("Selected input: %s", context.selected_inp)
 
     try:
         # Run-state recovery stays inside the reaction lock. Engine-process
         # ownership is reconciled independently through the admission store.
-        return execute_locked_run(context, stop_requested=stop_requested)
+        return execute_locked_run(context, stop_requested=stop_requested, stop_cause=stop_cause)
     except EngineScratchCapacityError:
         # Raised only by the preparation that precedes this run's first state
         # write; the queue child decides whether the job waits. It must not

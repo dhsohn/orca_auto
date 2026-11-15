@@ -30,6 +30,50 @@ schemas; release needs no `machine-contracts` clone. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to 11.0
+
+Version 11.0 is a major release. Execution snapshots are now version 4
+([ADR 0021](adr/0021-private-engine-moinp-copies.md)): bound dependency GBWs and
+other immutable inputs stay at 0400, MOInp reference tokens in the bound `.inp`
+name private engine copies `orca_auto_moinp_<bound-dependency-basename>` created
+at 0600 immediately before launch, and the `orca_auto_moinp_` prefix is reserved
+for those copies. Automatic recovery keeps phase-aware GUESS readiness and
+explicit submitted-guess preservation ([ADR 0020](adr/0020-recovery-orbital-eligibility-and-guess-intent.md)).
+RAM scratch capacity reservations include the extra engine copy. Public fields,
+statuses, CLI options and configuration keys are unchanged except where noted in
+the changelog.
+
+A version 3 execution snapshot (or any pending row bound to one) cannot be
+launched or crash-rebound by 11.0. Historical generations, terminal observations
+and receipts are preserved and not rewritten.
+
+In an idle window:
+
+1. Wait for `queue list --json` to show `active_simulations: 0` and for
+   admission reservations to clear; settle publication, stop the worker and all
+   submitters, and retain the 10.2.x runtime, units and configuration for rollback.
+2. Inventory every pending queue row whose `execution_snapshot.version` is below
+   4. Cancel each with the ordinary queue CLI and explicitly resubmit its
+   reviewed source inputs after the switch; do not mutate queue metadata, chmod
+   bound inputs, or reuse an old generation. An interrupted older snapshot
+   cannot be rebound by the new runtime; preserve it for review and explicit
+   resubmission. Terminal failures are never automatically retried.
+3. Install 11.0 in a new environment or [prepared runtime](RUNTIME.md), reinstall
+   units if needed, restart under the admission guard, and verify
+   `service status --json` against the running worker's version, build and source
+   root.
+
+The Linux full/package gates and the `production` and recovery acceptance in
+[the runbook](../tools/checkpoint_acceptance.md) must precede operational use on
+shared hosts. Bounded water recovery-mechanics controls in that runbook check
+scratch and MOInp copy behavior only; they do not establish general
+chemical-science acceptance for larger systems. A passing MaxIter 1 consumption
+test does not establish completed family science.
+
+Follow the [10.2 idle-window upgrade procedure](#upgrading-to-102) for the
+settlement and rollback discipline around steps 1–3. No configuration migration
+is required.
+
 ## Upgrading to 10.2.4
 
 Version 10.2.4 fixes `index rebuild` (resource requests, molecule keys and directory keys restored from submission evidence; unusable reports and inputs set aside instead of stopping the rebuild), refuses FIFO and dangling-symlink store and state files, and non-UTF-8 store files, instead of hanging or treating them as empty, and verifies completion against bound inputs up to the generation budget. A report publication now stops when the output changes while it is being built. Submission now refuses `%method RunTyp` values the runtime cannot classify (including `Opt`, `Geom`, `Geometry` and `GeometryOpt`) and block settings that change the route's job (`%geom TS_search` on a non-TS optimization, `RunTyp` with a route optimization, TS search, IRC, NEB or MD); request these with route keywords such as `! Opt` or `! OptTS`. The 1,000-atom Hessian limit now also applies to frequency requests made only through `%freq AnFreq true` or `%freq NumFreq true`. Rows already queued are not re-checked. Public fields, statuses, CLI options and configuration keys are unchanged.

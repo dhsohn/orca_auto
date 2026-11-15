@@ -42,6 +42,8 @@ from tests.conftest import (
 
 _PRISTINE_XYZ = "2\nH2\nH 0 0 0\nH 0 0 0.74\n"
 _CRASHED_XYZ = "2\noptimizing\nH 0 0 0\nH 0 0 0.80\n"
+# Synthetic phase evidence, not a claim that the fake GBW payloads are valid.
+_READY_OUTPUT = "* O   R   C   A *\nORCA GUESS\nFinished Guess after 0.1 sec\n"
 # Every binding stage reads source bytes and checks its byte budgets through
 # ``_capture``, so a read failure or a smaller budget is injected there alone.
 
@@ -445,18 +447,20 @@ def test_recovery_build_seeds_scf_checkpoint(tmp_path: Path) -> None:
     crashed = _build(job_dir, selected, executable)
     old_generation = _crash_generation(crashed)
     (old_generation / "h2.gbw").write_bytes(b"scf-orbitals-v1")
+    (old_generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
 
     checkpoint_role = replacement["recovery"]["checkpoint_role"]
     assert checkpoint_role
+    assert replacement["recovery"]["checkpoint_decision"]["reason"] == "completed_guess"
     materialized = replacement["materialized_inputs"][checkpoint_role]
     private = Path(str(materialized["path"]))
     assert private.name == "h2.moinp.gbw"
     assert private.read_bytes() == b"scf-orbitals-v1"
     bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
     assert "MORead" in bound_text
-    assert '%moinp "h2.moinp.gbw"' in bound_text
+    assert '%moinp "orca_auto_moinp_h2.moinp.gbw"' in bound_text
     # Still a pristine replacement: strict claim-time verification passes.
     _verify(job_dir, replacement)
     # The crashed generation's runtime checkpoint stays frozen.
@@ -470,10 +474,16 @@ def test_recovery_checkpoint_skipped_when_absent_or_empty(tmp_path: Path) -> Non
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
     assert replacement["recovery"]["checkpoint_role"] == ""
+    assert replacement["recovery"]["checkpoint_decision"] == {
+        "policy": "automatic",
+        "status": "skipped",
+        "reason": "checkpoint_absent",
+    }
     assert "MORead" not in Path(replacement["selected_inp"]).read_text(encoding="utf-8")
     _verify(job_dir, replacement)
 
     (Path(crashed["execution_dir"]) / "h2.gbw").write_bytes(b"")
+    (Path(crashed["execution_dir"]) / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
     empty_case = _build(job_dir, selected, executable, recovery_from=crashed)
     assert empty_case["recovery"]["checkpoint_role"] == ""
     _verify(job_dir, empty_case)
@@ -495,13 +505,14 @@ def test_recovery_checkpoint_skipped_when_source_already_moreads(tmp_path: Path)
     (generation / "h2.out").write_text("interrupted\n", encoding="utf-8")
     (generation / "h2.xyz").write_text(_CRASHED_XYZ, encoding="utf-8")
     (generation / "h2.gbw").write_bytes(b"runtime-orbitals")
+    (generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
 
     # The user-directed orbital chain wins; the runtime checkpoint is ignored.
     assert replacement["recovery"]["checkpoint_role"] == ""
     bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
-    assert '"guess.gbw"' in bound_text
+    assert '"orca_auto_moinp_guess.gbw"' in bound_text
     assert "moinp.gbw" not in bound_text
     verify_orca_execution_snapshot(
         job_dir,
@@ -537,6 +548,7 @@ def test_recovery_checkpoint_skipped_when_scf_block_already_moreads(
     crashed = _build(job_dir, selected, executable)
     generation = _crash_generation(crashed)
     (generation / "h2.gbw").write_bytes(b"runtime-orbitals")
+    (generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
 
@@ -575,12 +587,14 @@ def test_second_crash_reseeds_the_latest_checkpoint(tmp_path: Path) -> None:
     first = _build(job_dir, selected, executable)
     first_generation = _crash_generation(first)
     (first_generation / "h2.gbw").write_bytes(b"scf-orbitals-v1")
+    (first_generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
     second = _build(job_dir, selected, executable, recovery_from=first)
 
     second_generation = Path(second["execution_dir"])
     (second_generation / "h2.out").write_text("interrupted again\n", encoding="utf-8")
     (second_generation / "h2.xyz").write_text(_CRASHED_XYZ, encoding="utf-8")
     (second_generation / "h2.gbw").write_bytes(b"scf-orbitals-v2")
+    (second_generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
 
     third = _build(job_dir, selected, executable, recovery_from=second)
 
@@ -635,6 +649,7 @@ def test_recovery_checkpoint_with_freq_and_hessian_dependency(tmp_path: Path) ->
     (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
     (generation / "ts.xyz").write_text(_CRASHED_XYZ, encoding="utf-8")
     (generation / "ts.gbw").write_bytes(b"freq-orbitals")
+    (generation / "ts.out").write_text(_READY_OUTPUT, encoding="utf-8")
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
 
@@ -648,7 +663,7 @@ def test_recovery_checkpoint_with_freq_and_hessian_dependency(tmp_path: Path) ->
     )
     bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
     assert "MORead" in bound_text
-    assert '%moinp "ts.moinp.gbw"' in bound_text
+    assert '%moinp "orca_auto_moinp_ts.moinp.gbw"' in bound_text
     verify_orca_execution_snapshot(
         job_dir,
         replacement,
@@ -697,6 +712,7 @@ def test_recovery_checkpoint_skipped_when_oversized(
     crashed = _build(job_dir, selected, executable)
     old_generation = _crash_generation(crashed)
     (old_generation / "h2.gbw").write_bytes(b"x" * 200_000)
+    (old_generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
     _patch_budgets(monkeypatch, input_bytes=100_000)
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
@@ -717,13 +733,14 @@ def test_recovery_checkpoint_for_single_point_input(tmp_path: Path) -> None:
     generation = Path(crashed["execution_dir"])
     (generation / "h2.out").write_text("interrupted\n", encoding="utf-8")
     (generation / "h2.gbw").write_bytes(b"sp-orbitals")
+    (generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
 
     assert replacement["recovery"]["checkpoint_role"]
     assert replacement["recovery"]["seeded_roles"] == {}
     bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
-    assert '%moinp "h2.moinp.gbw"' in bound_text
+    assert '%moinp "orca_auto_moinp_h2.moinp.gbw"' in bound_text
     assert "xyzfile" in bound_text
     _verify(job_dir, replacement)
 
@@ -733,6 +750,7 @@ def test_verify_rejects_checkpoint_role_tamper(tmp_path: Path) -> None:
     crashed = _build(job_dir, selected, executable)
     old_generation = _crash_generation(crashed)
     (old_generation / "h2.gbw").write_bytes(b"scf-orbitals-v1")
+    (old_generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
     checkpoint_role = replacement["recovery"]["checkpoint_role"]
     other_role = next(
@@ -1912,6 +1930,7 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
     generation = Path(crashed["execution_dir"])
     (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
     (generation / "ts.gbw").write_bytes(b"scf-orbitals")
+    (generation / "ts.out").write_text(_READY_OUTPUT, encoding="utf-8")
     replacement = build_submitted_snapshot(
         job_dir,
         selected,
@@ -1944,6 +1963,7 @@ def test_recovery_checkpoint_skipped_when_zero_filled(tmp_path: Path) -> None:
     crashed = _build(job_dir, selected, executable)
     generation = _crash_generation(crashed)
     (generation / "h2.gbw").write_bytes(b"\x00" * 4096)
+    (generation / "h2.out").write_text(_READY_OUTPUT, encoding="utf-8")
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
 

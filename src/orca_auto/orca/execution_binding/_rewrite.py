@@ -6,9 +6,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..engine_moinp import engine_moinp_name
 from ..file_identity import file_content_identity
 from ..input_blocks import geometry_header_match
-from ..input_references import OrcaFileReference, set_moinp
+from ..input_references import OrcaFileReference, orca_moinp_references, set_moinp
 from ..input_syntax import (
     ensure_route_keywords,
     quote_orca_path,
@@ -39,6 +40,7 @@ def _rewrite_bound_input(
 ) -> bytes:
     replacements: dict[int, list[tuple[int, int, str]]] = {}
     inline_replacements: dict[int, str] = {}
+    moinp_references = orca_moinp_references(lines)
     for reference in references:
         source = _confined_reference_path(job_dir, selected_inp, reference.value)
         if reference.kind == "geometry" and source in inline_geometry_atoms:
@@ -57,6 +59,8 @@ def _rewrite_bound_input(
             continue
         private_path = private_paths[source]
         relative = private_path.relative_to(execution_dir).as_posix()
+        if reference in moinp_references:
+            relative = engine_moinp_name(relative)
         replacements.setdefault(reference.line_index, []).append(
             (reference.start, reference.end, _render_bound_reference(reference, relative))
         )
@@ -92,7 +96,11 @@ def _write_bound_selected_snapshot(
     if materialized.recovery_checkpoint_private is not None:
         bound_lines = bound_payload.decode("utf-8").splitlines()
         ensure_route_keywords(bound_lines, ["MORead"])
-        set_moinp(bound_lines, materialized.recovery_checkpoint_private, execution_dir)
+        set_moinp(
+            bound_lines,
+            execution_dir / engine_moinp_name(materialized.recovery_checkpoint_private.name),
+            execution_dir,
+        )
         validate_unambiguous_orca_directives(
             bound_lines,
             label="ORCA recovery bound input",
