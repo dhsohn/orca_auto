@@ -47,7 +47,7 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 | 동작 | ORCA_auto의 처리 |
 | :--- | :--- |
 | 엔드포인트 | 고정 URL `https://slack.com/api/chat.postMessage`로 JSON을 보내며, 설정한 채널만 목적지입니다 |
-| 메시지 형태 | 최상위 Block Kit 제목·작성자, 필드가 있을 때만 심각도 색상 막대 attachment 하나. 이스케이프한 최상위 `text`는 알림·스크린 리더 폴백입니다 |
+| 메시지 형태 | 최상위 Block Kit `rich_text` 블록(심각도 글리프, 굵은 제목, 선택적 작성자 접미, 전체 너비 레이블 행). 이스케이프한 최상위 `text`는 알림·스크린 리더 폴백입니다 |
 | 리디렉션 | 어떤 호스트나 스킴으로도 따라가지 않습니다. 리디렉션은 `slack_http_<status>`로 보고되고 토큰은 다른 곳으로 전달되지 않습니다 |
 | 전송 확인 | 응답에 `"ok": true`, 설정한 ID와 같은 `channel`, 숫자·점·숫자 여섯 자리 형식의 `ts`가 있을 때만 전송된 것으로 봅니다 |
 | 요청 제한 | 올바른 `Retry-After`가 있는 HTTP 429만, 그 시간만큼 기다린 뒤 `max_attempts`회(최대 10회)와 총 대기 120초 안에서 재시도합니다 |
@@ -56,9 +56,7 @@ chmod 600 ~/orca_auto/config/orca_auto.yaml
 
 알림은 최선 노력(best effort) 방식이며 정확히 한 번 전달을 보장하지 않습니다. 계산 상태는 `orca_auto queue list`와 generation 보고서로 확인하세요.
 
-제목과 선택적 작성자는 최상위 `blocks`에 두고, 필드 섹션은 색상 막대가 있는 attachment 하나에만 넣습니다(왼쪽 막대: 정보·알 수 없는 심각도 파랑, 성공 초록, 경고 황색, 오류 빨강). 제목에는 각각 ℹ️, ✅, ⚠️, ❌ 기호를 붙입니다. 필드가 없으면 attachment를 보내지 않습니다. 동적 라벨과 값은 `emoji: false`인 `plain_text`만 사용하며 Markdown·멘션·링크 파싱은 계속 비활성화합니다. 필드 순서를 유지하고, `inline=True`이면서 `label: value`가 한 줄·40자 이하인 필드만 2열로 묶습니다. 긴 작업명·큐 ID·디렉터리 등 나머지 필드는 전폭 `Label: value` 행으로 표시합니다. 크롬과 attachment 블록이 50블록 예산을 함께 쓰며 생략한 내용은 `…`로 표시합니다.
-
-색상 막대가 필요할 때 `attachment.blocks`를 사용하라는 [공식 마이그레이션 안내](https://docs.slack.dev/legacy/legacy-messaging/migrating-outmoded-message-compositions-to-blocks/)에 따라 Slack 네이티브 attachment를 명시적으로 선택했습니다. [Attachment는 Slack의 레거시 기능](https://docs.slack.dev/legacy/legacy-messaging/legacy-secondary-message-attachments/)이며 시각적 우선순위가 낮습니다. Discord와 똑같은 테두리나 모든 클라이언트의 동일한 표시를 보장하지 않습니다. Payload 테스트는 구조·이스케이프·제한을 검증합니다. 수정한 카드의 실제 Slack 수락, 데스크톱·모바일 화면과 알림 미리보기는 아직 검증하지 않았습니다. [ADR 0019](adr/0019-slack-block-kit-cards.md)를 참고하세요.
+알림은 최상위 `rich_text` 블록 하나를 씁니다. 단일 `rich_text_section`에 typed `text` leaf와 줄바꿈 leaf(ℹ️/✅/⚠️/❌, 글리프를 포함해 150자로 제한한 **굵은** 제목, 선택적 ` · 작성자`, 행, 그룹 사이 빈 줄)가 순서대로 들어갑니다. 각 행은 **굵은** `Label:`과 스팬 leaf(`code` 스팬은 `code` 스타일) 또는 빈 값일 때 `-`입니다. `Field.inline`은 Discord 전용입니다. typed `text` leaf만 쓰고 `mrkdwn`·링크·멘션·attachment는 없습니다. 네이티브 본문은 알림 전용으로 렌더 문자 3000자·leaf 200개까지이며, 넘치면 `…`로 표시하고 plain `text` fallback은 바꾸지 않습니다. Payload 테스트가 구조·이스케이프·제한을 검증합니다. 2026-11-15에 합성 lifecycle 알림이 Slack API에서 수락되었고, 데스크톱 Slack에서 컴팩트한 **굵은** 제목·레이블, 인라인 코드 ID·경로, attachment bar 없음, 클리핑 없음을 확인했습니다. 모바일과 알림 미리보기는 확인하지 않았습니다. [ADR 0019](adr/0019-slack-block-kit-cards.md)를 참고하세요.
 
 ## 5. 변경 사항 적용 및 테스트
 

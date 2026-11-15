@@ -22,7 +22,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 
 from orca_auto.core.config import SlackConfig
-from orca_auto.core.messaging import Message
+from orca_auto.core.messaging import Message, code, field_row, group, text
 from orca_auto.core.messaging.slack_bot import SlackBotChannel
 
 # Obviously synthetic values: no real Slack workspace, token or channel.
@@ -267,11 +267,6 @@ def test_unusable_retry_after_fails_closed_without_waiting(
         pytest.param(
             _FakeSlackResponse(_body(ok=False, error="invalid_attachments")),
             "slack_api_error",
-            id="attachment-rejected-no-text-only-resend",
-        ),
-        pytest.param(
-            _FakeSlackResponse(_body(ok=False, error="invalid_blocks")),
-            "slack_api_error",
             id="blocks-rejected-no-text-only-resend",
         ),
     ],
@@ -297,6 +292,42 @@ def test_ambiguous_or_permanent_failures_are_not_retried(
     _assert_no_secrets_logged(caplog)
     if isinstance(answer, HTTPError):
         assert answer.fp is not None and answer.fp.closed
+
+
+def test_blocks_rejected_does_not_resend_with_text_only_payload(
+    slack: _Slack,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    job = "synthetic_professor_pt_mode_retry_20261113"
+    message = Message(
+        title="ORCA queued",
+        author="orca_auto",
+        groups=(
+            group(
+                field_row("Job", text(job)),
+                field_row("Queue ID", code("q_20261113_151926_" + "a1" * 16)),
+            ),
+        ),
+    )
+    slack.answers = [_FakeSlackResponse(_body(ok=False, error="invalid_blocks"))]
+
+    with caplog.at_level("DEBUG"):
+        result = _channel(max_attempts=10).send(message)
+
+    assert (result.sent, result.error) == (False, "slack_api_error")
+    assert len(slack.requests) == 1
+    assert slack.sleeps == []
+    [request] = slack.requests
+    data = request.data
+    assert isinstance(data, bytes)
+    payload = json.loads(data)
+    blocks = payload["blocks"]
+    assert len(blocks) == 1
+    section = blocks[0]["elements"][0]["elements"]
+    assert blocks[0]["type"] == "rich_text"
+    assert section[1] == {"type": "text", "text": "ORCA queued", "style": {"bold": True}}
+    assert job in "".join(leaf["text"] for leaf in section)
+    _assert_no_secrets_logged(caplog)
 
 
 @pytest.mark.parametrize(

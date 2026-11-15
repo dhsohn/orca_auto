@@ -1,33 +1,30 @@
 """Render a :class:`~orca_auto.core.messaging.richtext.Message` for Slack.
 
 Top-level ``text`` is plain with Markdown off; ``&``, ``<`` and ``>`` are escaped
-so nothing in a message can mention or link. Top-level ``blocks`` hold the header
-and optional author; one colored attachment holds field sections as Block Kit
-``plain_text`` (never ``mrkdwn``).
+so nothing in a message can mention or link. Top-level ``blocks`` are native
+``rich_text`` blocks whose leaves are typed ``text`` elements only (never
+``mrkdwn`` or link/mention element types).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from itertools import islice
+from dataclasses import dataclass
 from typing import Any
 
-from .richtext import Field, Message
+from .richtext import Field, Message, Span
 
 _MAX_TEXT_CHARS = 3000
-_MAX_BLOCKS = 50
+_MAX_VISIBLE_CHARS = 3000
+_MAX_TEXT_LEAVES = 200
 _HEADER_LIMIT = 150
-_SECTION_TEXT_LIMIT = 3000
-_MAX_FIELDS_PER_SECTION = 10
-_FIELD_TEXT_LIMIT = 2000
-_COMPACT_FIELD_LIMIT = 40
 _TRUNCATION_MARK = "…"
 
-_SEVERITY_STYLES: dict[str, tuple[str, str]] = {
-    "info": ("#3498DB", "ℹ️"),
-    "success": ("#2ECC71", "✅"),
-    "warning": ("#F39C12", "⚠️"),
-    "error": ("#E74C3C", "❌"),
+_SEVERITY_GLYPHS: dict[str, str] = {
+    "info": "ℹ️",
+    "success": "✅",
+    "warning": "⚠️",
+    "error": "❌",
 }
 
 
@@ -38,7 +35,10 @@ def _escape(value: str) -> str:
 def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
-    return value[: limit - 1] + _TRUNCATION_MARK
+    mark_len = len(_TRUNCATION_MARK)
+    if limit <= mark_len:
+        return _TRUNCATION_MARK[:limit]
+    return value[: limit - mark_len] + _TRUNCATION_MARK
 
 
 def _non_empty(value: str, *, limit: int) -> str:
@@ -46,8 +46,24 @@ def _non_empty(value: str, *, limit: int) -> str:
     return trimmed or "-"
 
 
-def _plain_text(value: str, *, limit: int) -> dict[str, object]:
-    return {"type": "plain_text", "text": _non_empty(value, limit=limit), "emoji": False}
+def _text_leaf(text: str, *, bold: bool = False, code: bool = False) -> dict[str, object]:
+    leaf: dict[str, object] = {"type": "text", "text": text}
+    style: dict[str, bool] = {}
+    if bold:
+        style["bold"] = True
+    if code:
+        style["code"] = True
+    if style:
+        leaf["style"] = style
+    return leaf
+
+
+def _rich_text_block(*sections: dict[str, object]) -> dict[str, object]:
+    return {"type": "rich_text", "elements": list(sections)}
+
+
+def _rich_text_section(*elements: dict[str, object]) -> dict[str, object]:
+    return {"type": "rich_text_section", "elements": list(elements)}
 
 
 def _field_value(field: Field) -> str:
@@ -57,6 +73,160 @@ def _field_value(field: Field) -> str:
 def _field_line(field: Field) -> str:
     value = _field_value(field)
     return f"{field.label}: {value}"
+
+
+@dataclass
+class _VisibleBudget:
+    chars_remaining: int = _MAX_VISIBLE_CHARS
+    leaves_remaining: int = _MAX_TEXT_LEAVES
+    halted: bool = False
+
+    def mark_halt(self) -> None:
+        self.halted = True
+
+
+def _append_leaf(
+    elements: list[dict[str, object]],
+    budget: _VisibleBudget,
+    text: str,
+    *,
+    bold: bool = False,
+    code: bool = False,
+    more_after: bool = False,
+) -> bool:
+    """Append one typed ``text`` leaf when budget allows. Return False when exhausted."""
+
+    if not text:
+        return True
+    if budget.halted or budget.leaves_remaining <= 0 or budget.chars_remaining <= 0:
+        budget.mark_halt()
+        return False
+
+    limit = budget.chars_remaining
+    at_last_leaf = budget.leaves_remaining == 1
+    mark_len = len(_TRUNCATION_MARK)
+    omitted_here = False
+    piece: str
+
+    if len(text) > limit:
+        piece = _truncate(text, limit)
+        omitted_here = True
+    elif more_after and len(text) == limit:
+        piece = text[: limit - mark_len] + _TRUNCATION_MARK
+        omitted_here = True
+    elif more_after and at_last_leaf:
+        if len(text) + mark_len <= limit:
+            piece = f"{text}{_TRUNCATION_MARK}"
+        else:
+            piece = _truncate(text, limit)
+        omitted_here = True
+    else:
+        piece = text
+
+    elements.append(_text_leaf(piece, bold=bold, code=code))
+    budget.chars_remaining -= len(piece)
+    budget.leaves_remaining -= 1
+    if omitted_here:
+        budget.mark_halt()
+    return True
+
+
+def _has_nonempty_fields(message: Message) -> bool:
+    return any(group.items for group in message.groups)
+
+
+def _emit_span_leaves(
+    elements: list[dict[str, object]],
+    budget: _VisibleBudget,
+    spans: tuple[Span, ...],
+    *,
+    more_after: bool,
+) -> bool:
+    """Emit span leaves; return False when visible budget is exhausted."""
+
+    nonempty = (span for span in spans if span.text)
+    current = next(nonempty, None)
+    if current is None:
+        return _append_leaf(elements, budget, "-", more_after=more_after)
+
+    while current is not None:
+        nxt = next(nonempty, None)
+        span_more = nxt is not None or more_after
+        if not _append_leaf(
+            elements,
+            budget,
+            current.text,
+            code=current.style == "code",
+            more_after=span_more,
+        ):
+            return False
+        current = nxt
+    return True
+
+
+def _emit_field(
+    elements: list[dict[str, object]],
+    budget: _VisibleBudget,
+    field: Field,
+    *,
+    more_after: bool,
+) -> bool:
+    label = f"{field.label}: "
+    if not _append_leaf(elements, budget, label, bold=True, more_after=True):
+        return False
+    return _emit_span_leaves(elements, budget, field.value, more_after=more_after)
+
+
+def _field_rows(message: Message) -> Iterator[tuple[bool, Field | None]]:
+    """Yield ``(is_spacer, field)``; spacers mark blank lines between groups."""
+
+    first = True
+    for group in message.groups:
+        if not group.items:
+            continue
+        if not first:
+            yield True, None
+        first = False
+        for item in group.items:
+            yield False, item
+
+
+def _body_leaves(message: Message, budget: _VisibleBudget) -> list[dict[str, object]]:
+    elements: list[dict[str, object]] = []
+    row_iter = iter(_field_rows(message))
+    try:
+        current = next(row_iter)
+    except StopIteration:
+        return elements
+
+    first_field_in_body = True
+    while True:
+        try:
+            nxt = next(row_iter)
+            has_following = True
+        except StopIteration:
+            nxt = None
+            has_following = False
+
+        is_spacer, field = current
+        if is_spacer:
+            if not _append_leaf(elements, budget, "\n\n", more_after=has_following):
+                break
+            first_field_in_body = True
+        else:
+            assert field is not None
+            if not first_field_in_body:
+                if not _append_leaf(elements, budget, "\n", more_after=True):
+                    break
+            if not _emit_field(elements, budget, field, more_after=has_following):
+                break
+            first_field_in_body = False
+
+        if nxt is None:
+            break
+        current = nxt
+
+    return elements
 
 
 def render_slack_text(message: Message) -> str:
@@ -74,92 +244,41 @@ def render_slack_text(message: Message) -> str:
     return rendered
 
 
-def _sections(message: Message) -> Iterator[dict[str, Any]]:
-    for group in message.groups:
-        compact_fields: list[dict[str, object]] = []
-        for item in group.items:
-            value = _field_value(item)
-            field_text = f"{item.label}: {value}"
-            if (
-                item.inline
-                and len(field_text) <= _COMPACT_FIELD_LIMIT
-                and field_text.splitlines() == [field_text]
-            ):
-                compact_fields.append(
-                    _plain_text(f"{item.label}\n{value}", limit=_FIELD_TEXT_LIMIT)
-                )
-                if len(compact_fields) == _MAX_FIELDS_PER_SECTION:
-                    yield {"type": "section", "fields": compact_fields}
-                    compact_fields = []
-                continue
-            if compact_fields:
-                yield {"type": "section", "fields": compact_fields}
-                compact_fields = []
-            yield {"type": "section", "text": _plain_text(field_text, limit=_SECTION_TEXT_LIMIT)}
-        if compact_fields:
-            yield {"type": "section", "fields": compact_fields}
-
-
-def render_slack_chrome_blocks(message: Message) -> list[dict[str, Any]]:
-    """Return top-level chrome: severity header and optional author context."""
-
-    blocks: list[dict[str, Any]] = []
-    _, emoji = _SEVERITY_STYLES.get(message.severity, _SEVERITY_STYLES["info"])
-    prefix = f"{emoji} "
-    title_text = _non_empty(message.title, limit=max(1, _HEADER_LIMIT - len(prefix)))
-    header = f"{prefix}{title_text}"
-    blocks.append({"type": "header", "text": _plain_text(header, limit=_HEADER_LIMIT)})
-
-    if message.author and message.author.strip():
-        blocks.append(
-            {
-                "type": "context",
-                "elements": [_plain_text(message.author.strip(), limit=_FIELD_TEXT_LIMIT)],
-            }
-        )
-    return blocks
-
-
-def render_slack_detail_blocks(
-    message: Message, *, chrome_block_count: int
-) -> list[dict[str, Any]]:
-    """Return attachment field sections within the shared block budget."""
-
-    remaining = _MAX_BLOCKS - chrome_block_count
-    if remaining <= 0:
-        return [{"type": "section", "text": _plain_text("More: …", limit=_SECTION_TEXT_LIMIT)}]
-    sections = list(islice(_sections(message), remaining + 1))
-    if len(sections) > remaining:
-        sections[remaining - 1 :] = [
-            {"type": "section", "text": _plain_text("More: …", limit=_SECTION_TEXT_LIMIT)}
-        ]
-    return sections
-
-
 def render_slack_blocks(message: Message) -> list[dict[str, Any]]:
-    """Return top-level Block Kit chrome for ``message``."""
+    """Return top-level ``rich_text`` Block Kit blocks for ``message``."""
 
-    return render_slack_chrome_blocks(message)
+    budget = _VisibleBudget()
+    title_elements: list[dict[str, object]] = []
 
+    glyph = _SEVERITY_GLYPHS.get(message.severity, _SEVERITY_GLYPHS["info"])
+    prefix = f"{glyph} "
+    title_limit = max(1, _HEADER_LIMIT - len(prefix))
+    title_text = _non_empty(message.title, limit=title_limit)
+    has_body = _has_nonempty_fields(message)
 
-def render_slack_attachment(
-    message: Message, *, chrome_block_count: int | None = None
-) -> dict[str, Any] | None:
-    """Return one colored attachment with field sections, or ``None`` when there are none."""
+    _append_leaf(title_elements, budget, prefix, more_after=True)
+    _append_leaf(
+        title_elements,
+        budget,
+        title_text,
+        bold=True,
+        more_after=bool(message.author and message.author.strip()) or has_body,
+    )
+    if message.author and message.author.strip():
+        author_suffix = f" · {message.author.strip()}"
+        _append_leaf(title_elements, budget, author_suffix, more_after=has_body)
 
-    if chrome_block_count is None:
-        chrome_block_count = len(render_slack_chrome_blocks(message))
-    detail = render_slack_detail_blocks(message, chrome_block_count=chrome_block_count)
-    if not detail:
-        return None
-    color, _ = _SEVERITY_STYLES.get(message.severity, _SEVERITY_STYLES["info"])
-    return {"color": color, "blocks": detail}
+    body_elements: list[dict[str, object]] = []
+    if has_body and not budget.halted:
+        if _append_leaf(title_elements, budget, "\n", more_after=True):
+            body_elements = _body_leaves(message, budget)
+
+    elements = [*title_elements, *body_elements]
+    block = _rich_text_block(_rich_text_section(*elements))
+    return [block]
 
 
 __all__ = [
-    "render_slack_attachment",
     "render_slack_blocks",
-    "render_slack_chrome_blocks",
-    "render_slack_detail_blocks",
     "render_slack_text",
 ]

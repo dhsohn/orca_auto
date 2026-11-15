@@ -8,6 +8,30 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [11.0.1] - 2026-11-15
+
+Version 11.0.1 is a patch release. It corrects the Slack notification layout
+introduced in 11.0.0. No configuration, state or execution snapshot migration
+is required; install the package and restart the worker during an idle window
+per [RUNTIME.md](docs/RUNTIME.md).
+
+### Changed
+
+- Slack lifecycle notifications now post one native Block Kit `rich_text` block
+  instead of a header, author context, per-field sections and a colored
+  attachment: a body-sized **bold** title and field labels, plain and inline-code
+  leaves for dynamic values (queue IDs and paths among them), with the existing
+  plain `text` fallback unchanged ([ADR 0019](docs/adr/0019-slack-block-kit-cards.md)).
+
+### Fixed
+
+- Slack Block Kit rich-text compaction now marks omitted body content with an
+  ellipsis when a leaf fills the remaining character budget but more fields,
+  spans or rows follow, including a one-character remainder that previously
+  halted silently. The last leaf under truncation appends an ellipsis when it
+  fits or replaces the tail to stay within the 3000-character and 200-leaf
+  visible limits; true exact fits and trailing empty spans are not marked.
+
 ## [11.0.0] - 2026-11-15
 
 Version 11.0 is a major release. The entries marked *public contract* change the
