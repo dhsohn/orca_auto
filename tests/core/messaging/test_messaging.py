@@ -30,11 +30,7 @@ from orca_auto.core.messaging import (
     text,
 )
 from orca_auto.core.messaging.discord_bot import DiscordBotChannel
-from orca_auto.core.messaging.render_slack import (
-    render_slack_chrome_blocks,
-    render_slack_detail_blocks,
-    render_slack_text,
-)
+from orca_auto.core.messaging.render_slack import render_slack_blocks, render_slack_text
 
 # Obviously synthetic values: no real Slack workspace, token or channel.
 _SLACK_TOKEN = "xoxb-synthetic-test-token"
@@ -197,25 +193,25 @@ def test_render_slack_blocks_groups_short_fields_and_preserves_literal_text() ->
         ),
         author="orca_auto",
     )
-    chrome = render_slack_chrome_blocks(message)
-    assert chrome[0]["type"] == "header"
-    compact, wide = render_slack_detail_blocks(message, chrome_block_count=len(chrome))
-    assert compact["fields"] == [
-        {"type": "plain_text", "text": "Job\n<!channel>", "emoji": False},
-        {"type": "plain_text", "text": "Attempt\n#3", "emoji": False},
+    blocks = render_slack_blocks(message)
+    assert len(blocks) == 1 and blocks[0]["type"] == "rich_text"
+    rendered = "".join(leaf["text"] for leaf in blocks[0]["elements"][0]["elements"])
+    assert [line for line in rendered.split("\n")[1:]] == [
+        "Job: <!channel>",
+        "Attempt: #3",
+        f"Directory: {directory}",
     ]
-    assert wide["text"]["text"] == f"Directory: {directory}"
 
 
-def test_render_slack_blocks_enforces_block_budget_and_marks_omissions() -> None:
+def test_render_slack_blocks_enforces_visible_budget_and_marks_omissions() -> None:
     message = Message(
         title="T",
         groups=(group(*(field_row(f"field-{index}", text("v" * 90)) for index in range(60))),),
     )
-    chrome = render_slack_chrome_blocks(message)
-    detail = render_slack_detail_blocks(message, chrome_block_count=len(chrome))
-    assert len(chrome) + len(detail) == 50
-    assert detail[-1]["text"]["text"] == "More: …"
+    blocks = render_slack_blocks(message)
+    assert len(blocks) == 1
+    rendered = "".join(leaf["text"] for leaf in blocks[0]["elements"][0]["elements"])
+    assert rendered.endswith("…")
 
 
 def test_render_slack_text_keeps_legacy_escape_behavior() -> None:
@@ -322,19 +318,17 @@ def test_configured_slack_channel_posts_one_message_to_chat_post_message(
         "channel",
         "text",
         "blocks",
-        "attachments",
         "mrkdwn",
         "parse",
         "unfurl_links",
         "unfurl_media",
     }
-    assert body["blocks"][0]["text"]["text"] == "✅ ORCA completed"
-    assert body["blocks"][1]["elements"][0]["text"] == "orca_auto"
-    [attachment] = body["attachments"]
-    assert set(attachment) == {"color", "blocks"}
-    assert attachment["color"] == "#2ECC71"
-    assert attachment["blocks"][0]["text"]["text"] == "Job: water-opt"
-    assert "ORCA completed" not in json.dumps(attachment["blocks"])
+    leaves = body["blocks"][0]["elements"][0]["elements"]
+    assert len(body["blocks"]) == 1
+    assert leaves[1] == {"type": "text", "text": "ORCA completed", "style": {"bold": True}}
+    assert {"type": "text", "text": "Job: ", "style": {"bold": True}} in leaves
+    assert {"type": "text", "text": "water-opt"} in leaves
+    assert "attachments" not in body
     assert body["mrkdwn"] is False
     assert body["parse"] == "none"
     assert body["unfurl_links"] is False

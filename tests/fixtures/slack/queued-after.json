@@ -3,59 +3,35 @@
   "text": "orca_auto: ORCA queued\nJob: synthetic_professor_pt_mode_retry_20261113\nQueue ID: q_20261113_151926_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\nPriority: 10\nDirectory: /runs/synthetic_professor_pt_mode_retry_20261113",
   "blocks": [
     {
-      "type": "header",
-      "text": {
-        "type": "plain_text",
-        "text": "ℹ️ ORCA queued",
-        "emoji": false
-      }
-    },
-    {
-      "type": "context",
+      "type": "rich_text",
       "elements": [
         {
-          "type": "plain_text",
-          "text": "orca_auto",
-          "emoji": false
-        }
-      ]
-    }
-  ],
-  "attachments": [
-    {
-      "color": "#3498DB",
-      "blocks": [
-        {
-          "type": "section",
-          "text": {
-            "type": "plain_text",
-            "text": "Job: synthetic_professor_pt_mode_retry_20261113",
-            "emoji": false
-          }
-        },
-        {
-          "type": "section",
-          "text": {
-            "type": "plain_text",
-            "text": "Queue ID: q_20261113_151926_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-            "emoji": false
-          }
-        },
-        {
-          "type": "section",
-          "text": {
-            "type": "plain_text",
-            "text": "Priority: 10",
-            "emoji": false
-          }
-        },
-        {
-          "type": "section",
-          "text": {
-            "type": "plain_text",
-            "text": "Directory: /runs/synthetic_professor_pt_mode_retry_20261113",
-            "emoji": false
-          }
+          "type": "rich_text_section",
+          "elements": [
+            {"type": "text", "text": "ℹ️ "},
+            {"type": "text", "text": "ORCA queued", "style": {"bold": true}},
+            {"type": "text", "text": " · orca_auto"},
+            {"type": "text", "text": "\n"},
+            {"type": "text", "text": "Job: ", "style": {"bold": true}},
+            {"type": "text", "text": "synthetic_professor_pt_mode_retry_20261113"},
+            {"type": "text", "text": "\n"},
+            {"type": "text", "text": "Queue ID: ", "style": {"bold": true}},
+            {
+              "type": "text",
+              "text": "q_20261113_151926_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+              "style": {"code": true}
+            },
+            {"type": "text", "text": "\n"},
+            {"type": "text", "text": "Priority: ", "style": {"bold": true}},
+            {"type": "text", "text": "10"},
+            {"type": "text", "text": "\n"},
+            {"type": "text", "text": "Directory: ", "style": {"bold": true}},
+            {
+              "type": "text",
+              "text": "/runs/synthetic_professor_pt_mode_retry_20261113",
+              "style": {"code": true}
+            }
+          ]
         }
       ]
     }

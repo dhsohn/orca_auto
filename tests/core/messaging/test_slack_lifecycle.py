@@ -223,26 +223,21 @@ def test_slack_config_file_delivers_lifecycle_notifications_to_slack_only(
     assert payload["channel"] == _SLACK_CHANNEL
     assert title in payload["text"]
     assert _JOB_NAME in payload["text"]
-    expected_header = f"✅ {title}" if kind == "finished" else f"ℹ️ {title}"
+    glyph = "✅" if kind == "finished" else "ℹ️"
     chrome = payload["blocks"]
-    assert isinstance(chrome, list) and chrome
-    assert chrome[0] == {
-        "type": "header",
-        "text": {"type": "plain_text", "text": expected_header, "emoji": False},
-    }
-    assert chrome[1] == {
-        "type": "context",
-        "elements": [{"type": "plain_text", "text": "orca_auto", "emoji": False}],
-    }
-    [attachment] = payload["attachments"]
-    assert attachment["color"] == ("#2ECC71" if kind == "finished" else "#3498DB")
-    detail = attachment["blocks"]
-    assert isinstance(detail, list) and detail
-    assert detail[0]["text"] == {
-        "type": "plain_text",
-        "text": f"Job: {_JOB_NAME}",
-        "emoji": False,
-    }
+    assert isinstance(chrome, list) and len(chrome) == 1
+    section = chrome[0]["elements"][0]["elements"]
+    assert chrome[0]["type"] == "rich_text"
+    assert section[0] == {"type": "text", "text": f"{glyph} "}
+    assert section[1] == {"type": "text", "text": title, "style": {"bold": True}}
+    assert section[2] == {"type": "text", "text": " · orca_auto"}
+    assert "attachments" not in payload
+    rendered = "".join(leaf["text"] for leaf in section)
+    assert f"Job: {_JOB_NAME}" in rendered
+    assert any(
+        leaf == {"type": "text", "text": "Job: ", "style": {"bold": True}} for leaf in section
+    )
+    assert any(leaf == {"type": "text", "text": _JOB_NAME} for leaf in section)
     assert transport.sleeps == []
     assert all(stream.closed for stream in transport.streams)
     assert _SLACK_TOKEN not in caplog.text
